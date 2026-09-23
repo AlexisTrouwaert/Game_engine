@@ -2,8 +2,14 @@ cmake_minimum_required(VERSION 3.25)
 
 # Use vcpkg from VCPKG_ROOT when no toolchain file is given.
 # CLion's integrated vcpkg injects its own toolchain file, which takes precedence.
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+# Otherwise fall back to the default location of CLion's vcpkg, which CLion
+# only injects into the profiles that existed when vcpkg was added.
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    if(DEFINED ENV{VCPKG_ROOT})
+        set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+    elseif(EXISTS "$ENV{HOME}/.vcpkg-clion/vcpkg/scripts/buildsystems/vcpkg.cmake")
+        set(CMAKE_TOOLCHAIN_FILE "$ENV{HOME}/.vcpkg-clion/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+    endif()
 endif()
 
 project(moteur LANGUAGES CXX)

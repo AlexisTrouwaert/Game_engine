@@ -31,7 +31,7 @@ Ces points n'ont **jamais** tourné sur Mac. Ce sont eux qui ont le plus de chan
 - [ ] Les outils de ligne de commande d'Apple : `xcode-select --install`.
 - [ ] CMake (3.25 ou plus) et Ninja : `brew install cmake ninja` (ou ceux de CLion).
 - [ ] Peut-être `pkg-config` (`brew install pkg-config`) si vcpkg le réclame pour compiler SDL3.
-- [ ] Un clone de vcpkg, avec la variable `VCPKG_ROOT` définie, **ou** le vcpkg intégré à CLion (dans ce cas, passer `-DCMAKE_TOOLCHAIN_FILE=<chemin>/scripts/buildsystems/vcpkg.cmake` à CMake).
+- [ ] Un clone de vcpkg, avec la variable `VCPKG_ROOT` définie, **ou** le vcpkg intégré à CLion. S'il est à son emplacement par défaut (`~/.vcpkg-clion/vcpkg`), le `CMakeLists.txt` racine le trouve tout seul ; sinon, passer `-DCMAKE_TOOLCHAIN_FILE=<chemin>/scripts/buildsystems/vcpkg.cmake` à CMake.
 - [ ] CLion (recommandé), ou un terminal.
 - [ ] Xcode complet, pour le débogueur Metal (utile seulement en cas de problème de rendu).
 
@@ -243,16 +243,30 @@ Pour déboguer un rendu : `SDL_GPU_DRIVER=metal` force le backend (sans effet su
 
 ## Résultats à remplir
 
+Relevés le 2026-09-23 sur un MacBook **Apple M4 Pro**, macOS 27, écran Retina 120 Hz, SDL 3.4.16. Les images ont été vérifiées sur des captures `--capture` (2560×1440 pixels).
+
 | Étape | Résultat | Remarques |
 |---|---|---|
-| 2. Compilation | | |
-| 3. Tests unitaires | | |
-| 4. Démarrage et backend | | |
-| 5. Sprite, batching, tri | | |
-| 6. Caméra, picking, souris Retina | | |
-| 7. Atlas et déterminisme | | |
-| 8. Texte | | |
-| 9. Performance | | |
+| 2. Compilation | ✅ | Debug et Release, 0 avertissement. Il a fallu un triplet vcpkg local (`triplets/arm64-osx.cmake`) pour que SDL3 cible macOS 13.0 : sans lui, 582 avertissements du linker (« built for newer macOS version »). Le vcpkg de CLion est trouvé automatiquement |
+| 3. Tests unitaires | ✅ | 114 passés, 1 ignoré, en Debug et en Release |
+| 4. Démarrage et backend | ✅ | `backend=metal, device=Apple M4 Pro`, sortie 0, ~117 FPS (VSync 120 Hz), aucune erreur Metal |
+| 5. Sprite, batching, tri | ✅ | Quadrants dans le bon ordre, bords nets. `--no-batching` : capture **identique octet pour octet**. 3 001 sprites = 1 draw call ; `--depth` : grand sprite entier au-dessus. 40 000 : « grown from 16384 to 65536 », 3 draw calls |
+| 6. Caméra, picking, souris Retina | ✅ en partie | `--mouse 1280 720` → `hovered tile: 30 30`. Aucune couture (zoom 1 et 3). **Reste à faire à la main** : clavier, molette, souris réelle, redimensionnement |
+| 7. Atlas et déterminisme | ✅ | `test.json` `636b61cca266` et `test_0.png` `c02006e8b7db` : **identiques à Windows**. `world.json` `dca6ef301c52`, `world_0.png` `09b20cd05771` (à comparer sous Windows). Bras et retournement corrects. JSON tronqué → `fatal: Atlas '...' is not valid: ...` |
+| 8. Texte | ✅ | Accents, `œ` et guillemets corrects, retour à la ligne, trois alignements ; `measured sentence: 266.36 20`, `measured paragraph: 420 80 (4 lines)` |
+| 9. Performance | ✅ | Voir ci-dessous |
+
+Performance en Release (Metal, M4 Pro, temps CPU en ms) :
+
+| Sprites | CPU moyen | CPU p99 | Draw calls | Windows (moyen) |
+|---|---|---|---|---|
+| 10 001 | 0,46 | 1,05 | 1 | 0,43 |
+| 40 001 | 1,34 | 1,94 | 3 | 1,26 |
+| 80 001 (VSync, 120 Hz) | 2,66 | 3,65 | 5 | 2,72 |
+| 10 001, `--no-batching` | 1,24 | 1,96 | 10 001 | |
+| 40 001, `--no-batching` | 2,16 | 3,01 | 40 001 | |
+
+Coût d'un draw call sous Metal, estimé sur la phase `submit` : environ **30 à 80 ns** (27 ns à 40 000 sprites, 80 ns à 10 000 ; mesure bruitée), contre 15 à 17 ns sous Direct3D 12. Le batching reste donc indispensable, mais les chiffres avec batching sont équivalents à ceux de Windows.
 
 ## Après le Mac : les tests qui restent à faire
 

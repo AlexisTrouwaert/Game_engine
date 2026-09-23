@@ -145,6 +145,6 @@ assets/               images de test, copiées à côté de l'exécutable à cha
 
 ## Choix de configuration
 
-- Triplets vcpkg : `x64-windows-static-md` (Windows) et `arm64-osx` (macOS). SDL3 est lié statiquement.
+- Triplets vcpkg : `x64-windows-static-md` (Windows) et `arm64-osx` (macOS). SDL3 est lié statiquement. Sur macOS, `triplets/arm64-osx.cmake` remplace le triplet de vcpkg pour compiler les dépendances pour macOS 13.0, comme le projet (sinon le linker avertit sur chaque fichier de SDL3).
 - Cible macOS minimale : 13.0 (`CMAKE_OSX_DEPLOYMENT_TARGET` dans `CMakePresets.json`).
 - Apple Silicon (arm64) uniquement.
