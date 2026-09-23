@@ -19,7 +19,8 @@ constexpr std::size_t kInitialCapacity = SpriteBatcher::kMaxQuadsPerRun;
 
 }  // namespace
 
-SpriteRenderer::SpriteRenderer(Renderer& renderer) : renderer_(renderer) {
+SpriteRenderer::SpriteRenderer(Renderer& renderer, SDL_GPUTextureFormat depth_format, std::string name)
+    : renderer_(renderer), name_(std::move(name)) {
     ShaderInfo vertex_info;
     vertex_info.stage = SDL_GPU_SHADERSTAGE_VERTEX;
     vertex_info.uniform_buffers = 1;  // the view-projection matrix
@@ -31,7 +32,7 @@ SpriteRenderer::SpriteRenderer(Renderer& renderer) : renderer_(renderer) {
     const GpuShader fragment_shader = renderer.load_shader("sprite.frag", fragment_info);
 
     // Pixel art: keep hard edges.
-    sampler_ = renderer.create_sampler(SDL_GPU_FILTER_NEAREST, "sprite.sampler");
+    sampler_ = renderer.create_sampler(SDL_GPU_FILTER_NEAREST, (name_ + ".sampler").c_str());
 
     // Static index buffer: the same six indices for every quad, offset by four vertices per quad.
     // A draw call reaches quads beyond the first ones through the base-vertex offset it is given.
@@ -44,7 +45,7 @@ SpriteRenderer::SpriteRenderer(Renderer& renderer) : renderer_(renderer) {
         }
     }
     index_buffer_ = renderer.create_buffer(SDL_GPU_BUFFERUSAGE_INDEX, indices.data(),
-                                           indices.size() * sizeof(std::uint16_t), "sprite.indices");
+                                           indices.size() * sizeof(std::uint16_t), (name_ + ".indices").c_str());
 
     ensure_capacity(kInitialCapacity);
 
@@ -92,9 +93,16 @@ SpriteRenderer::SpriteRenderer(Renderer& renderer) : renderer_(renderer) {
     info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
     info.target_info.color_target_descriptions = &color_target;
     info.target_info.num_color_targets = 1;
+    if (depth_format != SDL_GPU_TEXTUREFORMAT_INVALID) {
+        // Declared to match the pass; depth test and write stay off (the defaults), so sprites
+        // keep being ordered by their own depth key, not by the depth buffer.
+        info.target_info.has_depth_stencil_target = true;
+        info.target_info.depth_stencil_format = depth_format;
+    }
 
     // The pipeline keeps what it needs from the shaders, which are released when this returns.
-    const NameProperty name_property(SDL_PROP_GPU_GRAPHICSPIPELINE_CREATE_NAME_STRING, "sprite pipeline");
+    const std::string pipeline_name = name_ + " pipeline";
+    const NameProperty name_property(SDL_PROP_GPU_GRAPHICSPIPELINE_CREATE_NAME_STRING, pipeline_name.c_str());
     info.props = name_property.id();
     SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(renderer.device(), &info);
     if (pipeline == nullptr) {
@@ -134,11 +142,11 @@ void SpriteRenderer::ensure_capacity(std::size_t sprites) {
         capacity *= 2;
     }
     const std::size_t bytes = capacity * 4 * sizeof(SpriteVertex);
-    vertex_buffer_ = renderer_.create_buffer(SDL_GPU_BUFFERUSAGE_VERTEX, bytes, "sprite.vertices");
+    vertex_buffer_ = renderer_.create_buffer(SDL_GPU_BUFFERUSAGE_VERTEX, bytes, (name_ + ".vertices").c_str());
     transfer_buffer_ = renderer_.create_transfer_buffer(bytes);
     if (capacity_ != 0) {
-        SDL_Log("Sprite buffer grown from %zu to %zu sprites (%.1f MiB)", capacity_, capacity,
-                static_cast<double>(bytes) / (1024.0 * 1024.0));
+        SDL_Log("Sprite buffer grown from %zu to %zu sprites (%.1f MiB, %s)", capacity_, capacity,
+                static_cast<double>(bytes) / (1024.0 * 1024.0), name_.c_str());
     }
     capacity_ = capacity;
 }

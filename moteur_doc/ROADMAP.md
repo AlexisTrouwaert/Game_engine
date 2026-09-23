@@ -1,6 +1,6 @@
 # Roadmap - Moteur
 
-Moteur de jeu 2D/isométrique maison, pensé pour supporter un ARPG. Cibles : Windows et macOS.
+Moteur de jeu maison, pensé pour supporter un ARPG : monde en **3D** vu par une caméra isométrique fixe, interface et effets en 2D. Cibles : Windows et macOS.
 
 ## Stack
 
@@ -10,7 +10,8 @@ Moteur de jeu 2D/isométrique maison, pensé pour supporter un ARPG. Cibles : Wi
 - Shaders : HLSL + SDL_shadercross (SPIR-V / DXIL / MSL)
 - Maths : GLM
 - ECS : EnTT
-- UI de debug : Dear ImGui
+- UI de debug : Dear ImGui (intégré)
+- Modèles 3D : glTF 2.0 (bibliothèque à choisir au jalon 3)
 - Données : JSON (nlohmann/json)
 - IDE : CLion
 
@@ -21,26 +22,40 @@ Moteur de jeu 2D/isométrique maison, pensé pour supporter un ARPG. Cibles : Wi
 - Chaque jalon doit tourner à l'identique sur Windows et macOS. Ce qui reste à valider sur Mac : voir [TEST_MAC.md](TEST_MAC.md).
 - Un jalon est terminé quand il est démontrable, pas quand le code est écrit.
 
+**Numérotation** : le 2026-09-23, le rendu 3D est devenu le jalon 3. Les anciens jalons 3 à 6 sont devenus 4, 6, 7 et 8, et l'animation 3D a pris le numéro 5. Les documents des jalons 1 et 2 gardent l'ancienne numérotation dans leurs renvois (« les entrées au jalon 3 » désigne maintenant le jalon 4).
+
 ## Jalons
 
 ### 1. Fondations
 Documentation détaillée : [Jalon 1 - Fondations](JALON_1_FONDATIONS.md)
 
-- [ ] Squelette CMake + vcpkg, build sur Windows et macOS
-- [ ] Fenêtre SDL3 et boucle de jeu (pas de temps fixe)
-- [ ] Chaîne de compilation des shaders (SDL_shadercross)
-- [ ] Affichage d'un sprite texturé avec SDL_GPU
+- [x] Squelette CMake + vcpkg, build sur Windows et macOS
+- [x] Fenêtre SDL3 et boucle de jeu (pas de temps fixe)
+- [x] Chaîne de compilation des shaders (SDL_shadercross)
+- [x] Affichage d'un sprite texturé avec SDL_GPU
 
 ### 2. Rendu 2D
 Documentation détaillée : [Jalon 2 - Rendu 2D](JALON_2_RENDU_2D.md)
 
-- [ ] Sprite batching
-- [ ] Caméra (isométrique / 2D)
-- [ ] Tilemaps
-- [ ] Atlas de textures et animations de sprites
-- [ ] Texte et polices
+- [x] Sprite batching
+- [x] Caméra (isométrique / 2D)
+- [x] Tilemaps *(version réduite : structure de carte, sans blocs statiques ni format de fichier)*
+- [x] Atlas de textures et animations de sprites *(animations en version réduite : sans 8 directions)*
+- [x] Texte et polices
 
-### 3. Systèmes de base
+### 3. Rendu 3D
+Documentation détaillée : [Jalon 3 - Rendu 3D](JALON_3_RENDU_3D.md)
+
+- [ ] Passes multiples, profondeur et conventions (repère, couleur)
+- [ ] Caméra 3D isométrique et picking du sol
+- [ ] Maillages et chargement de modèles glTF
+- [ ] Textures (mipmaps) et couleur linéaire
+- [ ] Matériaux, éclairage et ombres
+- [ ] Instanciation et culling
+- [ ] Le 2D (interface, barres de vie, billboards) par-dessus la 3D
+- [ ] Scène de démonstration 3D
+
+### 4. Systèmes de base
 - [ ] Intégration ECS (EnTT)
 - [ ] Gestion des inputs (clavier, souris, manette)
 - [ ] Gestionnaire d'assets (chargement, cache)
@@ -48,26 +63,35 @@ Documentation détaillée : [Jalon 2 - Rendu 2D](JALON_2_RENDU_2D.md)
 - [ ] Audio (effets, musique)
 - [ ] Intégration Dear ImGui (debug) *(commencé : `DebugUi` et le menu des tests du bac à sable)*
 
-### 4. Monde et déplacement
-- [ ] Collisions 2D
-- [ ] Pathfinding (A*, grille / navmesh)
-- [ ] Éclairage 2D et effets de particules
-- [ ] Brouillard de guerre / visibilité
+### 5. Animation 3D
+- [ ] Squelettes et animations glTF
+- [ ] Skinning sur le GPU
+- [ ] Mélange et transitions entre animations
+- [ ] Événements d'animation (réutilise l'`AnimationPlayer` du jalon 2 : ticks entiers, événements exactement une fois)
+- [ ] Attacher des objets à un os (arme dans la main)
 
-### 5. Outils et données
+### 6. Monde et déplacement
+- [ ] Collisions sur le plan du sol (`TileMap`, formes simples)
+- [ ] Pathfinding (A* sur la grille, ou navmesh : `recastnavigation` est dans vcpkg)
+- [ ] Effets de particules (billboards du jalon 3)
+- [ ] Brouillard de guerre / visibilité (propriété `opaque` de la `TileMap`)
+
+### 7. Outils et données
 - [ ] Chargement de données JSON (hot reload)
 - [ ] Sauvegarde / chargement de l'état
 - [ ] Outils de debug (console, profiler, overlays)
 - [ ] Éditeur de cartes minimal
 
-### 6. Consolidation
+### 8. Consolidation
 - [ ] Profilage et optimisation
+- [ ] Compression des textures (BC7 / ASTC, ou KTX2 transcodé)
 - [ ] Packaging Windows et macOS (signature / notarisation)
 - [ ] Documentation de l'API du moteur
 
 ## Plus tard (hors périmètre initial)
 
 - Réseau / multijoueur
-- **Rendu 3D** : décidé, le jeu sera en 3D (modèles 3D, caméra isométrique fixe). Jalon dédié à définir après le rendu 2D, qui servira surtout à l'interface, aux icônes et aux effets
+- Rendu avancé : post-traitement (bloom, occlusion ambiante), illumination globale, culling sur GPU
+- Physique 3D (par exemple Jolt, disponible dans vcpkg), si le gameplay en a besoin
 - Éditeur visuel complet
 - Support d'autres plateformes

@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "libraries": [
+    {
+      "name": "SDL",
+      "version": "3.4.16",
+      "license": "zlib",
+      "copyright": "Copyright (C) 1997-2026 Sam Lantinga",
+      "url": "https://libsdl.org",
+      "license_file": "licenses/sdl3.txt"
+    },
+    {
+      "name": "Dear ImGui",
+      "version": "1.92.9",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2014-2026 Omar Cornut",
+      "url": "https://github.com/ocornut/imgui",
+      "license_file": "licenses/imgui.txt"
+    },
+    {
+      "name": "GLM",
+      "version": "1.0.3",
+      "license": "MIT (ou Happy Bunny License)",
+      "copyright": "Copyright (c) 2005 - G-Truc Creation",
+      "url": "https://github.com/g-truc/glm",
+      "license_file": "licenses/glm.txt"
+    },
+    {
+      "name": "stb (stb_image, stb_image_write, stb_truetype, stb_rect_pack)",
+      "version": "2024-07-29",
+      "license": "MIT ou domaine public",
+      "copyright": "Copyright (c) 2017 Sean Barrett",
+      "url": "https://github.com/nothings/stb",
+      "license_file": "licenses/stb.txt"
+    },
+    {
+      "name": "JSON for Modern C++",
+      "version": "3.12.0",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2013-2025 Niels Lohmann",
+      "url": "https://github.com/nlohmann/json",
+      "license_file": "licenses/nlohmann-json.txt"
+    },
+    {
+      "name": "cgltf",
+      "version": "1.15",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2018-2021 Johannes Kuhlmann",
+      "url": "https://github.com/jkuhlmann/cgltf",
+      "license_file": "licenses/cgltf.txt"
+    },
+    {
+      "name": "MikkTSpace",
+      "version": "2020-10-06",
+      "license": "zlib",
+      "copyright": "Copyright (C) 2011 by Morten S. Mikkelsen",
+      "url": "https://github.com/mmikk/MikkTSpace",
+      "license_file": "licenses/mikktspace.txt"
+    }
+  ],
+  "fonts": [
+    {
+      "name": "Inter",
+      "license": "SIL Open Font License 1.1",
+      "copyright": "Copyright 2020 The Inter Project Authors",
+      "url": "https://rsms.me/inter",
+      "license_file": "assets/fonts/Inter-OFL.txt"
+    }
+  ],
+  "models": [
+    {
+      "name": "Wine Barrel 01",
+      "authors": "James Ray Cock",
+      "license": "CC0",
+      "source": "Poly Haven",
+      "url": "https://polyhaven.com/a/wine_barrel_01",
+      "file": "assets/models/polyhaven/wine_barrel_01/wine_barrel_01_1k.gltf"
+    },
+    {
+      "name": "Lantern 01",
+      "authors": "Rajil Jose Macatangay",
+      "license": "CC0",
+      "source": "Poly Haven",
+      "url": "https://polyhaven.com/a/Lantern_01",
+      "file": "assets/models/polyhaven/Lantern_01/Lantern_01_1k.gltf"
+    },
+    {
+      "name": "Antique Estoc",
+      "authors": "Ulan Cabanilla (modélisation), James Ray Cock (textures)",
+      "license": "CC0",
+      "source": "Poly Haven",
+      "url": "https://polyhaven.com/a/antique_estoc",
+      "file": "assets/models/polyhaven/antique_estoc/antique_estoc_1k.gltf"
+    },
+    {
+      "name": "Boulder 01",
+      "authors": "Rico Cilliers",
+      "license": "CC0",
+      "source": "Poly Haven",
+      "url": "https://polyhaven.com/a/boulder_01",
+      "file": "assets/models/polyhaven/boulder_01/boulder_01_1k.gltf"
+    }
+  ]
+}

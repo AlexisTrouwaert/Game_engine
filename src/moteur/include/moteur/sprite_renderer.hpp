@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include "moteur/gpu_resource.hpp"
 #include "moteur/renderer.hpp"
@@ -32,7 +33,11 @@ struct SpriteOptions {
 // records sprites in depth order (or all with the default depth 0), no sorting happens at all.
 class SpriteRenderer {
 public:
-    explicit SpriteRenderer(Renderer& renderer);
+    // `depth_format`: the depth texture of the render pass this renderer draws in, or
+    // SDL_GPU_TEXTUREFORMAT_INVALID for a pass without one. Sprites never test or write depth; the
+    // pipeline only has to declare what the pass holds. `name` prefixes the GPU resources' debug
+    // names ("sprite" gives "sprite pipeline", "sprite.vertices"...).
+    SpriteRenderer(Renderer& renderer, SDL_GPUTextureFormat depth_format, std::string name);
 
     // Records a sprite. `position` is its top-left corner and `size` its extent, both in pixels,
     // origin at the top left of the window, y pointing down. The texture must stay alive until
@@ -76,6 +81,7 @@ private:
     void ensure_capacity(std::size_t sprites);
 
     Renderer& renderer_;
+    std::string name_;
     GpuGraphicsPipeline pipeline_;
     GpuBuffer vertex_buffer_;             // rewritten every frame with the vertices of all sprites
     GpuTransferBuffer transfer_buffer_;   // staging area for that rewrite

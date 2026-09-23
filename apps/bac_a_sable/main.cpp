@@ -1,13 +1,18 @@
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
+#include <nlohmann/json.hpp>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,9 +22,15 @@
 #include "moteur/animation.hpp"
 #include "moteur/application.hpp"
 #include "moteur/camera.hpp"
+#include "moteur/camera3d.hpp"
+#include "moteur/color.hpp"
+#include "moteur/environment.hpp"
 #include "moteur/font.hpp"
 #include "moteur/image.hpp"
 #include "moteur/iso.hpp"
+#include "moteur/mesh.hpp"
+#include "moteur/mesh_renderer.hpp"
+#include "moteur/model.hpp"
 #include "moteur/paths.hpp"
 #include "moteur/sprite_renderer.hpp"
 #include "moteur/texture_atlas.hpp"
@@ -37,6 +48,11 @@ constexpr float kCameraSpeed = 600.0f;  // screen pixels per second, whatever th
 constexpr float kMaxZoom = 8.0f;
 
 constexpr float kFontPixelHeight = 20.0f;  // rasterized once at this physical pixel size
+
+// A color picked by eye (as on a screen, sRGB) turned into the linear value the 3D lighting works with.
+glm::vec4 screen_color(float r, float g, float b) {
+    return glm::vec4(moteur::srgb_to_linear(glm::vec3(r, g, b)), 1.0f);
+}
 
 // Small deterministic random generator, so that a stress test is the same on every run and every OS.
 class Random {
@@ -56,6 +72,64 @@ struct Mover {
     glm::vec2 position;
     glm::vec2 velocity;  // pixels per second
     glm::vec4 tint;
+};
+
+// What the "À propos" window lists, read from assets/credits.json: the third-party libraries and
+// fonts with their licenses, and the authors of the assets. Paths are relative to the executable.
+struct Credits {
+    struct Entry {
+        std::string name;
+        std::string version;
+        std::string license;
+        std::string copyright;
+        std::string authors;
+        std::string source;
+        std::string url;
+        std::string license_file;  // full license text, shown on demand
+        std::string file;          // an asset: shown as present or missing
+    };
+    std::vector<Entry> libraries;
+    std::vector<Entry> fonts;
+    std::vector<Entry> models;
+    std::string error;  // why the file could not be read, if it could not
+
+    static Credits load(const std::string& path) {
+        Credits credits;
+        try {
+            const nlohmann::json doc = nlohmann::json::parse(moteur::read_text_file(path));
+            const auto read = [](const nlohmann::json& list) {
+                std::vector<Entry> entries;
+                for (const nlohmann::json& item : list) {
+                    Entry entry;
+                    entry.name = item.value("name", "");
+                    entry.version = item.value("version", "");
+                    entry.license = item.value("license", "");
+                    entry.copyright = item.value("copyright", "");
+                    entry.authors = item.value("authors", "");
+                    entry.source = item.value("source", "");
+                    entry.url = item.value("url", "");
+                    entry.license_file = item.value("license_file", "");
+                    entry.file = item.value("file", "");
+                    entries.push_back(std::move(entry));
+                }
+                return entries;
+            };
+            credits.libraries = read(doc.value("libraries", nlohmann::json::array()));
+            credits.fonts = read(doc.value("fonts", nlohmann::json::array()));
+            credits.models = read(doc.value("models", nlohmann::json::array()));
+        } catch (const std::exception& e) {
+            credits.error = "Crédits illisibles (" + path + ") : " + e.what();
+        }
+        return credits;
+    }
+};
+
+// A glTF model of assets/models/, shown by the 3D scene, or why it could not be loaded.
+struct ShownModel {
+    std::string file;
+    std::optional<moteur::Model> model;
+    std::string error;
+    double load_ms = 0.0;
 };
 
 // A demo-scene inhabitant: moves over the tile grid in one of 8 directions, in tile units.
@@ -84,6 +158,13 @@ public:
         // Text scene: a French sentence, a wrapped paragraph, aligned lines, a live FPS counter.
         bool text = false;
 
+        // 3D scene (milestone 3): a floor, cubes, a sphere and pillars, seen through a Camera3D
+        // whose projection can be switched, to compare orthographic and perspective.
+        bool render3d = false;
+        bool orthographic = false;  // start with the orthographic projection instead of the chosen perspective
+        float view_height = 0.0f;   // > 0: metres of world visible at the target (--camera X Z sets the target)
+        float render_scale = 1.0f;  // fraction of the window's pixels the 3D is rendered at
+
         // Isometric scene: a map of tiles seen through a camera.
         bool iso = false;
         int map_size = 60;         // the map has map_size x map_size tiles
@@ -110,6 +191,25 @@ public:
           standalone_(standalone),
           iso_(kTileWidth, kTileHeight) {
         app.renderer().sprites().set_batching(options.batching);
+
+        if (options.render3d) {
+            font_ = moteur::Font::load(app.renderer(), moteur::asset_path("fonts/Inter-Regular.ttf"), kFontPixelHeight);
+            cube_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_cube(), "cube");
+            tile_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_plane(), "tile");
+            sphere_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_sphere(0.5f, 32, 16), "sphere");
+            camera3d_.set_projection(options.orthographic ? moteur::Projection::Orthographic
+                                                          : moteur::Projection::Perspective);
+            if (options.has_camera) {
+                camera3d_.set_target({options.camera.x, 0.0f, options.camera.y});  // X, Z on the ground
+            }
+            if (options.view_height > 0.0f) {
+                camera3d_.set_visible_height(options.view_height);
+            }
+            app.renderer().set_render_scale(options.render_scale);
+            load_models(app.renderer());
+            load_environments(app.renderer());
+            return;
+        }
 
         if (options.text) {
             font_ = moteur::Font::load(app.renderer(), moteur::asset_path("fonts/Inter-Regular.ttf"), kFontPixelHeight);
@@ -228,6 +328,15 @@ public:
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
             stop();
         }
+        if (options_.render3d && !options_.no_input) {
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_P && !event.key.repeat) {
+                toggle_projection();
+            } else if (event.type == SDL_EVENT_MOUSE_WHEEL && event.wheel.y != 0.0f) {
+                camera3d_.set_visible_height(
+                    std::clamp(camera3d_.visible_height() * (event.wheel.y > 0.0f ? 0.9f : 1.0f / 0.9f), 3.0f, 60.0f));
+            }
+            return;
+        }
         if (!(options_.iso || options_.demo) || options_.no_input) {
             return;
         }
@@ -254,6 +363,16 @@ public:
 
         const bool frozen = options_.freeze_after_ticks > 0 && ticks_ > options_.freeze_after_ticks;
 
+        if (options_.render3d) {
+            last_stats_ = app_.renderer().stats();  // see the demo scene below
+            if (!frozen) {
+                spin_ += static_cast<float>(dt);
+                if (!options_.no_input) {
+                    move_camera3d(static_cast<float>(dt));
+                }
+            }
+            return;
+        }
         if (options_.text) {
             return;  // nothing moves; render_text() keeps its own FPS counter
         }
@@ -322,6 +441,10 @@ public:
             captured_ = true;
         }
 
+        if (options_.render3d) {
+            render_3d(renderer);
+            return;
+        }
         if (options_.text) {
             render_text(renderer);
             return;
@@ -489,6 +612,316 @@ private:
         }
     }
 
+    // Milestone 3, part 4: the first meshes. A 20 x 20 m checkered floor (one 1 m tile per grid
+    // cell, cell (i, j) covering [i, i+1] x [j, j+1]), a wall of 1 m cubes, a spinning cube, a
+    // sphere, a character-sized box (0.7 x 1.8 x 0.7 m) and four 3 m pillars in the corners, which
+    // show best how the two projections differ.
+    void render_3d(moteur::Renderer& renderer) {
+        renderer.set_clear_color(0.05f, 0.06f, 0.08f);
+        camera3d_.set_viewport(view_size_);
+        moteur::MeshRenderer& meshes = renderer.meshes();
+        meshes.set_camera(camera3d_.view_projection(), camera3d_.position());
+
+        // Light: the sun, the surroundings, and torches circling the middle of the floor.
+        const float sun_yaw = glm::radians(sun_yaw_), sun_elevation = glm::radians(sun_elevation_);
+        meshes.set_sun({std::cos(sun_elevation) * std::cos(sun_yaw), std::sin(sun_elevation),
+                        std::cos(sun_elevation) * std::sin(sun_yaw)},
+                       glm::vec3(screen_color(1.0f, 0.93f, 0.8f)), sun_intensity_);
+        meshes.set_environment(&environments_[static_cast<std::size_t>(environment_index_)].environment,
+                               environment_intensity_);
+        static const glm::vec3 kTorchColors[4] = {{1.0f, 0.45f, 0.12f}, {1.0f, 0.6f, 0.2f}, {0.3f, 0.5f, 1.0f},
+                                                  {0.4f, 1.0f, 0.5f}};
+        for (int k = 0; k < torch_count_; ++k) {
+            const float angle = spin_ * 0.4f + glm::two_pi<float>() * static_cast<float>(k) / static_cast<float>(torch_count_);
+            const glm::vec3 position(6.0f * std::cos(angle), 0.9f + 0.3f * std::sin(spin_ * 2.0f + static_cast<float>(k)),
+                                     6.0f * std::sin(angle));
+            const glm::vec3 color = kTorchColors[k % 4];
+            meshes.add_light({position, color, torch_intensity_, 6.0f});
+            moteur::Material flame;
+            flame.base_color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            flame.emissive = color * 12.0f;  // a small bright source, well above 1 in HDR
+            meshes.draw(sphere_mesh_, glm::scale(glm::translate(glm::mat4(1.0f), position), glm::vec3(0.15f)), flame);
+        }
+
+        const auto at = [](glm::vec3 position, glm::vec3 scale = glm::vec3(1.0f)) {
+            return glm::scale(glm::translate(glm::mat4(1.0f), position), scale);
+        };
+        for (int j = -10; j < 10; ++j) {
+            for (int i = -10; i < 10; ++i) {
+                const bool light = ((i + j) & 1) == 0;
+                const glm::vec4 color = light ? screen_color(0.55f, 0.6f, 0.5f) : screen_color(0.42f, 0.47f, 0.38f);
+                meshes.draw(tile_mesh_, at({static_cast<float>(i) + 0.5f, 0.0f, static_cast<float>(j) + 0.5f}), color);
+            }
+        }
+        for (int i = -6; i <= 2; ++i) {  // a wall, one cube per cell, along X
+            meshes.draw(cube_mesh_, at({static_cast<float>(i) + 0.5f, 0.5f, -3.5f}), screen_color(0.6f, 0.55f, 0.5f));
+        }
+        const glm::mat4 spinning = glm::rotate(at({3.5f, 1.0f, 2.5f}), spin_, glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f)));
+        meshes.draw(cube_mesh_, spinning, screen_color(0.85f, 0.35f, 0.25f));
+        meshes.draw(sphere_mesh_, at({-2.5f, 0.5f, 2.5f}), screen_color(0.3f, 0.5f, 0.85f));
+        meshes.draw(cube_mesh_, at({0.5f, 0.9f, 0.5f}, {0.7f, 1.8f, 0.7f}), screen_color(0.9f, 0.8f, 0.3f));
+        for (const glm::vec2 corner : {glm::vec2(-8.5f, -8.5f), glm::vec2(8.5f, -8.5f), glm::vec2(-8.5f, 8.5f),
+                                       glm::vec2(8.5f, 8.5f)}) {
+            meshes.draw(cube_mesh_, at({corner.x, 1.5f, corner.y}, {0.5f, 3.0f, 0.5f}), screen_color(0.75f, 0.75f, 0.8f));
+        }
+
+        // The glTF models, in a row behind the other objects, one per 4 m slot, each standing on a
+        // cell centre so that a 1 m cube exactly covers a cell. Their own origin is kept: that is
+        // what the check is about. Only models larger than a slot are scaled down, and say so.
+        moteur::TextOptions label;
+        label.align = moteur::TextAlign::Center;
+        label.max_width = 300.0f;
+        for (std::size_t k = 0; k < models_.size(); ++k) {
+            const glm::vec3 slot(-5.5f + 4.0f * static_cast<float>(k % 4), 0.0f, 5.5f + 4.0f * static_cast<float>(k / 4));
+            const ShownModel& shown = models_[k];
+            std::string caption = shown.file.substr(shown.file.find_last_of("/\\") + 1);  // no folders
+            float top = 1.0f;
+            if (shown.model) {
+                const moteur::Model& model = *shown.model;
+                const glm::vec3 size = model.bounds.size();
+                const float largest = std::max({size.x, size.y, size.z});
+                const float scale = largest > 3.5f ? 3.5f / largest : 1.0f;
+                meshes.draw(model, at(slot, glm::vec3(scale)));
+                top = model.bounds.max.y * scale;
+                char details[96];
+                std::snprintf(details, sizeof(details), "\n%zu triangles, %.1f ms", model.triangle_count, shown.load_ms);
+                caption += details;
+                if (scale < 1.0f) {
+                    std::snprintf(details, sizeof(details), "\naffiché à l'échelle %.2f", static_cast<double>(scale));
+                    caption += details;
+                }
+                label.color = {0.95f, 0.95f, 0.8f, 1.0f};
+            } else {
+                caption += "\n" + shown.error;
+                label.color = {1.0f, 0.5f, 0.45f, 1.0f};
+            }
+            // Above the model, in window pixels: project a point of the world onto the screen.
+            const glm::vec4 clip = camera3d_.view_projection() * glm::vec4(slot + glm::vec3(0.0f, top + 0.3f, 0.0f), 1.0f);
+            if (clip.w > 0.0f) {
+                const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+                const glm::vec2 pixel((ndc.x * 0.5f + 0.5f) * view_size_.x, (0.5f - ndc.y * 0.5f) * view_size_.y);
+                const float lines = static_cast<float>(std::count(caption.begin(), caption.end(), '\n') + 1);
+                font_->draw(renderer.screen_sprites(), caption,
+                            pixel - glm::vec2(150.0f, lines * font_->line_height()), label);
+            }
+        }
+
+        // The classic check of a PBR shader (as in Khronos' MetalRoughSpheres): metalness grows
+        // from front to back, roughness from left to right. Mirror-like metals in the back left, matte
+        // dielectrics in the front right.
+        for (int row = 0; row < 7; ++row) {
+            for (int column = 0; column < 7; ++column) {
+                moteur::Material material;
+                material.base_color = glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
+                material.metallic = 1.0f - static_cast<float>(row) / 6.0f;
+                material.roughness = static_cast<float>(column) / 6.0f;
+                const glm::vec3 position(2.5f + static_cast<float>(column), 0.45f, -9.0f + static_cast<float>(row) * 0.9f);
+                meshes.draw(sphere_mesh_, at(position, glm::vec3(0.85f)), material);
+            }
+        }
+
+        // What is being compared, in window pixels over the scene.
+        const bool ortho = camera3d_.projection() == moteur::Projection::Orthographic;
+        moteur::SpriteRenderer& screen = renderer.screen_sprites();
+        moteur::TextOptions title;
+        title.color = {0.95f, 0.95f, 1.0f, 1.0f};
+        const glm::vec2 corner(20.0f, 40.0f);
+        const float line = font_->line_height();
+        font_->draw(screen, ortho ? "Projection orthographique" : "Projection perspective", corner, title);
+        moteur::TextOptions detail;
+        detail.color = {0.7f, 0.75f, 0.85f, 1.0f};
+        char text[160];
+        if (ortho) {
+            std::snprintf(text, sizeof(text), "inclinaison %.1f°, orientation %.0f°, hauteur visible %.1f m",
+                          static_cast<double>(camera3d_.pitch()), static_cast<double>(camera3d_.yaw()),
+                          static_cast<double>(camera3d_.visible_height()));
+        } else {
+            std::snprintf(text, sizeof(text),
+                          "inclinaison %.1f°, orientation %.0f°, hauteur visible %.1f m, champ %.0f°, distance %.1f m",
+                          static_cast<double>(camera3d_.pitch()), static_cast<double>(camera3d_.yaw()),
+                          static_cast<double>(camera3d_.visible_height()), static_cast<double>(camera3d_.field_of_view()),
+                          static_cast<double>(camera3d_.distance()));
+        }
+        font_->draw(screen, text, corner + glm::vec2(0.0f, line), detail);
+        std::snprintf(text, sizeof(text), "%d maillages, %zu triangles, %d draw calls, rendu %ux%u, %d lumières. P : changer de projection",
+                      last_stats_.meshes, last_stats_.triangles, last_stats_.draw_calls, renderer.scene_width(),
+                      renderer.scene_height(), torch_count_ + 1);
+        font_->draw(screen, text, corner + glm::vec2(0.0f, 2.0f * line), detail);
+    }
+
+    // Every .glb and .gltf file of assets/models/, sorted by name. A model that cannot be loaded is
+    // shown as an error message in its slot rather than stopping the scene.
+    void load_models(moteur::Renderer& renderer) {
+        const std::string directory = moteur::asset_path("models");
+        int count = 0;
+        char** files = SDL_GlobDirectory(directory.c_str(), nullptr, 0, &count);
+        std::vector<std::string> names;
+        for (int i = 0; files != nullptr && i < count; ++i) {
+            const std::string name = files[i];
+            if (name.size() > 4 && (name.substr(name.size() - 4) == ".glb" || name.substr(name.size() - 5) == ".gltf")) {
+                names.push_back(name);
+            }
+        }
+        SDL_free(files);
+        std::sort(names.begin(), names.end());
+        for (const std::string& name : names) {
+            ShownModel shown;
+            shown.file = name;
+            const Uint64 start = SDL_GetPerformanceCounter();
+            try {
+                shown.model = moteur::Model::load(renderer, directory + "/" + name);
+                shown.load_ms = static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 /
+                                static_cast<double>(SDL_GetPerformanceFrequency());
+                SDL_Log("Model '%s': %zu parts, %zu triangles, %zu textures, loaded in %.1f ms", name.c_str(),
+                        shown.model->parts.size(), shown.model->triangle_count, shown.model->textures.size(),
+                        shown.load_ms);
+            } catch (const std::exception& e) {
+                shown.error = e.what();
+                SDL_Log("%s", e.what());
+            }
+            models_.push_back(std::move(shown));
+        }
+    }
+
+    // The surroundings the surfaces reflect: a procedural sky, and every .hdr image of
+    // assets/environments/ (equirectangular, as Poly Haven publishes them).
+    void load_environments(moteur::Renderer& renderer) {
+        const Uint64 start = SDL_GetPerformanceCounter();
+        environments_.push_back({"Ciel procédural", moteur::Environment::create(renderer, moteur::make_sky(512, 256), "sky")});
+        SDL_Log("Environment 'sky': prefiltered in %.1f ms",
+                static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency()));
+        const std::string directory = moteur::asset_path("environments");
+        int count = 0;
+        char** files = SDL_GlobDirectory(directory.c_str(), "*.hdr", 0, &count);
+        std::vector<std::string> names;
+        for (int i = 0; files != nullptr && i < count; ++i) {
+            names.emplace_back(files[i]);
+        }
+        SDL_free(files);
+        std::sort(names.begin(), names.end());
+        for (const std::string& name : names) {
+            const Uint64 begin = SDL_GetPerformanceCounter();
+            try {
+                const moteur::EnvironmentImage image = moteur::load_environment(directory + "/" + name);
+                environments_.push_back({name, moteur::Environment::create(renderer, image, name.c_str())});
+                SDL_Log("Environment '%s': %dx%d, prefiltered in %.1f ms", name.c_str(), image.width, image.height,
+                        static_cast<double>(SDL_GetPerformanceCounter() - begin) * 1000.0 /
+                            static_cast<double>(SDL_GetPerformanceFrequency()));
+            } catch (const std::exception& e) {
+                SDL_Log("%s", e.what());
+            }
+        }
+        environment_index_ = static_cast<int>(environments_.size()) - 1;  // a real image when there is one
+    }
+
+    void toggle_projection() {
+        camera3d_.set_projection(camera3d_.projection() == moteur::Projection::Orthographic
+                                     ? moteur::Projection::Perspective
+                                     : moteur::Projection::Orthographic);
+    }
+
+    // Arrows or ZQSD/WASD move the target over the ground, along the screen directions.
+    void move_camera3d(float dt) {
+        const bool* keys = SDL_GetKeyboardState(nullptr);
+        glm::vec2 input(0.0f);
+        if (keys[SDL_SCANCODE_LEFT] || keys[SDL_SCANCODE_A]) input.x -= 1.0f;
+        if (keys[SDL_SCANCODE_RIGHT] || keys[SDL_SCANCODE_D]) input.x += 1.0f;
+        if (keys[SDL_SCANCODE_UP] || keys[SDL_SCANCODE_W]) input.y += 1.0f;
+        if (keys[SDL_SCANCODE_DOWN] || keys[SDL_SCANCODE_S]) input.y -= 1.0f;
+        if (input == glm::vec2(0.0f)) {
+            return;
+        }
+        const glm::vec3 ahead = glm::normalize(glm::vec3(camera3d_.forward().x, 0.0f, camera3d_.forward().z));
+        const glm::vec3 right = glm::cross(ahead, glm::vec3(0.0f, 1.0f, 0.0f));
+        // Same speed on screen whatever the framing: about two thirds of the visible height per second.
+        const float speed = camera3d_.visible_height() * 0.66f;
+        const glm::vec2 step = glm::normalize(input) * speed * dt;
+        camera3d_.set_target(camera3d_.target() + right * step.x + ahead * step.y);
+    }
+
+public:
+    // Settings of the running test, shown by the menu in its panel (ImGui).
+    void draw_controls() {
+        if (!options_.render3d) {
+            return;
+        }
+        int projection = camera3d_.projection() == moteur::Projection::Orthographic ? 0 : 1;
+        ImGui::SeparatorText("Caméra");
+        if (ImGui::RadioButton("Orthographique", &projection, 0)) {
+            camera3d_.set_projection(moteur::Projection::Orthographic);
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Perspective", &projection, 1)) {
+            camera3d_.set_projection(moteur::Projection::Perspective);
+        }
+        float pitch = camera3d_.pitch();
+        float yaw = camera3d_.yaw();
+        ImGui::PushItemWidth(200.0f);
+        // Both sliders are drawn every frame, so neither call may be skipped by short-circuiting.
+        const bool pitch_changed = ImGui::SliderFloat("Inclinaison (°)", &pitch, 10.0f, 80.0f, "%.1f");
+        const bool yaw_changed = ImGui::SliderFloat("Orientation (°)", &yaw, 0.0f, 360.0f, "%.0f");
+        if (pitch_changed || yaw_changed) {
+            camera3d_.set_angles(yaw, pitch);
+        }
+        float height = camera3d_.visible_height();
+        if (ImGui::SliderFloat("Hauteur visible (m)", &height, 3.0f, 60.0f, "%.1f")) {
+            camera3d_.set_visible_height(height);
+        }
+        ImGui::BeginDisabled(camera3d_.projection() == moteur::Projection::Orthographic);
+        float fov = camera3d_.field_of_view();
+        if (ImGui::SliderFloat("Champ de vision (°)", &fov, 10.0f, 90.0f, "%.0f")) {
+            camera3d_.set_field_of_view(fov);
+        }
+        ImGui::EndDisabled();
+        ImGui::PopItemWidth();
+        ImGui::SeparatorText("Lumière");
+        ImGui::PushItemWidth(200.0f);
+        if (ImGui::BeginCombo("Environnement", environments_[static_cast<std::size_t>(environment_index_)].name.c_str())) {
+            for (std::size_t i = 0; i < environments_.size(); ++i) {
+                if (ImGui::Selectable(environments_[i].name.c_str(), static_cast<int>(i) == environment_index_)) {
+                    environment_index_ = static_cast<int>(i);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SliderFloat("Intensité environnement", &environment_intensity_, 0.0f, 4.0f, "%.2f");
+        ImGui::SliderFloat("Soleil", &sun_intensity_, 0.0f, 10.0f, "%.1f");
+        ImGui::SliderFloat("Hauteur du soleil (°)", &sun_elevation_, 5.0f, 90.0f, "%.0f");
+        ImGui::SliderFloat("Direction du soleil (°)", &sun_yaw_, 0.0f, 360.0f, "%.0f");
+        ImGui::SliderInt("Torches", &torch_count_, 0, moteur::MeshRenderer::kMaxPointLights);
+        ImGui::SliderFloat("Intensité des torches", &torch_intensity_, 0.0f, 20.0f, "%.1f");
+        ImGui::PopItemWidth();
+        ImGui::SeparatorText("Rendu");
+        ImGui::PushItemWidth(200.0f);
+        float scale = app_.renderer().render_scale();
+        if (ImGui::SliderFloat("Résolution de rendu", &scale, 0.25f, 1.0f, "%.2f")) {
+            app_.renderer().set_render_scale(scale);
+        }
+        float exposure = app_.renderer().exposure();
+        if (ImGui::SliderFloat("Exposition", &exposure, 0.1f, 8.0f, "%.2f", ImGuiSliderFlags_Logarithmic)) {
+            app_.renderer().set_exposure(exposure);
+        }
+        ImGui::PopItemWidth();
+        if (ImGui::Button("Réglage retenu")) {
+            const moteur::Camera3D chosen;  // the defaults are the chosen framing
+            camera3d_.set_projection(chosen.projection());
+            camera3d_.set_angles(chosen.yaw(), chosen.pitch());
+            camera3d_.set_field_of_view(chosen.field_of_view());
+            camera3d_.set_visible_height(chosen.visible_height());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Vraie isométrie")) {
+            camera3d_.set_projection(moteur::Projection::Orthographic);
+            camera3d_.set_angles(45.0f, moteur::Camera3D::isometric_pitch());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Recentrer")) {
+            camera3d_.set_target(glm::vec3(0.0f));
+        }
+    }
+
+private:
+
     // A French sentence (accents, guillemets), a word-wrapped paragraph, the three alignments
     // side by side, and a live FPS counter: everything text-related in one screen.
     void render_text(moteur::Renderer& renderer) {
@@ -607,20 +1040,16 @@ private:
         const std::string line1 = std::to_string(fps_display_) + " FPS (" + std::to_string(static_cast<int>(frame_time_ms)) + " ms)";
         const std::string line2 = std::to_string(stats.sprites) + " sprites, " + std::to_string(stats.draw_calls) + " lots/draw calls";
         const std::string line3 = std::to_string(steps_) + " pas (événements d'animation)";
-        // A camera view-projection applies to the whole frame (see SpriteRenderer::set_view_projection):
-        // there is no separate screen-space pass to draw UI in yet. As a stand-in, the desired
-        // screen position is converted through the camera's inverse transform every frame, and a
-        // depth far above any world content keeps the text on top. It still scales with zoom,
-        // unlike real screen-space UI text; a proper UI layer is future work (see the doc).
+        // Interface text: in window pixels, drawn over the world, whatever the camera and its zoom.
+        moteur::SpriteRenderer& screen = renderer.screen_sprites();
         moteur::TextOptions stats_options;
         stats_options.color = {0.6f, 1.0f, 0.6f, 1.0f};
         stats_options.align = moteur::TextAlign::Right;
         stats_options.max_width = 360.0f;
-        stats_options.depth = 1.0e6f;
-        const glm::vec2 stats_anchor = camera.screen_to_world({view_size_.x - 400.0f, 20.0f});
-        font_->draw(sprites, line1, stats_anchor, stats_options);
-        font_->draw(sprites, line2, stats_anchor + glm::vec2(0.0f, font_->line_height()), stats_options);
-        font_->draw(sprites, line3, stats_anchor + glm::vec2(0.0f, 2.0f * font_->line_height()), stats_options);
+        const glm::vec2 stats_anchor(view_size_.x - 400.0f, 20.0f);
+        font_->draw(screen, line1, stats_anchor, stats_options);
+        font_->draw(screen, line2, stats_anchor + glm::vec2(0.0f, font_->line_height()), stats_options);
+        font_->draw(screen, line3, stats_anchor + glm::vec2(0.0f, 2.0f * font_->line_height()), stats_options);
     }
 
     // Every sprite of the test atlas in a grid, each at its pivot, then the walking character in
@@ -695,6 +1124,26 @@ private:
     bool captured_ = false;
     moteur::RenderStats last_stats_;
 
+    // 3D scene.
+    moteur::Camera3D camera3d_;
+    moteur::Mesh cube_mesh_;
+    moteur::Mesh tile_mesh_;
+    moteur::Mesh sphere_mesh_;
+    float spin_ = 0.0f;  // seconds of rotation of the spinning cube
+    struct NamedEnvironment {
+        std::string name;
+        moteur::Environment environment;
+    };
+    std::vector<NamedEnvironment> environments_;
+    int environment_index_ = 0;
+    float environment_intensity_ = 1.0f;
+    float sun_intensity_ = 3.0f;
+    float sun_elevation_ = 55.0f;  // degrees above the horizon
+    float sun_yaw_ = 60.0f;        // degrees around the vertical axis, from +X towards +Z
+    int torch_count_ = 16;
+    float torch_intensity_ = 6.0f;
+    std::vector<ShownModel> models_;
+
     // Text scene.
     std::optional<moteur::Font> font_;
     double fps_last_time_ = 0.0;
@@ -710,7 +1159,8 @@ private:
 // page listing the test scenes with their settings, and the running test with a button to stop it.
 class Sandbox final : public moteur::Game {
 public:
-    Sandbox(moteur::Application& app, double run_seconds) : app_(app), run_seconds_(run_seconds) {
+    Sandbox(moteur::Application& app, double run_seconds)
+        : app_(app), run_seconds_(run_seconds), credits_(Credits::load(moteur::asset_path("credits.json"))) {
         // The settings each test starts with; the list page can change them before launching.
         TestScene::Options sprites;
         sprites.movers = 3000;
@@ -720,6 +1170,8 @@ public:
         atlas.atlas = true;
         TestScene::Options text;
         text.text = true;
+        TestScene::Options render3d;
+        render3d.render3d = true;
         TestScene::Options demo;
         demo.demo = true;
         demo.map_size = 100;
@@ -746,6 +1198,10 @@ public:
              "Carte de tuiles avec murs, créatures animées qui font demi-tour devant les murs, "
              "statistiques. Mêmes commandes que la carte isométrique.",
              TestKind::Demo, demo},
+            {"Rendu 3D : premiers maillages",
+             "Sol en damier (cases de 1 m), cubes, sphère, personnage (1,8 m), piliers de 3 m, et les "
+             "modèles glTF de assets/models. P change de projection ; réglages dans le panneau.",
+             TestKind::Render3D, render3d},
         };
     }
 
@@ -793,12 +1249,15 @@ public:
             case Screen::Tests: draw_tests(); break;
             case Screen::Running: draw_running_panel(); break;
         }
+        if (about_open_) {
+            draw_about();
+        }
     }
 
 private:
     enum class Screen { Home, Tests, Running };
     enum class Action { None, ShowHome, ShowTests, Launch };
-    enum class TestKind { Sprites, Iso, Atlas, Text, Demo };
+    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D };
 
     struct TestEntry {
         const char* name;
@@ -868,6 +1327,12 @@ private:
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Aide")) {
+            if (ImGui::MenuItem("À propos", nullptr, about_open_)) {
+                about_open_ = !about_open_;
+            }
+            ImGui::EndMenu();
+        }
         ImGui::EndMainMenuBar();
     }
 
@@ -888,10 +1353,97 @@ private:
             request(Action::ShowTests);
         }
         ImGui::SameLine();
+        if (ImGui::Button("À propos")) {
+            about_open_ = true;
+        }
+        ImGui::SameLine();
         if (ImGui::Button("Quitter")) {
             app_.quit();
         }
         ImGui::End();
+    }
+
+    // Credits and licenses: what the program is made of, and who made the assets it shows.
+    void draw_about() {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(720.0f, 520.0f), ImGuiCond_Appearing);
+        ImGui::SetNextWindowBgAlpha(1.0f);  // opaque: the home screen must not show through
+        if (!ImGui::Begin("À propos", &about_open_, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse)) {
+            ImGui::End();
+            return;
+        }
+        ImGui::TextUnformatted("Moteur : bac à sable du moteur de jeu");
+        ImGui::TextDisabled("SDL %s (version chargée à l'exécution)", moteur::sdl_version().c_str());
+        if (!credits_.error.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.4f, 1.0f));
+            ImGui::TextWrapped("%s", credits_.error.c_str());
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::SeparatorText("Bibliothèques");
+        for (const Credits::Entry& entry : credits_.libraries) {
+            draw_credit(entry);
+        }
+        ImGui::SeparatorText("Police");
+        for (const Credits::Entry& entry : credits_.fonts) {
+            draw_credit(entry);
+        }
+        ImGui::SeparatorText("Modèles 3D de test");
+        ImGui::TextWrapped("Poly Haven publie ses modèles en CC0 (domaine public) : les citer n'est pas obligatoire, "
+                           "mais leurs auteurs sont remerciés ici.");
+        for (const Credits::Entry& entry : credits_.models) {
+            draw_credit(entry);
+        }
+        ImGui::End();
+    }
+
+    void draw_credit(const Credits::Entry& entry) {
+        const std::string title = entry.version.empty() ? entry.name : entry.name + " " + entry.version;
+        ImGui::PushID(title.c_str());
+        if (ImGui::TreeNode(title.c_str())) {
+            if (!entry.authors.empty()) {
+                ImGui::TextWrapped("Auteurs : %s", entry.authors.c_str());
+            }
+            ImGui::TextWrapped("Licence : %s", entry.license.c_str());
+            if (!entry.copyright.empty()) {
+                ImGui::TextWrapped("%s", entry.copyright.c_str());
+            }
+            if (!entry.source.empty()) {
+                ImGui::TextWrapped("Source : %s", entry.source.c_str());
+            }
+            if (!entry.url.empty()) {
+                ImGui::TextDisabled("%s", entry.url.c_str());
+            }
+            if (!entry.file.empty()) {
+                const bool present = SDL_GetPathInfo((moteur::base_path() + entry.file).c_str(), nullptr);
+                if (present) {
+                    ImGui::TextDisabled("Fichier présent : %s", entry.file.c_str());
+                } else {
+                    ImGui::TextDisabled("Fichier absent : python tools/models/fetch_test_models.py le télécharge");
+                }
+            }
+            if (!entry.license_file.empty() && ImGui::TreeNode("Texte de la licence")) {
+                auto found = license_texts_.find(entry.license_file);
+                if (found == license_texts_.end()) {
+                    std::string text;
+                    try {
+                        text = moteur::read_text_file(moteur::base_path() + entry.license_file);
+                    } catch (const std::exception& e) {
+                        text = std::string("Texte introuvable : ") + e.what();
+                    }
+                    found = license_texts_.emplace(entry.license_file, std::move(text)).first;
+                }
+                ImGui::BeginChild("license", ImVec2(0.0f, 220.0f), ImGuiChildFlags_Borders);
+                ImGui::PushTextWrapPos(0.0f);  // license files often hold a paragraph per line
+                ImGui::TextUnformatted(found->second.c_str(), found->second.c_str() + found->second.size());
+                ImGui::PopTextWrapPos();
+                ImGui::EndChild();
+                ImGui::TreePop();
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
     }
 
     // Every test scene, its description, its settings and a button to start it.
@@ -940,6 +1492,9 @@ private:
                     ImGui::SliderInt("Taille de la carte", &options.map_size, 10, 400);
                     ImGui::InputScalar("Graine", ImGuiDataType_U32, &options.seed);
                     break;
+                case TestKind::Render3D:
+                    ImGui::Checkbox("Commencer en orthographique", &options.orthographic);
+                    break;
                 case TestKind::Atlas:
                 case TestKind::Text:
                     break;  // nothing to set
@@ -964,6 +1519,9 @@ private:
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
         ImGui::Text("Test en cours : %s", tests_[static_cast<std::size_t>(running_)].name);
         ImGui::TextDisabled("%.0f FPS - Échap pour arrêter", static_cast<double>(ImGui::GetIO().Framerate));
+        if (scene_) {
+            scene_->draw_controls();
+        }
         if (ImGui::Button("Arrêter le test")) {
             request(Action::ShowTests);
         }
@@ -984,6 +1542,9 @@ private:
     Action action_ = Action::None;      // asked by the interface, done by the next update()
     int action_test_ = -1;
     std::string error_;                 // why the last test could not start
+    Credits credits_;
+    bool about_open_ = false;
+    std::map<std::string, std::string> license_texts_;  // loaded when first shown
 };
 
 }  // namespace
@@ -1031,6 +1592,14 @@ int main(int argc, char** argv) {
             options.capture_path = argv[i + 1];
         } else if (arg == "--atlas") {
             options.atlas = true;
+        } else if (arg == "--3d") {
+            options.render3d = true;
+        } else if (arg == "--ortho") {
+            options.orthographic = true;
+        } else if (arg == "--render-scale" && has_one) {
+            options.render_scale = static_cast<float>(std::strtod(argv[i + 1], nullptr));
+        } else if (arg == "--view-height" && has_one) {
+            options.view_height = static_cast<float>(std::strtod(argv[i + 1], nullptr));
         } else if (arg == "--text") {
             options.text = true;
         } else if (arg == "--interleave") {

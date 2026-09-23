@@ -6,6 +6,8 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG  // many glTF models store their textures as JPEG
+#define STBI_ONLY_HDR   // Radiance .hdr environments (see environment.cpp)
 #include <stb_image.h>
 
 namespace moteur {
@@ -17,13 +19,22 @@ Image load_image(const std::string& path) {
     if (file == nullptr) {
         throw std::runtime_error("Cannot read image '" + path + "': " + SDL_GetError());
     }
+    try {
+        Image image = decode_image(file, file_size, path);
+        SDL_free(file);
+        return image;
+    } catch (...) {
+        SDL_free(file);
+        throw;
+    }
+}
 
+Image decode_image(const void* data, std::size_t size, const std::string& name) {
     int width = 0, height = 0, channels = 0;
-    stbi_uc* decoded = stbi_load_from_memory(static_cast<const stbi_uc*>(file), static_cast<int>(file_size),
-                                             &width, &height, &channels, 4);
-    SDL_free(file);
+    stbi_uc* decoded = stbi_load_from_memory(static_cast<const stbi_uc*>(data), static_cast<int>(size), &width,
+                                             &height, &channels, 4);
     if (decoded == nullptr) {
-        throw std::runtime_error("Cannot decode image '" + path + "': " + stbi_failure_reason());
+        throw std::runtime_error("Cannot decode image '" + name + "': " + stbi_failure_reason());
     }
 
     Image image;

@@ -1,6 +1,6 @@
 # Jalon 2 - Rendu 2D
 
-Retour à la [roadmap générale](ROADMAP.md). Jalon précédent : [Jalon 1 - Fondations](JALON_1_FONDATIONS.md). Description des fichiers existants : [Fichiers du projet](FICHIERS_DU_PROJET.md).
+Retour à la [roadmap générale](ROADMAP.md). Jalon précédent : [Jalon 1 - Fondations](JALON_1_FONDATIONS.md). Jalon suivant : [Jalon 3 - Rendu 3D](JALON_3_RENDU_3D.md). Description des fichiers existants : [Fichiers du projet](FICHIERS_DU_PROJET.md).
 
 ## Objectif
 
@@ -134,7 +134,7 @@ Régler la dette du jalon 1 qui gênerait le batching, et se donner de quoi **me
 
 ### Tâches
 
-- [ ] Valider le jalon 1 sur **Mac** : build, rendu, MSL (voir la [checklist de fin de jalon 1](JALON_1_FONDATIONS.md#9-critères-de-fin-de-jalon)).
+- [x] Valider le jalon 1 sur **Mac** : build, rendu, MSL (voir la [checklist de fin de jalon 1](JALON_1_FONDATIONS.md#9-critères-de-fin-de-jalon)). *Voir [TEST_MAC.md](TEST_MAC.md).*
 - [x] Sortir du bac à sable la création du pipeline de sprites, pour que le **moteur** en soit propriétaire.
 - [x] Envelopper les ressources GPU (texture, buffer, pipeline, sampler) dans des classes **RAII** qui se libèrent seules.
 - [x] Séparer dans une frame la **phase de préparation** (copies vers le GPU) et la **passe de rendu** (voir ci-dessous).
@@ -247,8 +247,8 @@ Dans les deux cas, le critère de réussite du batching devient chiffré : un co
 
 ### Validation
 
-- [ ] Le jalon 1 est validé sur Mac.
-- [ ] Une commande lance les tests unitaires, et ils passent sur les deux OS. *Windows vérifié (Debug et Release), Mac à faire.*
+- [x] Le jalon 1 est validé sur Mac.
+- [x] Une commande lance les tests unitaires, et ils passent sur les deux OS. *`ctest` ; Windows et Mac, Debug et Release.*
 - [x] Le test de charge naïf donne des chiffres de référence notés dans ce document (nombre de sprites, FPS, temps CPU).
 - [x] Le bac à sable ne contient plus de code de création de pipeline.
 
@@ -450,7 +450,7 @@ Pendant cette partie, le bac à sable a planté en Debug avec « heap corruption
 - [x] Le nombre de draw calls est égal au nombre de changements de texture ou de mode de mélange, pas au nombre de sprites. *Vérifié par les tests unitaires (changement de texture, plafond de 16 384) et par les mesures (3 draw calls pour 40 001 sprites d'une seule texture). Un seul mode de mélange est implémenté.*
 - [x] Les statistiques affichées sont cohérentes avec la scène.
 - [x] Aucun message de la couche de validation du GPU. *Aucun message vu sur Windows. La partie 10 a confirmé, en provoquant volontairement une erreur d'usage de l'API, que la validation est bien active : son absence de message ici est donc un vrai résultat, pas une couche inactive.*
-- [ ] Même comportement sur Windows et sur Mac. *Windows vérifié, Mac à faire.*
+- [x] Même comportement sur Windows et sur Mac. *Mêmes images (dont `--no-batching` identique octet pour octet), mêmes draw calls, temps CPU équivalents : voir [TEST_MAC.md](TEST_MAC.md).*
 
 ---
 
@@ -615,7 +615,7 @@ Un incident de mesure à retenir : mes premières mesures donnaient des nombres 
 - [x] La tuile sous la souris est correcte aux quatre coins de l'écran, à plusieurs niveaux de zoom. *10 cas sur 10, contre une formule indépendante.*
 - [ ] Le déplacement et le zoom ne produisent ni scintillement ni couture. *Aucune couture (0 pixel de fond sur 12 combinaisons) ; le scintillement est à juger à l'œil.*
 - [ ] Les positions de souris sont correctes sur écran Retina. *Conversion testée en test unitaire seulement.*
-- [ ] Le résultat est identique sur Windows et sur Mac. *Windows vérifié, Mac à faire.*
+- [ ] Le résultat est identique sur Windows et sur Mac. *`--mouse` donne la même tuile et aucune couture sur les deux OS ; clavier, molette, souris réelle et redimensionnement restent à vérifier à la main sur Mac.*
 
 ---
 
@@ -849,9 +849,9 @@ L'empaquetage n'est pas un souci de temps de build. Les petits ensembles gaspill
 
 ### Validation
 
-- [ ] L'outil produit les mêmes fichiers deux fois de suite, et les mêmes sur Windows et sur Mac. *Identique sur Windows (trois exécutions, mêmes octets) ; Mac à faire.*
+- [x] L'outil produit les mêmes fichiers deux fois de suite, et les mêmes sur Windows et sur Mac. *`test.json`, `test_0.png`, `world.json`, `world_0.png` : mêmes octets sur les deux OS.*
 - [x] Aucune superposition et aucun dépassement de page (test unitaire). *300 images aléatoires sur plusieurs pages.*
-- [ ] Aucune bavure visible autour des sprites, à plusieurs niveaux de zoom. *Non vérifiable avec le filtrage `NEAREST` ; marge et extrusion testées en test unitaire seulement.*
+- [ ] Aucune bavure visible autour des sprites, à plusieurs niveaux de zoom. *Sans objet tant que le moteur n'utilise que `NEAREST`, qui ne peut pas faire baver ; marge et extrusion testées en test unitaire. À vérifier le jour où un filtrage linéaire sera utilisé.*
 - [x] Le rognage et le pivot placent les sprites au bon endroit (comparaison avec l'image d'origine). *80 548 pixels comparés aux PNG sources, 0 écart.*
 - [x] La recherche d'une région par nom fonctionne et signale clairement un nom inconnu.
 - [x] Le build reconstruit l'atlas seulement quand une image source change. *Y compris après l'ajout et le retrait d'une image.*
@@ -1331,17 +1331,17 @@ perf: per frame  3001 sprites, 1 draw calls, 234.5 KiB uploaded
 
 Le jalon est terminé quand **tout** ce qui suit est vrai :
 
-- [ ] Le [jalon 1](JALON_1_FONDATIONS.md) est validé sur Mac, et les tests unitaires passent sur les deux OS.
-- [ ] Le **batching** dessine l'objectif de sprites (par exemple 10 000) à la cadence de l'écran, avec un nombre de draw calls égal au nombre de lots.
-- [ ] La **caméra** gère déplacement, zoom, conversions écran/monde et tuile sous la souris, sans scintillement ni couture.
-- [ ] L'**outil d'empaquetage** produit des atlas déterministes, sans bavure, avec les métadonnées de rognage et de pivot.
+- [x] Le [jalon 1](JALON_1_FONDATIONS.md) est validé sur Mac, et les tests unitaires passent sur les deux OS.
+- [x] Le **batching** dessine l'objectif de sprites (par exemple 10 000) à la cadence de l'écran, avec un nombre de draw calls égal au nombre de lots. *10 001 sprites : 0,43 ms de CPU (Windows), 0,46 ms (Mac), 1 draw call.*
+- [ ] La **caméra** gère déplacement, zoom, conversions écran/monde et tuile sous la souris, sans scintillement ni couture. *Tout vérifié, sans couture ; le scintillement reste à juger à l'œil.*
+- [x] L'**outil d'empaquetage** produit des atlas déterministes, sans bavure, avec les métadonnées de rognage et de pivot. *Mêmes octets sur les deux OS ; « sans bavure » garanti par `NEAREST` et la marge extrudée (partie 5).*
 - [x] Les **animations** sont pilotées par le pas fixe, avec vitesse variable et événements fiables.
 - [x] La **carte de tuiles** de 100×100 s'affiche avec un tri en profondeur correct entre sols, murs et entités.
-- [ ] Le **texte** UTF-8 s'affiche correctement (accents français), mesure et dessin concordent.
-- [ ] La **scène de démonstration** tourne identiquement sur Windows et sur Mac.
-- [ ] Aucun avertissement de compilation, aucun message de la couche de validation du GPU.
-- [ ] Les décisions de la section [Décisions à consigner](#décisions-à-consigner) sont remplies.
-- [ ] La documentation des nouveaux fichiers est ajoutée à [FICHIERS_DU_PROJET.md](FICHIERS_DU_PROJET.md).
+- [x] Le **texte** UTF-8 s'affiche correctement (accents français), mesure et dessin concordent.
+- [ ] La **scène de démonstration** tourne identiquement sur Windows et sur Mac. *Déterministe sur chaque OS ; comparaison entre les deux à faire (voir la partie 9).*
+- [x] Aucun avertissement de compilation, aucun message de la couche de validation du GPU. *Windows et Mac, Debug et Release.*
+- [x] Les décisions de la section [Décisions à consigner](#décisions-à-consigner) sont remplies.
+- [x] La documentation des nouveaux fichiers est ajoutée à [FICHIERS_DU_PROJET.md](FICHIERS_DU_PROJET.md).
 
 ---
 
@@ -1370,7 +1370,7 @@ Le jalon est terminé quand **tout** ce qui suit est vrai :
 
 | Sujet | Décision | Raison |
 |---|---|---|
-| Objectif de performance (sprites visibles, budget par frame) | **Provisoire** : le rendu naïf faisait déjà 20 000 sprites à 164 Hz ; le batching en fait 80 000 sur Windows. Objectif à fixer après mesure sur Mac | Voir les chiffres de la partie 2 et de la partie 3 |
+| Objectif de performance (sprites visibles, budget par frame) | **10 000 sprites visibles** à la cadence de l'écran avec moins de 1 ms de CPU par frame ; mesuré 0,43 ms (Windows) et 0,46 ms (Mac). 80 000 restent possibles (2,7 ms) | Chiffres des parties 2 et 3 et de [TEST_MAC.md](TEST_MAC.md) ; largement suffisant pour l'interface et les effets 2D |
 | Style visuel (dessiné, pré-rendu 3D, squelettique) | **Jeu en 3D** (modèles 3D), à traiter dans un jalon 3D ultérieur | Décidé par l'utilisateur. Le rendu 2D sert alors surtout à l'interface, aux icônes, aux effets et aux tests. Les volumes de sprites pré-rendus de la partie 5 ne s'appliquent plus aux personnages |
 | Framework de tests (doctest ou Catch2) | doctest | Léger, un seul en-tête ; le choix est peu engageant |
 | Forme de la file de dessin et de la nouvelle structure de frame | Le jeu enregistre avec `renderer.sprites().draw(...)`, le moteur exécute en `end_frame()` (copies, puis render pass, puis soumission) | Les copies sont interdites dans un render pass ; le moteur est libre de trier et regrouper |

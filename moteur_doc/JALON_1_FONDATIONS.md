@@ -1,6 +1,6 @@
 # Jalon 1 - Fondations
 
-Retour à la [roadmap générale](ROADMAP.md).
+Retour à la [roadmap générale](ROADMAP.md). Jalon suivant : [Jalon 2 - Rendu 2D](JALON_2_RENDU_2D.md).
 
 ## Objectif
 
@@ -86,12 +86,12 @@ Avoir sur les deux machines une chaîne de compilation identique dans son compor
 
 ### Tâches
 
-- [ ] Installer et configurer **Git** sur les deux machines, créer le dépôt.
-- [ ] **Windows** : installer Visual Studio Build Tools (compilateur MSVC), CMake, Ninja, vcpkg.
-- [ ] **macOS** : installer les Xcode Command Line Tools (`xcode-select --install`), CMake, Ninja, vcpkg. Installer Xcode complet (nécessaire plus tard pour le débogueur Metal et la signature).
-- [ ] Installer **CLion** sur les deux machines et vérifier qu'il détecte la toolchain.
-- [ ] Installer **RenderDoc** (Windows) pour le débogage GPU.
-- [ ] Noter les versions de chaque outil (voir partie [Décisions à consigner](#décisions-à-consigner)).
+- [x] Installer et configurer **Git** sur les deux machines, créer le dépôt. *Dépôt GitHub `Game_engine`, cloné et tiré sur les deux machines.*
+- [x] **Windows** : installer Visual Studio Build Tools (compilateur MSVC), CMake, Ninja, vcpkg. *Visual Studio 2022, CMake, Ninja et vcpkg de CLion.*
+- [x] **macOS** : installer les Xcode Command Line Tools (`xcode-select --install`), CMake, Ninja, vcpkg. Installer Xcode complet (nécessaire plus tard pour le débogueur Metal et la signature). *Le projet compile sur Mac, voir [TEST_MAC.md](TEST_MAC.md).*
+- [x] Installer **CLion** sur les deux machines et vérifier qu'il détecte la toolchain.
+- [x] Installer **RenderDoc** (Windows) pour le débogage GPU. *RenderDoc 1.46 (jalon 2, partie 10).*
+- [x] Noter les versions de chaque outil (voir partie [Décisions à consigner](#décisions-à-consigner)). *MSVC 14.44 (Visual Studio 2022), CMake 4.3.1 et Ninja de CLion 2026.2, SDL 3.4.16, RenderDoc 1.46.*
 
 ### Questions à se poser
 
@@ -110,9 +110,9 @@ Avoir sur les deux machines une chaîne de compilation identique dans son compor
 
 ### Validation
 
-- [ ] Un « Hello World » C++20 se compile et s'exécute via CLion sur Windows.
-- [ ] Le même « Hello World » se compile et s'exécute via CLion sur Mac.
-- [ ] Le dépôt Git se clone proprement sur les deux machines.
+- [x] Un « Hello World » C++20 se compile et s'exécute via CLion sur Windows. *Dépassé : tout le projet compile.*
+- [x] Le même « Hello World » se compile et s'exécute via CLion sur Mac. *Dépassé : tout le projet compile.*
+- [x] Le dépôt Git se clone proprement sur les deux machines.
 
 ---
 
@@ -153,8 +153,8 @@ moteur/
 - [x] Créer `vcpkg.json` en **mode manifeste** avec la dépendance SDL3.
 - [x] Créer `CMakePresets.json` avec un preset par OS (Windows, macOS) qui référence la toolchain vcpkg.
 - [x] Créer `.gitignore` (dossiers de build, `.idea/`, binaires) et `.gitattributes`.
-- [ ] Configurer CLion pour utiliser les presets.
-- [ ] Compiler un exécutable qui lie SDL3 et affiche sa version au démarrage.
+- [x] Configurer CLion pour utiliser les presets.
+- [x] Compiler un exécutable qui lie SDL3 et affiche sa version au démarrage. *`SDL 3.4.16`.*
 
 ### Questions à se poser
 
@@ -241,10 +241,10 @@ Le résultat attendu est un exécutable qui affiche `SDL 3.x.x`. Cela prouve que
 
 ### Validation
 
-- [ ] `cmake --preset windows-debug` puis `cmake --build --preset windows-debug` réussit sur Windows depuis un clone propre.
-- [ ] `cmake --preset macos-debug` puis `cmake --build --preset macos-debug` réussit sur Mac depuis un clone propre.
-- [ ] L'exécutable affiche la version de SDL3 sur les deux OS.
-- [ ] CLion ouvre le projet sur les deux machines sans configuration manuelle.
+- [x] `cmake --preset windows-debug` puis `cmake --build --preset windows-debug` réussit sur Windows depuis un clone propre. *Vérifié le 2026-09-23 : clone GitHub dans un dossier vide, `cmake --preset windows-debug` puis `cmake --build --preset windows-debug`, 0 avertissement, tests au vert, en 18 s (dépendances en cache vcpkg).*
+- [x] `cmake --preset macos-debug` puis `cmake --build --preset macos-debug` réussit sur Mac depuis un clone propre. *Voir [TEST_MAC.md](TEST_MAC.md), étape 2.*
+- [x] L'exécutable affiche la version de SDL3 sur les deux OS.
+- [x] CLion ouvre le projet sur les deux machines sans configuration manuelle. *Sur Mac, le `CMakeLists.txt` racine trouve lui-même le vcpkg de CLion.*
 
 ---
 
@@ -261,8 +261,8 @@ Une fenêtre stable, une boucle de jeu à **pas de temps fixe** pour la logique,
 - [x] Écrire la boucle principale : événements, mise à jour, rendu.
 - [x] Implémenter le **pas de temps fixe** avec accumulateur.
 - [x] Gérer la fermeture propre (`SDL_EVENT_QUIT`, libération des ressources dans l'ordre inverse).
-- [ ] Mettre en place un système de **journalisation** minimal (niveaux, sortie console).
-- [ ] Gérer le redimensionnement et l'échelle d'affichage (écrans Retina).
+- [ ] Mettre en place un système de **journalisation** minimal (niveaux, sortie console). *Repoussé : `SDL_Log` suffit pour l'instant (voir les décisions). À faire avec les outils de debug (console, jalon 5).*
+- [x] Gérer le redimensionnement et l'échelle d'affichage (écrans Retina). *Fenêtre `SDL_WINDOW_HIGH_PIXEL_DENSITY`, taille du rendu lue sur le swapchain à chaque frame, `Application::to_pixels()` pour la souris.*
 - [x] Afficher les FPS et le temps de frame (titre de fenêtre pour commencer).
 
 ### Le pas de temps fixe
@@ -329,11 +329,11 @@ Code dans `src/moteur/application.cpp` et `include/moteur/application.hpp` (voir
 
 ### Validation
 
-- [ ] La fenêtre s'ouvre, se redimensionne et se ferme proprement sur Windows et Mac.
+- [ ] La fenêtre s'ouvre, se redimensionne et se ferme proprement sur Windows et Mac. *Windows vérifié le 2026-09-23 (900×500, 1600×700, maximisée, minimisée puis restaurée : aucun plantage, code de sortie 0). Mac : ouverture et fermeture vérifiées, redimensionnement à faire à la main.*
 - [x] La logique tourne à fréquence fixe (compteur de pas affiché, stable). *Vérifié sur Windows.*
-- [ ] Mettre la fenêtre en pause 5 secondes ne provoque pas de rattrapage brutal.
-- [ ] Les FPS sont affichés et cohérents avec le VSync.
-- [ ] Sur Mac Retina, la taille en pixels est bien différente de la taille en points et est correctement gérée.
+- [x] Mettre la fenêtre en pause 5 secondes ne provoque pas de rattrapage brutal. *Processus suspendu 5 s pendant `--run-seconds 10` : 15,7 s de temps réel pour 10 s simulées, donc seulement le plafond de 0,25 s rattrapé. Plafond aussi couvert par les tests unitaires.*
+- [x] Les FPS sont affichés et cohérents avec le VSync. *~165 FPS sur l'écran 165 Hz (Windows), ~117 FPS sur l'écran 120 Hz (Mac).*
+- [x] Sur Mac Retina, la taille en pixels est bien différente de la taille en points et est correctement gérée. *1280×720 points, captures en 2560×1440 pixels, tuile survolée correcte avec `--mouse`.*
 
 ---
 
@@ -423,10 +423,10 @@ Code dans `src/moteur/renderer.cpp` et `include/moteur/renderer.hpp` (voir la [d
 
 ### Validation
 
-- [ ] La fenêtre se remplit d'une couleur unie via SDL_GPU sur Windows (D3D12) et Mac (Metal). *Windows vérifié, Mac à faire.*
+- [x] La fenêtre se remplit d'une couleur unie via SDL_GPU sur Windows (D3D12) et Mac (Metal).
 - [x] Le backend et le GPU sont affichés dans les logs.
-- [ ] Redimensionner et minimiser la fenêtre ne plante pas. *Minimisation vérifiée sur Windows, redimensionnement pas encore testé.*
-- [ ] Aucun avertissement de la couche de validation en mode debug à la fermeture. *Aucun message vu sur Windows ; à confirmer que la couche de débogage D3D12 est bien installée.*
+- [x] Redimensionner et minimiser la fenêtre ne plante pas. *Vérifié sur Windows le 2026-09-23.*
+- [x] Aucun avertissement de la couche de validation en mode debug à la fermeture. *La couche est confirmée active (une erreur d'usage volontaire produit bien un message, jalon 2 partie 10) ; aucun message sur Windows ni sur Mac.*
 
 ---
 
@@ -442,7 +442,7 @@ SDL_GPU n'a pas de langage de shader unique : chaque backend attend son propre f
 
 ### Tâches
 
-- [ ] Obtenir et compiler **SDL_shadercross** (ligne de commande `shadercross`) sur Windows et Mac. *Windows fait via vcpkg. Sur Mac, ce n'est pas possible par vcpkg : MSL pré-généré à la place (voir plus bas).*
+- [x] Obtenir et compiler **SDL_shadercross** (ligne de commande `shadercross`) sur Windows et Mac. *Windows via vcpkg. Sur Mac, remplacé par le MSL pré-généré sous Windows et versionné (voir plus bas et les décisions).*
 - [x] Écrire un vertex shader et un fragment shader HLSL minimaux (triangle en couleur unie).
 - [x] Ajouter une étape CMake qui compile les shaders à chaque build (commande personnalisée avec dépendances).
 - [x] Générer les sorties dans un dossier connu à côté de l'exécutable.
@@ -514,7 +514,7 @@ Au démarrage, `Renderer::load_shader("triangle.vert", ...)` demande à SDL_GPU 
 
 - [x] Modifier un fichier `.hlsl` puis relancer le build recompile bien le shader.
 - [x] Les trois formats (SPIR-V, DXIL, MSL) sont produits, ou au moins ceux des backends visés. *DXIL au build sur Windows, MSL exporté ; le SPIR-V n'est pas produit puisque Vulkan n'est pas ciblé.*
-- [ ] Un triangle en couleur unie s'affiche sur Windows et sur Mac avec **les mêmes fichiers source**. *Windows vérifié (triangle en dégradé rouge, vert, bleu), Mac à faire.*
+- [x] Un triangle en couleur unie s'affiche sur Windows et sur Mac avec **les mêmes fichiers source**. *Le triangle a laissé place au sprite ; les mêmes sources HLSL s'affichent sur les deux OS.*
 - [x] Une erreur volontaire dans un shader fait échouer le build avec un message compréhensible.
 
 ---
@@ -541,7 +541,7 @@ Afficher une image (PNG) sur un quad positionné en coordonnées de pixels, avec
 ### Tâches
 
 - [x] Ajouter un asset de test (petit PNG avec transparence).
-- [x] Charger l'image depuis le disque, avec un chemin qui fonctionne sur les deux OS. *Chemin relatif à l'exécutable ; Mac non testé.*
+- [x] Charger l'image depuis le disque, avec un chemin qui fonctionne sur les deux OS. *Chemin relatif à l'exécutable.*
 - [x] Créer la texture GPU et y envoyer les pixels (transfer buffer, copy pass).
 - [x] Créer un échantillonneur adapté (filtrage, adressage).
 - [x] Définir le format des sommets (position, coordonnées de texture, éventuellement couleur).
@@ -640,11 +640,11 @@ Code dans `image.cpp`, `paths.cpp`, `renderer.cpp` (création de ressources), `s
 
 ### Validation
 
-- [ ] Un sprite avec transparence s'affiche à la bonne position et à la bonne taille sur Windows et Mac. *Windows vérifié, Mac à faire.*
-- [ ] Le rendu est **identique** (au pixel près pour du pixel art) entre les deux OS. *À comparer avec le Mac.*
+- [x] Un sprite avec transparence s'affiche à la bonne position et à la bonne taille sur Windows et Mac.
+- [ ] Le rendu est **identique** (au pixel près pour du pixel art) entre les deux OS. *Identique à l'œil (quadrants, bords nets). Comparaison au pixel impossible telle quelle : le Mac Retina rend en 2560×1440, Windows en 1280×720.*
 - [x] Redimensionner la fenêtre ne déforme pas le sprite.
 - [ ] Le sprite peut être déplacé par la logique à pas fixe sans saccade visible. *Positions vérifiées ; la fluidité reste à juger à l'œil.*
-- [ ] Aucune fuite ni avertissement de la couche de validation à la fermeture. *Aucun message vu sur Windows ; à confirmer que la couche de débogage D3D12 est bien installée.*
+- [x] Aucune fuite ni avertissement de la couche de validation à la fermeture. *Couche confirmée active (voir la partie 5) ; aucun message.*
 
 ---
 
@@ -669,7 +669,7 @@ Code dans `image.cpp`, `paths.cpp`, `renderer.cpp` (création de ressources), `s
 
 ### Validation
 
-- [ ] Une frame est capturée dans RenderDoc sur Windows et le quad est visible dans l'inspecteur.
+- [x] Une frame est capturée dans RenderDoc sur Windows et le quad est visible dans l'inspecteur. *Jalon 2, partie 10 : capture de 3 001 sprites, un seul draw call.*
 - [ ] Une frame est capturée avec le débogueur Metal sur Mac.
 
 ---
@@ -678,14 +678,14 @@ Code dans `image.cpp`, `paths.cpp`, `renderer.cpp` (création de ressources), `s
 
 Le jalon est terminé quand **tout** ce qui suit est vrai :
 
-- [ ] Depuis un clone propre du dépôt, la commande de configuration puis de build fonctionne sur **Windows et sur Mac** sans étape manuelle non documentée.
-- [ ] Une fenêtre s'ouvre, se redimensionne et se ferme proprement.
-- [ ] La logique tourne à pas fixe, avec plafond de rattrapage.
-- [ ] Les shaders sont compilés automatiquement lors du build.
-- [ ] Un sprite texturé avec transparence est affiché correctement sur les deux OS.
-- [ ] Aucun avertissement de la couche de validation GPU en mode debug.
-- [ ] Le processus de build est **documenté** (un fichier `README` dans `moteur/` décrit les étapes pour chaque OS).
-- [ ] Les décisions de la section [Décisions à consigner](#décisions-à-consigner) sont remplies.
+- [x] Depuis un clone propre du dépôt, la commande de configuration puis de build fonctionne sur **Windows et sur Mac** sans étape manuelle non documentée.
+- [ ] Une fenêtre s'ouvre, se redimensionne et se ferme proprement. *Tout vérifié, sauf le redimensionnement sur Mac (voir la partie 4).*
+- [x] La logique tourne à pas fixe, avec plafond de rattrapage.
+- [x] Les shaders sont compilés automatiquement lors du build.
+- [x] Un sprite texturé avec transparence est affiché correctement sur les deux OS.
+- [x] Aucun avertissement de la couche de validation GPU en mode debug.
+- [x] Le processus de build est **documenté** (un fichier `README` dans `moteur/` décrit les étapes pour chaque OS).
+- [x] Les décisions de la section [Décisions à consigner](#décisions-à-consigner) sont remplies.
 
 ---
 
@@ -719,7 +719,7 @@ Le jalon est terminé quand **tout** ce qui suit est vrai :
 | Structure CMake : bibliothèque + exécutable | Bibliothèque `moteur` + exécutable `bac_a_sable` | Réutilisation par l'ARPG |
 | Niveau d'avertissements et politique « erreur » | `/W4` et `-Wall -Wextra -Wpedantic`, pas de « warnings as errors » | Strict sans bloquer le build |
 | Langue du code et de la documentation | Code en anglais, documentation en français | Cohérence avec l'écosystème C++ |
-| Dépôt Git | À créer plus tard, à la main | `.gitignore` et `.gitattributes` prêts |
+| Dépôt Git | GitHub (`Game_engine`), racine = dossier `moteur/` | Partagé entre la machine Windows et le Mac |
 | Fréquence de la logique (Hz) | 60 Hz | Valeur classique, suffisante pour un ARPG |
 | Plafond de rattrapage par frame | 0,25 s | Évite la spirale de rattrapage après une pause |
 | Interpolation du rendu : oui ou non | `alpha` fourni à `render()`, pas encore utilisé | Permet de l'ajouter sans changer l'interface |
@@ -735,5 +735,5 @@ Le jalon est terminé quand **tout** ce qui suit est vrai :
 | Résolution des chemins d'assets | Relatifs à l'exécutable, copiés à chaque build | Indépendant du dossier de travail |
 | Style visuel : filtrage et résolution de référence | Pixel art : filtrage `NEAREST`, rendu à la résolution native de la fenêtre | Bords nets. La résolution de référence reste à décider avec la caméra (jalon 2) |
 | Espace colorimétrique (linéaire ou sRGB) | Textures RGBA8 UNORM, swapchain SDR standard, mélange dans l'espace de l'image | Simple ; à changer ensemble textures et swapchain si on passe au linéaire |
-| Alpha pré-multiplié ou non | Non pré-multiplié | Plus simple pour l'instant ; à revoir avec les atlas |
+| Alpha pré-multiplié ou non | ~~Non pré-multiplié~~ **Pré-multiplié** depuis le jalon 2 (partie 5), appliqué à la création des textures | Filtrage correct sans halo |
 | Unité et origine des coordonnées du monde | Pixel physique, origine en haut à gauche, Y vers le bas | Cohérent avec les coordonnées d'écran ; à revoir avec la caméra isométrique |

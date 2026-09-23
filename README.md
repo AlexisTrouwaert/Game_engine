@@ -74,6 +74,8 @@ build/windows-release/apps/bac_a_sable/bac_a_sable --run-seconds 6 --report --sp
 - `--atlas` affiche tous les sprites de l'atlas `test`, chacun à son pivot, puis un personnage de quatre façons (normal, retourné, ×2, retourné ×3).
 - `--text` affiche une phrase française, un paragraphe avec retour à la ligne, les trois alignements, et un compteur de FPS.
 - `--demo` réunit une carte de tuiles (`TileMap`) avec des murs procéduraux, des créatures qui marchent avec leur animation et font demi-tour devant les murs (`--seed` pour leur position/direction) et une superposition de statistiques (FPS, sprites, lots/draw calls, événements d'animation). Voir `moteur_doc/JALON_2_RENDU_2D.md`, parties 6, 7 et 9.
+- `--render-scale S` (avec `--3d`) : rend la 3D à la fraction S de la fenêtre (0,25 à 1), l'interface restant nette.
+- `--3d` affiche la scène « Rendu 3D » du jalon 3 : un sol, des cubes, une sphère et des piliers vus par la caméra 3D, en perspective (inclinaison 50°, champ 30° : le réglage retenu ; `--ortho` pour commencer en orthographique). **P** change de projection, flèches ou ZQSD déplacent la caméra, la molette zoome.
 - `--capture chemin.png` (avec `--freeze-after N`) écrit la frame gelée en PNG, sur n'importe quelle scène : pour des comparaisons de pixels automatiques et reproductibles (même graine, même capture).
 
 ## Atlas de sprites
@@ -109,6 +111,25 @@ Les durées sont des ticks entiers : la lecture est identique sur toutes les mac
 ## Carte de tuiles
 
 `moteur::TileMap` est une grille de cases en calques, chaque case contenant un `TileId` dont le `Tileset` donne le sprite et les propriétés (`walkable`, `opaque`). `map.clip(iso.tiles_in(camera.visible_rect(), marge))` donne les tuiles à dessiner ; `map.walkable(tileset, case)` sert aux déplacements.
+
+## Modèles 3D (glTF)
+
+Déposer des fichiers `.glb` ou `.gltf` dans `assets/models/` : la scène « Rendu 3D » les affiche tous, en rang, avec leur nombre de triangles et leur temps de chargement. Dans le code :
+
+```
+auto model = moteur::Model::load(renderer, moteur::asset_path("models/reference.glb"));
+renderer.meshes().draw(model, matrice_monde);
+```
+
+**Modèles de test** : `python tools/models/fetch_test_models.py` télécharge quatre modèles de Poly Haven (CC0, environ 11 Mo) dans `assets/models/polyhaven/`, hors de Git. À relancer sur chaque nouvelle machine.
+
+**Éclairage** : rendu PBR (le matériau de glTF, `moteur::Material`), avec un soleil, jusqu'à 32 lumières ponctuelles par frame et un éclairage d'environnement : un ciel procédural, ou toute image `.hdr` déposée dans `assets/environments/` (la scène « Rendu 3D » les propose dans son panneau).
+
+Conventions : celles de glTF (main droite, Y vers le haut, mètres). La 3D est calculée en **couleurs linéaires**, rendue en HDR puis convertie pour l'écran (tone mapping PBR Neutral) : les couleurs passées au `MeshRenderer` sont linéaires, `moteur::srgb_to_linear()` convertit une couleur choisie à l'œil. Les textures de couleur des modèles sont en sRGB avec mipmaps. Depuis Blender, exporter en glTF 2.0 avec « +Y vers le haut » (option par défaut). Le modèle de référence `assets/models/reference.glb` (cube de 1 m, flèches des axes, texture en quadrants) se régénère avec `python tools/models/make_reference_model.py`.
+
+## Crédits et licences
+
+`assets/credits.json` liste les bibliothèques, la police et les assets, avec leurs auteurs et licences ; le bac à sable les affiche dans **Aide > À propos**, avec le texte complet de chaque licence. Au build, les textes de licence des bibliothèques sont copiés dans `licenses/` à côté de l'exécutable (`moteur_add_licenses()` dans `cmake/Assets.cmake`). **Toute nouvelle bibliothèque ou tout nouvel asset doit être ajouté à `credits.json`** (et, pour une bibliothèque, à `moteur_add_licenses()`).
 
 ## Texte
 
@@ -152,7 +173,7 @@ Les shaders sont écrits en HLSL dans `shaders/` et compilés par `shadercross` 
 
 - **Windows** : compilés en DXIL à chaque build, automatiquement.
 - **macOS** : le port vcpkg de shadercross n'est pas disponible (il dépend de DXC, absent sur Mac). Le build copie les fichiers MSL déjà générés dans `shaders/generated/msl/`.
-- **Après avoir modifié un shader**, sous Windows : construire la cible `export_msl_shaders` puis committer les fichiers de `shaders/generated/msl/`, sinon le Mac utilisera une version périmée.
+- **Après avoir modifié ou ajouté un shader**, sous Windows : construire la cible `export_msl_shaders` puis committer les fichiers de `shaders/generated/msl/`, sinon le Mac utilisera une version périmée (ou ne compilera pas, pour un nouveau shader).
 
 ```
 cmake --build --preset windows-debug --target export_msl_shaders

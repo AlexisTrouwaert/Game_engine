@@ -5,10 +5,15 @@ add_executable(moteur_tests
     test_animation.cpp
     test_atlas_builder.cpp
     test_camera.cpp
+    test_camera3d.cpp
+    test_color.cpp
+    test_environment.cpp
     test_fixed_timestep.cpp
     test_iso.cpp
     test_frame_stats.cpp
     test_image.cpp
+    test_mesh.cpp
+    test_model.cpp
     test_sprite_batcher.cpp
     test_sprite_region.cpp
     test_text_layout.cpp

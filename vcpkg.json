@@ -8,6 +8,8 @@
     "stb",
     "doctest",
     "nlohmann-json",
+    "cgltf",
+    "mikktspace",
     {
       "name": "imgui",
       "features": ["sdl3-binding", "sdlgpu3-binding"]

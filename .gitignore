@@ -13,3 +13,7 @@ vcpkg_installed/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test models downloaded by tools/models/fetch_test_models.py (CC0, about 11 MB), kept
+# out of Git until Git LFS is decided
+assets/models/polyhaven/
