@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "clips": {
+    "walk": {
+      "mode": "loop",
+      "frame_ticks": 6,
+      "frames": ["walk_00", "walk_01", "walk_02", "walk_03", "walk_04", "walk_05", "walk_06", "walk_07"],
+      "events": [
+        { "frame": 1, "name": "step" },
+        { "frame": 5, "name": "step" }
+      ]
+    }
+  }
+}

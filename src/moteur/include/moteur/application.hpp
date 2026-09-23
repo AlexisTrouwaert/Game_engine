@@ -26,6 +26,10 @@ struct ApplicationConfig {
 #endif
     // Logs a summary of CPU time per frame when the loop ends (see Application::run).
     bool report_performance = false;
+    // Dear ImGui for debug windows and menus (see DebugUi). The game calls ImGui:: from render().
+    bool debug_ui = false;
+    std::string debug_ui_font;  // TrueType file; empty for ImGui's built-in font (ASCII only)
+    float debug_ui_font_size = 16.0f;
 };
 
 // Implemented by the program driving the engine.
@@ -33,14 +37,16 @@ class Game {
 public:
     virtual ~Game() = default;
 
-    // Raw SDL event. Temporary: an input abstraction will replace it.
+    // Raw SDL event. Temporary: an input abstraction will replace it. Events used by the debug
+    // interface (a click on one of its windows) do not reach the game.
     virtual void on_event(const SDL_Event&) {}
 
     // Called at a fixed rate, always with the same dt (seconds).
     virtual void update(double dt) = 0;
 
     // Called once per drawable frame. Only *record* what to draw here, for example with
-    // renderer.sprites().draw(...): nothing is sent to the GPU until the frame ends.
+    // renderer.sprites().draw(...): nothing is sent to the GPU until the frame ends. With
+    // ApplicationConfig::debug_ui, ImGui:: calls are allowed here too.
     // alpha in [0, 1) is how far the frame is between the last update and the next one,
     // for render interpolation.
     virtual void render(Renderer& renderer, double alpha) = 0;

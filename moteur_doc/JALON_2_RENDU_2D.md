@@ -870,15 +870,15 @@ Dans un ARPG, l'animation est **liée au gameplay** : le coup d'une attaque touc
 
 ### Tâches
 
-- [ ] Définir un `AnimationClip` : liste d'images, durée de chaque image, mode de lecture (une fois, boucle, aller-retour).
-- [ ] Écrire un lecteur `AnimationPlayer` : temps écoulé, image courante, terminé ou non.
-- [ ] Ajouter un **multiplicateur de vitesse** de lecture.
-- [ ] Ajouter des **événements** attachés à des images (par exemple « touche l'ennemi », « pas de marche »).
-- [ ] Gérer les **directions** : choisir l'ensemble d'images selon l'angle (8 ou 16 directions).
-- [ ] Gérer la symétrie : réutiliser des images retournées pour économiser de la mémoire.
-- [ ] Charger les définitions depuis des fichiers de données (JSON).
-- [ ] Relier les animations aux noms de régions de l'atlas.
-- [ ] Tests unitaires du temps, des boucles, des événements et des vitesses.
+- [x] Définir un `AnimationClip` : liste d'images, durée de chaque image, mode de lecture (une fois, boucle, aller-retour).
+- [x] Écrire un lecteur `AnimationPlayer` : temps écoulé, image courante, terminé ou non.
+- [x] Ajouter un **multiplicateur de vitesse** de lecture.
+- [x] Ajouter des **événements** attachés à des images (par exemple « touche l'ennemi », « pas de marche »).
+- [ ] Gérer les **directions** : choisir l'ensemble d'images selon l'angle (8 ou 16 directions). *Hors du périmètre réduit : le jeu étant en 3D, les personnages ne seront pas des séquences d'images par direction.*
+- [x] Gérer la symétrie : réutiliser des images retournées pour économiser de la mémoire. *Rien à ajouter au moteur : `flip_x` retourne déjà l'image autour du pivot (partie 5). La démo s'en sert pour les créatures qui vont vers la gauche.*
+- [x] Charger les définitions depuis des fichiers de données (JSON).
+- [x] Relier les animations aux noms de régions de l'atlas.
+- [x] Tests unitaires du temps, des boucles, des événements et des vitesses.
 
 ### Questions à se poser
 
@@ -907,13 +907,32 @@ Dans un ARPG, l'animation est **liée au gameplay** : le coup d'une attaque touc
 - Un retournement horizontal qui oublie de retourner le pivot : le personnage « glisse » d'un côté à l'autre.
 - Une vitesse de lecture à zéro ou négative (division par zéro, boucle infinie).
 
+### Implémentation réalisée (partie 6)
+
+**Périmètre réduit.** Le jeu étant en 3D, on garde ce qui servira aussi aux animations 3D et aux effets 2D (icônes animées, effets en séquence d'images) : un lecteur **déterministe** piloté par le pas fixe, la vitesse variable et des événements fiables. Les 8 directions et les couches d'équipement sont laissées de côté. Fichiers : `animation.hpp` / `animation.cpp`, tests dans `test_animation.cpp`.
+
+- **`AnimationClip`** : images (nom de sprite + durée en **ticks entiers**), mode (`Once`, `Loop`, `PingPong`) et événements (un nom sur une image). Le constructeur refuse un clip sans image, une image de moins d'un tick ou un événement sur une image qui n'existe pas. Il précalcule les « pas » d'un cycle : en aller-retour, les images du retour s'ajoutent sans répéter celles des extrémités (a b c d c b).
+- **`AnimationPlayer`** : de simples données (un pointeur vers le clip, un temps, une vitesse), sans lien avec le rendu, prêtes à devenir un composant d'ECS. `advance(ticks, &événements)` est appelé une fois par tick de simulation ; `region()` donne le sprite à dessiner.
+- **Temps et vitesse en entiers** : le temps est compté en **millièmes de tick** (`int64`) et la vitesse en millièmes (`kSpeedOne = 1000` pour ×1, `set_speed(1.5)` arrondi au millième). Aucune dérive de flottants : deux machines donnent exactement la même image au même tick.
+- **Événements** : à chaque `advance`, le lecteur liste les débuts d'image situés dans l'intervalle **(avant, après]**. Ces intervalles se touchent sans se chevaucher, donc chaque début d'image est vu une fois et une seule, même quand un grand pas saute plusieurs images ou plusieurs boucles. La première image compte comme atteinte au premier `advance` après `play()`. Le jeu fournit la liste à remplir (pas d'allocation par lecteur), et un événement se déclenche au tick où son image devient visible.
+- **Vitesse nulle ou négative** : 0 met en pause, une vitesse négative lève une exception.
+- **`set_time()`** place un lecteur à un point du cycle sans déclencher l'image courante : la démo s'en sert pour que la foule ne marche pas au pas.
+- **`AnimationLibrary`** : lit un fichier JSON versionné (`assets/animations.json`, format décrit dans `animation.hpp`), les clips étant triés par nom. Une image peut être un simple nom (durée `frame_ticks`) ou `{ "region", "ticks" }`. `check_regions(atlas)` vérifie au chargement que chaque image existe dans l'atlas, plutôt que d'échouer en pleine partie. Toute erreur nomme le fichier.
+- **Démo** : les 3 000 créatures jouent le clip `walk` (les 8 images `walk_00` à `walk_07`, 6 ticks chacune, un événement `step` sur les images 1 et 5), à une vitesse liée à leur vitesse de déplacement (×0,75 à ×1,25), retournées quand elles vont vers la gauche de l'écran. La superposition compte les événements `step` reçus.
+
+**Vérifications faites**
+
+- 15 cas de tests unitaires (image à chaque tick dans les trois modes, ×2, ×0,5, ×0,7, pause, événements avec pas de 1 et de 20 ticks, clip `Once` après la fin, `set_time`, lecture et erreurs du JSON).
+- **Les tests ont été vérifiés en cassant le code** : compter deux fois un début d'image fait échouer 4 tests, ne jamais déclencher la première image 3, ne parcourir qu'une boucle par `advance` 3, répéter l'image d'extrémité en aller-retour 2, ne pas bloquer le temps à la fin d'un clip `Once` 1.
+- `--demo` : pas de nouveau draw call (169, comme avant), 0,75 ms de CPU par frame en Release pour 5 700 sprites. Deux lancements `--seed 42 --freeze-after 30 --capture` donnent la même image (`bd91e8b2c616`).
+
 ### Validation
 
-- [ ] Pour des durées données, l'image affichée au temps *t* est celle attendue (tests unitaires).
-- [ ] Chaque événement se déclenche **exactement une fois**, même avec de gros pas de temps.
-- [ ] À vitesse ×2, la séquence dure moitié moins longtemps.
-- [ ] Un personnage tourne visuellement à travers les 8 directions sans saut de position.
-- [ ] Le résultat est identique sur Windows et sur Mac.
+- [x] Pour des durées données, l'image affichée au temps *t* est celle attendue (tests unitaires).
+- [x] Chaque événement se déclenche **exactement une fois**, même avec de gros pas de temps. *Même liste avec un pas de 20 ticks qu'avec 20 pas d'un tick.*
+- [x] À vitesse ×2, la séquence dure moitié moins longtemps.
+- [ ] Un personnage tourne visuellement à travers les 8 directions sans saut de position. *Hors périmètre réduit (jeu en 3D). Le retournement autour du pivot, qui empêche le saut de position, est vérifié en partie 5.*
+- [ ] Le résultat est identique sur Windows et sur Mac. *Identique par construction (arithmétique entière), à confirmer en lançant les tests et la démo sur Mac.*
 
 ---
 
@@ -925,15 +944,15 @@ Afficher un monde composé de tuiles : des dizaines de milliers de cases, dont s
 
 ### Tâches
 
-- [ ] Définir la structure `TileMap` : largeur, hauteur, calques, identifiant de tuile par case.
-- [ ] Définir `Tileset` : identifiant vers région d'atlas, plus des propriétés de tuile.
-- [ ] Dessiner les tuiles visibles (rectangle visible de la caméra converti en plage de tuiles) via le batch.
-- [ ] Gérer les tuiles plus hautes que leur emprise au sol (murs, arbres).
-- [ ] Trier les tuiles et les entités ensemble pour la profondeur.
-- [ ] Générer une carte de test (motif ou bruit) pour les mesures.
-- [ ] Surligner la tuile sous la souris.
-- [ ] Mesurer, et si besoin passer à des **blocs statiques** (voir plus bas).
-- [ ] Tests unitaires de la structure de carte et de la conversion en plage visible.
+- [x] Définir la structure `TileMap` : largeur, hauteur, calques, identifiant de tuile par case.
+- [x] Définir `Tileset` : identifiant vers région d'atlas, plus des propriétés de tuile.
+- [x] Dessiner les tuiles visibles (rectangle visible de la caméra converti en plage de tuiles) via le batch.
+- [x] Gérer les tuiles plus hautes que leur emprise au sol (murs, arbres). *Hauteur passée à `to_world()` et marge de 2 tuiles dans `tiles_in()`.*
+- [x] Trier les tuiles et les entités ensemble pour la profondeur. *Clé `x + y` (partie 9).*
+- [x] Générer une carte de test (motif ou bruit) pour les mesures.
+- [x] Surligner la tuile sous la souris.
+- [x] Mesurer, et si besoin passer à des **blocs statiques** (voir plus bas). *Pas besoin : voir les mesures ci-dessous.*
+- [x] Tests unitaires de la structure de carte et de la conversion en plage visible.
 
 ### Rendu via le batch, puis par blocs si nécessaire
 
@@ -976,14 +995,29 @@ Ne passer aux blocs que sur mesure. Une carte de 200×200 tuiles fait 40 000 cas
 - Reconstruire les données d'une carte entière à chaque frame.
 - Perdre l'alignement entre les tuiles et les entités à cause d'origines de coordonnées différentes.
 
+### Implémentation réalisée (partie 7)
+
+**Périmètre réduit.** En 3D, le sol ne sera plus dessiné en tuiles 2D, mais le jeu aura toujours besoin d'une **grille de cases avec des propriétés** : collisions et pathfinding (jalon 4), visibilité. On garde donc la structure de données, indépendante du rendu, et on la branche sur le rendu isométrique existant. Pas de blocs statiques (inutiles, voir la mesure) ni de lecture de fichiers Tiled (les zones seront générées). Fichiers : `tilemap.hpp` / `tilemap.cpp`, tests dans `test_tilemap.cpp`.
+
+- **`TileId`** : 16 bits, `kNoTile` (0) pour une case vide.
+- **`Tileset`** : les types de tuiles, numérotés à partir de 1. Un `TileType` porte un nom de sprite (vide si le jeu dessine la tuile autrement), `walkable` et `opaque`. Les propriétés sont dans le type, pas dans la carte : la carte reste une grille de petits nombres.
+- **`TileMap`** : largeur, hauteur, et un nombre de calques qui couvrent tous toute la carte (un seul tableau, calque après calque). `at` et `set` lèvent une exception hors de la carte. `fill` remplit un calque.
+- **`clip(plage)`** : la partie d'une plage de tuiles qui tombe dans la carte. Avec `IsoProjection::tiles_in()`, elle donne directement les tuiles à dessiner, sans les `max`/`min` recopiés à la main dans chaque scène.
+- **`walkable(tileset, case)`** : faux hors de la carte, ou si une tuile d'un des calques n'est pas praticable. Premier usage « gameplay » de la carte.
+- **Démo** : la carte est maintenant une vraie `TileMap` 100×100 à deux calques (sol en damier `tile_a`/`tile_b`, murs). Le rendu lit la carte au lieu de recalculer le motif, et **les créatures font demi-tour devant un mur** au lieu de le traverser. Elles naissent toujours sur une case praticable.
+
+**Mesures** (Release, `--demo --no-vsync --no-input`, 100×100 tuiles, 3 000 créatures) : 5 726 sprites envoyés par frame (et non 10 000 tuiles + murs + créatures), 169 draw calls, **0,41 ms** pour construire la frame (`record`) et 0,75 ms de CPU en tout. Reconstruire les tuiles visibles à chaque frame ne coûte presque rien : les blocs statiques ne se justifient pas.
+
+**Vérifications faites** : 6 cas de tests unitaires (numérotation du tileset, calques indépendants, `fill`, refus hors de la carte, `clip` à l'intérieur, à cheval et hors de la carte, plage visible d'une caméra dans un coin, `walkable` sur plusieurs calques). Ne regarder que le premier calque dans `walkable` fait échouer un test.
+
 ### Validation
 
-- [ ] Une carte de 100×100 tuiles se déplace à la cadence de l'écran, avec caméra et zoom.
-- [ ] Seules les tuiles visibles (plus la marge) sont envoyées (compteur de statistiques).
-- [ ] Aucune couture aux niveaux de zoom prévus.
-- [ ] Un personnage marche derrière et devant un mur : l'ordre est correct.
-- [ ] La tuile sous la souris est surlignée correctement, y compris aux bords de la carte.
-- [ ] Le rendu est identique sur les deux OS.
+- [x] Une carte de 100×100 tuiles se déplace à la cadence de l'écran, avec caméra et zoom. *`--demo`, partie 9.*
+- [x] Seules les tuiles visibles (plus la marge) sont envoyées (compteur de statistiques). *5 726 sprites par frame au lieu de plus de 13 000.*
+- [x] Aucune couture aux niveaux de zoom prévus. *Parties 4 et [TEST_MAC.md](TEST_MAC.md) (zoom 1 et 3, sur les deux OS).*
+- [x] Un personnage marche derrière et devant un mur : l'ordre est correct. *Tri `x + y` de la partie 9, vérifié sur capture.*
+- [x] La tuile sous la souris est surlignée correctement, y compris aux bords de la carte. *Partie 4 (quatre coins de l'écran, plusieurs zooms) ; hors de la carte, rien n'est surligné.*
+- [ ] Le rendu est identique sur les deux OS. *Atlas identiques ; capture de la démo à comparer à résolution égale (voir la partie 9).*
 
 ---
 
@@ -1124,7 +1158,7 @@ Les écarts de hauteur (20 contre 14) reflètent la différence normale entre la
 - [x] La largeur mesurée d'un texte correspond à sa largeur dessinée (au pixel près). *Écart de quelques pixels près des bords, expliqué par les marges typographiques normales (voir le tableau ci-dessus) ; `measure()` et `draw()` partagent le même calcul, donc ils ne peuvent pas diverger par construction.*
 - [x] Le retour à la ligne automatique et l'alignement fonctionnent. *Alignement centré exact au pixel ; retour à la ligne vérifié par test unitaire et par la scène `--text`.*
 - [x] Un compteur de FPS s'affiche en continu sans ralentir le rendu (ses sprites sont dans le batch). *0,2 ms de CPU en moyenne, 1 draw call.*
-- [ ] Le rendu est identique sur Windows et sur Mac. *Windows vérifié, Mac à faire.*
+- [x] Le rendu est identique sur Windows et sur Mac. *Vérifié sur les deux OS (voir [TEST_MAC.md](TEST_MAC.md), étape 8).*
 
 ---
 
@@ -1169,7 +1203,7 @@ Avantages :
 
 ### Implémentation réalisée (partie 9)
 
-**Périmètre réduit.** Le jeu final sera en 3D (voir les décisions de style visuel) ; ce moteur 2D ne servira plus qu'à l'UI, aux icônes et aux effets. Les parties 6 (animations) et 7 (tilemaps dédiées) n'ont donc pas été construites en amont comme le prévoyait l'ordre initial du jalon. La scène de démonstration (`--demo`) réutilise ce qui existe déjà (grille isométrique procédurale de `--iso`, atlas, texte, caméra) plutôt que d'attendre ces deux parties :
+**Périmètre réduit.** Le jeu final sera en 3D (voir les décisions de style visuel) ; ce moteur 2D ne servira plus qu'à l'UI, aux icônes et aux effets. Les parties 6 (animations) et 7 (tilemaps dédiées) n'avaient donc pas été construites en amont comme le prévoyait l'ordre initial du jalon (elles l'ont été ensuite, en version réduite : voir leurs sections « Implémentation réalisée »). La scène de démonstration (`--demo`) réutilise ce qui existe déjà (grille isométrique procédurale de `--iso`, atlas, texte, caméra) plutôt que d'attendre ces deux parties :
 
 - **Carte** : 100×100 par défaut (`--map` pour changer), deux types de sol (`tile_a`/`tile_b`, comme `--iso`) et des **murs procéduraux** : un quadrillage de lignes de grille avec des trous tous les 4 tuiles (effet « pièces avec portes »), calculé à la volée (`is_wall(i, j)`), sans donnée de niveau ni art dédiés. Les murs utilisent la texture générique du sprite principal, teintée, faute d'art de mur réel.
 - **Créatures** : 3 000 par défaut (`--sprites`), positionnées et mises en mouvement par un générateur pseudo-aléatoire à graine fixe (`--seed`, comme le `Random` déjà utilisé pour le test de charge). Chacune se déplace dans l'une des 8 directions de la grille (`{-1,0,1}²` sans `(0,0)`), rebondit sur les bords de la carte. **Simplification assumée** : le sprite `walk_03` de l'atlas de test est utilisé tel quel (teinté par créature), sans les animations de la partie 6 — cohérent avec le nouveau statut de ce moteur (UI/effets, pas le rendu de gameplay final).
@@ -1202,7 +1236,7 @@ Avantages :
 
 - [x] La scène tourne à la cadence de l'écran avec les statistiques de l'objectif de performance atteintes (voir la partie 1). *`--demo` avec 3 000 créatures + carte 100×100 : 168 FPS avec VSync activé sur la machine de développement (voir le compteur intégré), cohérent avec les mesures de charge de la partie 3 pour un nombre de sprites comparable.*
 - [x] Deux lancements avec la même graine donnent la même capture. *Vérifié par hachage SHA-256 : deux exécutions de `--demo --seed 42 --freeze-after 30` produisent un PNG identique au bit près.*
-- [ ] Les captures de Windows et de Mac sont comparées (identiques ou différences expliquées). *Nécessite le Mac, comme le reste du jalon.*
+- [ ] Les captures de Windows et de Mac sont comparées (identiques ou différences expliquées). *Référence Windows : `--demo --seed 42 --freeze-after 30 --no-input --capture demo.png` → `bd91e8b2c616` (1280×720, stable sur deux lancements ; avec les animations et la carte des parties 6 et 7). Les atlas sont identiques sur les deux OS, mais le Mac capture en 2560×1440 (Retina) : une comparaison au pixel près demande la même résolution en pixels des deux côtés.*
 
 ---
 
@@ -1301,8 +1335,8 @@ Le jalon est terminé quand **tout** ce qui suit est vrai :
 - [ ] Le **batching** dessine l'objectif de sprites (par exemple 10 000) à la cadence de l'écran, avec un nombre de draw calls égal au nombre de lots.
 - [ ] La **caméra** gère déplacement, zoom, conversions écran/monde et tuile sous la souris, sans scintillement ni couture.
 - [ ] L'**outil d'empaquetage** produit des atlas déterministes, sans bavure, avec les métadonnées de rognage et de pivot.
-- [ ] Les **animations** sont pilotées par le pas fixe, avec vitesse variable et événements fiables.
-- [ ] La **carte de tuiles** de 100×100 s'affiche avec un tri en profondeur correct entre sols, murs et entités.
+- [x] Les **animations** sont pilotées par le pas fixe, avec vitesse variable et événements fiables.
+- [x] La **carte de tuiles** de 100×100 s'affiche avec un tri en profondeur correct entre sols, murs et entités.
 - [ ] Le **texte** UTF-8 s'affiche correctement (accents français), mesure et dessin concordent.
 - [ ] La **scène de démonstration** tourne identiquement sur Windows et sur Mac.
 - [ ] Aucun avertissement de compilation, aucun message de la couche de validation du GPU.
@@ -1363,14 +1397,14 @@ Le jalon est terminé quand **tout** ce qui suit est vrai :
 | Identifiant d'un sprite (chaîne, haché, énumération) | Chaîne : chemin relatif sans extension, séparateur `/` | Lisible dans les fichiers de données ; les sous-dossiers rangent |
 | Pivot | Bas au milieu de l'image d'origine par défaut ; `pivots.json` par image | Les pieds d'un personnage ; surcharge simple |
 | Format des pages | PNG ; formats compressés GPU repoussés | Un seul chargeur (stb) ; BC7 / ASTC diffèrent selon l'OS |
-| Horloge des animations (pas fixe ou temps réel), unité de durée | | |
-| Nombre de directions et symétrie par retournement | | |
-| Animation par images ou squelettique | | |
-| Gestion des événements d'animation | | |
-| Format des cartes (maison ou Tiled) | | |
-| Stratégie de tri en profondeur des objets multi-cases | | |
-| Nombre de calques et taille des identifiants de tuiles | | |
-| Blocs statiques de tuiles : oui ou non, taille | | |
+| Horloge des animations (pas fixe ou temps réel), unité de durée | Pas fixe ; durées en ticks entiers, temps en millièmes de tick, vitesse en millièmes | Aucune dérive de flottants : identique sur les deux OS ; indispensable si un événement inflige des dégâts |
+| Nombre de directions et symétrie par retournement | Pas de directions dans le moteur 2D ; symétrie par `flip_x` autour du pivot | Personnages en 3D ; le 2D sert aux effets et à l'interface |
+| Animation par images ou squelettique | Par images pour le 2D ; le squelettique viendra avec la 3D | Jeu en 3D (décision de style visuel) |
+| Gestion des événements d'animation | Liste remplie par `advance()` et lue par le jeu ; intervalle (avant, après] | Simple à déboguer, déterministe, chaque événement exactement une fois |
+| Format des cartes (maison ou Tiled) | Structures en mémoire (`TileMap`), pas de format de fichier pour l'instant | Zones générées ; Tiled reste possible plus tard pour les salles dessinées à la main |
+| Stratégie de tri en profondeur des objets multi-cases | Pas d'objets multi-cases pour l'instant ; clé `x + y` pour les objets d'une case | À reprendre si le 2D en a besoin ; en 3D, le tampon de profondeur s'en charge |
+| Nombre de calques et taille des identifiants de tuiles | Nombre de calques libre par carte ; identifiants 16 bits, 0 = vide | 65 535 types suffisent ; propriétés dans le `Tileset`, pas dans la carte |
+| Blocs statiques de tuiles : oui ou non, taille | Non | Mesuré : 0,41 ms pour construire une frame de 5 700 sprites |
 | Option de texte (`stb_truetype`, SDL3_ttf, bitmap, SDF) | `stb_truetype`, rasterisé au chargement de la police | Aucune dépendance de plus, réutilise le batch et l'outil d'atlas |
 | Police retenue et sa licence | Inter, SIL Open Font License 1.1 | Bonne lisibilité, licence libre, couverture Latin-1 complète |
 | Jeu de caractères couvert | Latin de base + Latin-1 + œ/Œ, tirets, guillemets courbes (~236 glyphes) | Couvre le français ; écritures non latines hors périmètre |

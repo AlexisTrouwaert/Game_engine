@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "moteur/image.hpp"
+#include "moteur/paths.hpp"
 
 namespace moteur {
 
@@ -16,18 +17,6 @@ constexpr int kSupportedVersion = 1;
 std::string directory_of(const std::string& path) {
     const std::size_t slash = path.find_last_of("/\\");
     return slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
-}
-
-std::string read_text_file(const std::string& path) {
-    // SDL_LoadFile handles UTF-8 paths on Windows.
-    std::size_t size = 0;
-    void* data = SDL_LoadFile(path.c_str(), &size);
-    if (data == nullptr) {
-        throw std::runtime_error(std::string("cannot read the file: ") + SDL_GetError());
-    }
-    std::string text(static_cast<const char*>(data), size);
-    SDL_free(data);
-    return text;
 }
 
 }  // namespace

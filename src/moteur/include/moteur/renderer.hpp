@@ -12,11 +12,15 @@
 
 namespace moteur {
 
+class DebugUi;
 class SpriteRenderer;
 
 struct RendererConfig {
     bool debug = false;  // enables the GPU backend's validation layer
     bool vsync = true;
+    bool debug_ui = false;          // creates a DebugUi (Dear ImGui), drawn on top of the sprites
+    std::string debug_ui_font;      // TrueType font of the DebugUi; empty for ImGui's built-in one
+    float debug_ui_font_size = 16.0f;
 };
 
 // What a shader declares, needed by SDL_GPU to validate bindings.
@@ -78,6 +82,10 @@ public:
     // Sprite drawing, recorded between begin_frame() and end_frame().
     SpriteRenderer& sprites();
 
+    // The debug interface, or null when RendererConfig::debug_ui is off. Its windows are drawn
+    // after the sprites, in window pixels.
+    DebugUi* debug_ui() { return debug_ui_.get(); }
+
     // Statistics of the frame that just ended.
     const RenderStats& stats() const { return stats_; }
 
@@ -136,6 +144,7 @@ private:
     std::string capture_path_;
 
     std::unique_ptr<SpriteRenderer> sprites_;
+    std::unique_ptr<DebugUi> debug_ui_;
 };
 
 }  // namespace moteur

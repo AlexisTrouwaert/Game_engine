@@ -46,7 +46,7 @@ Documentation détaillée : [Jalon 2 - Rendu 2D](JALON_2_RENDU_2D.md)
 - [ ] Gestionnaire d'assets (chargement, cache)
 - [ ] Gestion de scènes / états de jeu
 - [ ] Audio (effets, musique)
-- [ ] Intégration Dear ImGui (debug)
+- [ ] Intégration Dear ImGui (debug) *(commencé : `DebugUi` et le menu des tests du bac à sable)*
 
 ### 4. Monde et déplacement
 - [ ] Collisions 2D

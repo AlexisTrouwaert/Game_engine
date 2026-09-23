@@ -1,5 +1,6 @@
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
+#include <imgui.h>
 
 #include <algorithm>
 #include <cmath>
@@ -7,11 +8,13 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "moteur/animation.hpp"
 #include "moteur/application.hpp"
 #include "moteur/camera.hpp"
 #include "moteur/font.hpp"
@@ -20,6 +23,7 @@
 #include "moteur/paths.hpp"
 #include "moteur/sprite_renderer.hpp"
 #include "moteur/texture_atlas.hpp"
+#include "moteur/tilemap.hpp"
 #include "moteur/version.hpp"
 
 namespace {
@@ -59,9 +63,12 @@ struct Creature {
     glm::vec2 position;  // tile space, fractional
     glm::vec2 velocity;  // tiles per second
     glm::vec4 tint;
+    moteur::AnimationPlayer walk;
 };
 
-class Sandbox final : public moteur::Game {
+// One test scene of the engine, chosen by its Options: the sprite stress test, the isometric map,
+// the atlas, the text, or the demo. Created when the test starts and destroyed when it stops.
+class TestScene final : public moteur::Game {
 public:
     struct Options {
         double run_seconds = 0.0;  // > 0 makes the program quit by itself (used for smoke tests)
@@ -94,10 +101,13 @@ public:
         std::string capture_path;       // non-empty: write a PNG once freeze_after_ticks is reached
     };
 
-    Sandbox(moteur::Application& app, const Options& options)
+    // standalone: the scene is the whole program (launched from the command line), so Escape and
+    // --run-seconds quit it. Otherwise they only ask the menu to stop the test (stop_requested()).
+    TestScene(moteur::Application& app, const Options& options, bool standalone)
         : app_(app),
           texture_(app.renderer().create_texture(moteur::load_image(moteur::asset_path("sprite.png")))),
           options_(options),
+          standalone_(standalone),
           iso_(kTileWidth, kTileHeight) {
         app.renderer().sprites().set_batching(options.batching);
 
@@ -149,8 +159,25 @@ public:
             tile_b_ = &world_atlas_->region("tile_b");
             highlight_ = &world_atlas_->region("tile_highlight");
             test_atlas_ = moteur::TextureAtlas::load(app.renderer(), moteur::asset_path("test.json"));
-            creature_sprite_ = &test_atlas_->region("walk_03");
+            animations_ = moteur::AnimationLibrary::load(moteur::asset_path("animations.json"));
+            animations_->check_regions(*test_atlas_);
+            const moteur::AnimationClip& walk = animations_->clip("walk");
             font_ = moteur::Font::load(app.renderer(), moteur::asset_path("fonts/Inter-Regular.ttf"), kFontPixelHeight);
+
+            // The map: a ground layer of two alternating kinds, and a layer of walls that the
+            // creatures cannot cross. Walls have no art yet: the game draws them as tinted boxes.
+            ground_a_ = tileset_.add({"tile_a", true, false});
+            ground_b_ = tileset_.add({"tile_b", true, false});
+            wall_ = tileset_.add({"", false, true});
+            map_.emplace(options.map_size, options.map_size, 2);
+            for (int j = 0; j < options.map_size; ++j) {
+                for (int i = 0; i < options.map_size; ++i) {
+                    map_->set(kGroundLayer, {i, j}, (i + j) % 2 == 0 ? ground_a_ : ground_b_);
+                    if (is_wall(i, j)) {
+                        map_->set(kWallLayer, {i, j}, wall_);
+                    }
+                }
+            }
 
             Random random(options.seed);
             static constexpr glm::vec2 kDirections[8] = {
@@ -160,12 +187,22 @@ public:
             constexpr float kCreatureSpeed = 2.0f;  // tiles per second
             creatures_.reserve(static_cast<std::size_t>(options.movers));
             for (int i = 0; i < options.movers; ++i) {
-                const glm::vec2 position(1.0f + random.next() * static_cast<float>(options.map_size - 2),
-                                         1.0f + random.next() * static_cast<float>(options.map_size - 2));
+                glm::vec2 position(0.0f);
+                do {  // never inside a wall
+                    position = {1.0f + random.next() * static_cast<float>(options.map_size - 2),
+                                1.0f + random.next() * static_cast<float>(options.map_size - 2)};
+                } while (!map_->walkable(tileset_, glm::ivec2(glm::floor(position))));
                 const glm::vec2 direction = kDirections[static_cast<std::size_t>(random.next() * 8.0f) % 8];
                 const glm::vec4 tint(0.5f + 0.5f * random.next(), 0.5f + 0.5f * random.next(),
                                      0.5f + 0.5f * random.next(), 1.0f);
-                creatures_.push_back({position, direction * kCreatureSpeed, tint});
+                // Faster creatures also step faster, so their feet keep up with the ground; each
+                // starts at its own point of the cycle so the crowd does not walk in step.
+                const float pace = 0.75f + 0.5f * random.next();
+                Creature creature{position, direction * (kCreatureSpeed * pace), tint, moteur::AnimationPlayer(walk)};
+                creature.walk.set_speed(pace);
+                creature.walk.set_time(static_cast<std::int64_t>(random.next() * static_cast<float>(walk.cycle_ticks())) *
+                                       moteur::AnimationPlayer::kSpeedOne);
+                creatures_.push_back(std::move(creature));
             }
 
             const auto middle = static_cast<float>(options.map_size) * 0.5f;
@@ -189,9 +226,9 @@ public:
 
     void on_event(const SDL_Event& event) override {
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
-            app_.quit();
+            stop();
         }
-        if (!options_.iso || options_.no_input) {
+        if (!(options_.iso || options_.demo) || options_.no_input) {
             return;
         }
         if (event.type == SDL_EVENT_MOUSE_WHEEL && event.wheel.y != 0.0f) {
@@ -212,7 +249,7 @@ public:
         elapsed_ += dt;
         ++ticks_;
         if (options_.run_seconds > 0.0 && elapsed_ >= options_.run_seconds) {
-            app_.quit();
+            stop();
         }
 
         const bool frozen = options_.freeze_after_ticks > 0 && ticks_ > options_.freeze_after_ticks;
@@ -334,6 +371,7 @@ public:
         }
     }
 
+    bool stop_requested() const { return stop_requested_; }
     long ticks() const { return ticks_; }
     long frames() const { return frames_; }
     double elapsed() const { return elapsed_; }
@@ -341,6 +379,14 @@ public:
     bool has_hovered_tile() const { return has_hovered_tile_; }
 
 private:
+    void stop() {
+        if (standalone_) {
+            app_.quit();
+        } else {
+            stop_requested_ = true;
+        }
+    }
+
     void move_camera(float dt) {
         const bool* keys = SDL_GetKeyboardState(nullptr);
         glm::vec2 direction(0.0f);
@@ -354,23 +400,24 @@ private:
         }
     }
 
+    // One simulation tick of the crowd: a creature turns back when its next position would be in
+    // a wall or off the map, and its walk animation advances on the same tick.
     void move_creatures(float dt) {
-        const float last = static_cast<float>(options_.map_size - 1);
         for (Creature& creature : creatures_) {
-            creature.position += creature.velocity * dt;
-            if (creature.position.x < 0.0f || creature.position.x > last) {
-                creature.velocity.x = -creature.velocity.x;
-                creature.position.x = glm::clamp(creature.position.x, 0.0f, last);
+            const glm::vec2 next = creature.position + creature.velocity * dt;
+            if (map_->walkable(tileset_, glm::ivec2(glm::floor(next)))) {
+                creature.position = next;
+            } else {
+                creature.velocity = -creature.velocity;
             }
-            if (creature.position.y < 0.0f || creature.position.y > last) {
-                creature.velocity.y = -creature.velocity.y;
-                creature.position.y = glm::clamp(creature.position.y, 0.0f, last);
-            }
+            fired_.clear();
+            creature.walk.advance(1, &fired_);
+            steps_ += static_cast<long>(fired_.size());  // the walk clip only has "step" events
         }
     }
 
     // Placeholder walls: a lattice of grid lines with gaps for doorways, so the demo map looks
-    // like a set of rooms without needing dedicated level data or art.
+    // like a set of rooms without needing a level editor.
     static bool is_wall(int i, int j) {
         return (i % 10 == 0 && j % 4 != 0) || (j % 10 == 0 && i % 4 != 0);
     }
@@ -485,10 +532,10 @@ private:
         font.draw(sprites, std::to_string(fps_display_) + " FPS", {view_size_.x - 200.0f, 20.0f}, fps_options);
     }
 
-    // The demo scene of the part 9 milestone: the isometric tilemap of --iso, with procedural
-    // walls added, several thousand creatures wandering over it, and a stats overlay. Reduced
-    // scope: creatures use a static sprite instead of the 8-direction animations of part 6 (not
-    // yet implemented), and walls are a tinted placeholder box, not dedicated art.
+    // The demo scene of the part 9 milestone: a TileMap (ground and walls) seen through the
+    // camera, several thousand creatures walking over it with their walk animation, and a stats
+    // overlay. Reduced scope: one walk cycle mirrored by direction instead of 8 directions, and
+    // walls are a tinted placeholder box, not dedicated art.
     void render_demo(moteur::Renderer& renderer, double alpha) {
         moteur::SpriteRenderer& sprites = renderer.sprites();
 
@@ -496,17 +543,17 @@ private:
         const moteur::Camera2D camera = camera_.interpolated(alpha);
         sprites.set_view_projection(camera.view_projection());
 
-        const moteur::TileRange range = iso_.tiles_in(camera.visible_rect(), 2);
+        // Only the tiles that can be seen, with room for the walls that stick out above theirs.
+        const moteur::TileMap& map = *map_;
+        const moteur::TileRange range = map.clip(iso_.tiles_in(camera.visible_rect(), 2));
         const int last = options_.map_size - 1;
-        const int first_i = std::max(range.min.x, 0), last_i = std::min(range.max.x, last);
-        const int first_j = std::max(range.min.y, 0), last_j = std::min(range.max.y, last);
 
         // Ground: grouped by kind so both textures batch into as few draw calls as possible.
-        for (int parity = 0; parity < 2; ++parity) {
-            const moteur::SpriteRegion& tile = parity == 0 ? *tile_a_ : *tile_b_;
-            for (int i = first_i; i <= last_i; ++i) {
-                for (int j = first_j; j <= last_j; ++j) {
-                    if ((i + j) % 2 == parity) {
+        for (const moteur::TileId kind : {ground_a_, ground_b_}) {
+            const moteur::SpriteRegion& tile = kind == ground_a_ ? *tile_a_ : *tile_b_;
+            for (int i = range.min.x; i <= range.max.x; ++i) {
+                for (int j = range.min.y; j <= range.max.y; ++j) {
+                    if (map.at(kGroundLayer, {i, j}) == kind) {
                         sprites.draw(tile, iso_.to_world(glm::vec2(i, j)));
                     }
                 }
@@ -517,9 +564,9 @@ private:
         // depth as the creatures so a creature correctly passes behind or in front of one.
         moteur::SpriteOptions wall_options;
         wall_options.tint = {0.35f, 0.30f, 0.25f, 1.0f};
-        for (int i = first_i; i <= last_i; ++i) {
-            for (int j = first_j; j <= last_j; ++j) {
-                if (is_wall(i, j)) {
+        for (int i = range.min.x; i <= range.max.x; ++i) {
+            for (int j = range.min.y; j <= range.max.y; ++j) {
+                if (map.at(kWallLayer, {i, j}) == wall_) {
                     wall_options.depth = static_cast<float>(i + j);
                     const glm::vec2 base = iso_.to_world(glm::vec2(i, j), kTileHeight * 1.5f);
                     sprites.draw(texture_, base, glm::vec2(kTileWidth * 0.5f, kTileHeight * 1.5f), wall_options);
@@ -528,12 +575,15 @@ private:
         }
 
         // Creatures: not interpolated between ticks (same simplification as the stress-test
-        // movers), sorted by tile-space depth against both the walls and each other.
+        // movers), sorted by tile-space depth against both the walls and each other. The walk
+        // cycle faces right; creatures heading left on screen (world.x = (x - y) * w / 2) use it
+        // mirrored, around the pivot so their feet stay in place.
         for (const Creature& creature : creatures_) {
             moteur::SpriteOptions options;
             options.tint = creature.tint;
             options.depth = creature.position.x + creature.position.y;
-            sprites.draw(*creature_sprite_, iso_.to_world(creature.position), 1.0f, options);
+            options.flip_x = creature.velocity.x - creature.velocity.y < 0.0f;
+            sprites.draw(test_atlas_->region(creature.walk.region()), iso_.to_world(creature.position), 1.0f, options);
         }
 
         // The tile under the mouse, same as --iso.
@@ -556,6 +606,7 @@ private:
         const double frame_time_ms = fps_display_ > 0 ? 1000.0 / static_cast<double>(fps_display_) : 0.0;
         const std::string line1 = std::to_string(fps_display_) + " FPS (" + std::to_string(static_cast<int>(frame_time_ms)) + " ms)";
         const std::string line2 = std::to_string(stats.sprites) + " sprites, " + std::to_string(stats.draw_calls) + " lots/draw calls";
+        const std::string line3 = std::to_string(steps_) + " pas (événements d'animation)";
         // A camera view-projection applies to the whole frame (see SpriteRenderer::set_view_projection):
         // there is no separate screen-space pass to draw UI in yet. As a stand-in, the desired
         // screen position is converted through the camera's inverse transform every frame, and a
@@ -564,11 +615,12 @@ private:
         moteur::TextOptions stats_options;
         stats_options.color = {0.6f, 1.0f, 0.6f, 1.0f};
         stats_options.align = moteur::TextAlign::Right;
-        stats_options.max_width = 260.0f;
+        stats_options.max_width = 360.0f;
         stats_options.depth = 1.0e6f;
-        const glm::vec2 stats_anchor = camera.screen_to_world({view_size_.x - 300.0f, 20.0f});
+        const glm::vec2 stats_anchor = camera.screen_to_world({view_size_.x - 400.0f, 20.0f});
         font_->draw(sprites, line1, stats_anchor, stats_options);
         font_->draw(sprites, line2, stats_anchor + glm::vec2(0.0f, font_->line_height()), stats_options);
+        font_->draw(sprites, line3, stats_anchor + glm::vec2(0.0f, 2.0f * font_->line_height()), stats_options);
     }
 
     // Every sprite of the test atlas in a grid, each at its pivot, then the walking character in
@@ -608,6 +660,8 @@ private:
     moteur::Application& app_;
     moteur::Texture texture_;  // released automatically; the application outlives it (see gpu_resource.hpp)
     Options options_;
+    bool standalone_;
+    bool stop_requested_ = false;
 
     glm::vec2 view_size_ = {1280.0f, 720.0f};  // updated from the swapchain size every frame
     glm::vec2 offset_ = {0.0f, 0.0f};
@@ -627,8 +681,17 @@ private:
     bool has_hovered_tile_ = false;
 
     // Demo scene.
-    const moteur::SpriteRegion* creature_sprite_ = nullptr;
+    static constexpr int kGroundLayer = 0;
+    static constexpr int kWallLayer = 1;
+    moteur::Tileset tileset_;
+    moteur::TileId ground_a_ = moteur::kNoTile;
+    moteur::TileId ground_b_ = moteur::kNoTile;
+    moteur::TileId wall_ = moteur::kNoTile;
+    std::optional<moteur::TileMap> map_;
+    std::optional<moteur::AnimationLibrary> animations_;  // must outlive the creatures' players
     std::vector<Creature> creatures_;
+    std::vector<const moteur::AnimationEvent*> fired_;  // reused every tick
+    long steps_ = 0;
     bool captured_ = false;
     moteur::RenderStats last_stats_;
 
@@ -643,10 +706,293 @@ private:
     long frames_ = 0;
 };
 
+// The program started without arguments: a menu bar (DEBUG > Tests moteur), a home screen, the
+// page listing the test scenes with their settings, and the running test with a button to stop it.
+class Sandbox final : public moteur::Game {
+public:
+    Sandbox(moteur::Application& app, double run_seconds) : app_(app), run_seconds_(run_seconds) {
+        // The settings each test starts with; the list page can change them before launching.
+        TestScene::Options sprites;
+        sprites.movers = 3000;
+        TestScene::Options iso;
+        iso.iso = true;
+        TestScene::Options atlas;
+        atlas.atlas = true;
+        TestScene::Options text;
+        text.text = true;
+        TestScene::Options demo;
+        demo.demo = true;
+        demo.map_size = 100;
+        demo.movers = 3000;
+
+        tests_ = {
+            {"Sprites et test de charge",
+             "Un grand sprite qui se déplace et des petits sprites qui rebondissent : batching, tri en "
+             "profondeur, nombre de draw calls (dans le titre de la fenêtre).",
+             TestKind::Sprites, sprites},
+            {"Carte isométrique",
+             "Une carte de tuiles vue par la caméra, la tuile sous la souris surlignée. Flèches ou ZQSD "
+             "pour se déplacer, molette pour zoomer.",
+             TestKind::Iso, iso},
+            {"Atlas de sprites",
+             "Tous les sprites de l'atlas de test à leur pivot (carré rouge), puis un personnage normal, "
+             "retourné, x2 et retourné x3.",
+             TestKind::Atlas, atlas},
+            {"Texte et polices",
+             "Une phrase avec accents et guillemets, un paragraphe avec retour à la ligne, les trois "
+             "alignements et un compteur de FPS.",
+             TestKind::Text, text},
+            {"Scène de démonstration",
+             "Carte de tuiles avec murs, créatures animées qui font demi-tour devant les murs, "
+             "statistiques. Mêmes commandes que la carte isométrique.",
+             TestKind::Demo, demo},
+        };
+    }
+
+    void on_event(const SDL_Event& event) override {
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE && !event.key.repeat) {
+            // One step back: from a test to the list, from the list to the home screen.
+            if (screen_ == Screen::Running) {
+                request(Action::ShowTests);
+            } else if (screen_ == Screen::Tests) {
+                request(Action::ShowHome);
+            }
+            return;
+        }
+        if (scene_) {
+            scene_->on_event(event);
+        }
+    }
+
+    void update(double dt) override {
+        elapsed_ += dt;
+        if (run_seconds_ > 0.0 && elapsed_ >= run_seconds_) {
+            app_.quit();
+        }
+        // Scenes are created and destroyed here, outside of any frame: loading uploads textures
+        // and waits for the GPU, and a scene's textures may be in use by the frame being recorded.
+        apply_request();
+        if (scene_) {
+            scene_->update(dt);
+            if (scene_->stop_requested()) {
+                request(Action::ShowTests);
+            }
+        }
+    }
+
+    void render(moteur::Renderer& renderer, double alpha) override {
+        if (scene_) {
+            scene_->render(renderer, alpha);
+        } else {
+            renderer.set_clear_color(0.08f, 0.09f, 0.11f);
+        }
+
+        draw_menu_bar();
+        switch (screen_) {
+            case Screen::Home: draw_home(); break;
+            case Screen::Tests: draw_tests(); break;
+            case Screen::Running: draw_running_panel(); break;
+        }
+    }
+
+private:
+    enum class Screen { Home, Tests, Running };
+    enum class Action { None, ShowHome, ShowTests, Launch };
+    enum class TestKind { Sprites, Iso, Atlas, Text, Demo };
+
+    struct TestEntry {
+        const char* name;
+        const char* description;
+        TestKind kind;
+        TestScene::Options options;
+    };
+
+    void request(Action action, int test = -1) {
+        action_ = action;
+        action_test_ = test;
+    }
+
+    void apply_request() {
+        const Action action = action_;
+        action_ = Action::None;
+        switch (action) {
+            case Action::None:
+                return;
+            case Action::ShowHome:
+                scene_.reset();
+                screen_ = Screen::Home;
+                return;
+            case Action::ShowTests:
+                scene_.reset();
+                screen_ = Screen::Tests;
+                return;
+            case Action::Launch:
+                scene_.reset();  // the previous test, if any, releases its resources first
+                try {
+                    const TestEntry& test = tests_[static_cast<std::size_t>(action_test_)];
+                    scene_ = std::make_unique<TestScene>(app_, test.options, false);
+                    running_ = action_test_;
+                    screen_ = Screen::Running;
+                    error_.clear();
+                } catch (const std::exception& e) {
+                    scene_.reset();
+                    screen_ = Screen::Tests;
+                    error_ = e.what();
+                }
+                return;
+        }
+    }
+
+    // The bar at the top of the window, on every screen.
+    void draw_menu_bar() {
+        if (!ImGui::BeginMainMenuBar()) {
+            return;
+        }
+        if (ImGui::BeginMenu("DEBUG")) {
+            if (ImGui::BeginMenu("Tests moteur")) {
+                if (ImGui::MenuItem("Toutes les scènes...")) {
+                    request(Action::ShowTests);
+                }
+                ImGui::Separator();
+                for (std::size_t i = 0; i < tests_.size(); ++i) {
+                    const bool current = screen_ == Screen::Running && running_ == static_cast<int>(i);
+                    if (ImGui::MenuItem(tests_[i].name, nullptr, current)) {
+                        request(Action::Launch, static_cast<int>(i));
+                    }
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Accueil", nullptr, false, screen_ != Screen::Home)) {
+                request(Action::ShowHome);
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
+
+    // What the game will show one day; for now, a way into the debug tools.
+    void draw_home() {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::Begin("Accueil", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings);
+        ImGui::TextUnformatted("Moteur");
+        ImGui::TextDisabled("SDL %s", moteur::sdl_version().c_str());
+        ImGui::Separator();
+        ImGui::TextUnformatted("Le jeu viendra ici.");
+        ImGui::TextUnformatted("Les scènes de test sont dans le menu DEBUG > Tests moteur.");
+        ImGui::Spacing();
+        if (ImGui::Button("Tests moteur")) {
+            request(Action::ShowTests);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Quitter")) {
+            app_.quit();
+        }
+        ImGui::End();
+    }
+
+    // Every test scene, its description, its settings and a button to start it.
+    void draw_tests() {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->WorkPos);
+        ImGui::SetNextWindowSize(viewport->WorkSize);
+        ImGui::Begin("Tests moteur", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoBringToFrontOnFocus);
+        if (ImGui::Button("< Accueil")) {
+            request(Action::ShowHome);
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Tests moteur : choisir une scène. Échap pendant un test revient ici.");
+        if (!error_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.4f, 1.0f));
+            ImGui::TextWrapped("Le test n'a pas pu démarrer : %s", error_.c_str());
+            ImGui::PopStyleColor();
+        }
+
+        for (std::size_t i = 0; i < tests_.size(); ++i) {
+            TestEntry& test = tests_[i];
+            TestScene::Options& options = test.options;
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::Spacing();
+            ImGui::SeparatorText(test.name);
+            ImGui::TextWrapped("%s", test.description);
+            ImGui::PushItemWidth(260.0f);
+            switch (test.kind) {
+                case TestKind::Sprites:
+                    ImGui::SliderInt("Petits sprites", &options.movers, 0, 80000);
+                    ImGui::Checkbox("Batching", &options.batching);
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Tri en profondeur", &options.depth);
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Grand sprite immobile", &options.still);
+                    break;
+                case TestKind::Iso:
+                    ImGui::SliderInt("Taille de la carte", &options.map_size, 1, 400);
+                    ImGui::SliderFloat("Zoom", &options.zoom, 1.0f, kMaxZoom, "%.0f");
+                    ImGui::Checkbox("Alterner les textures tuile par tuile (casse le batching)", &options.interleave);
+                    break;
+                case TestKind::Demo:
+                    ImGui::SliderInt("Créatures", &options.movers, 0, 20000);
+                    ImGui::SliderInt("Taille de la carte", &options.map_size, 10, 400);
+                    ImGui::InputScalar("Graine", ImGuiDataType_U32, &options.seed);
+                    break;
+                case TestKind::Atlas:
+                case TestKind::Text:
+                    break;  // nothing to set
+            }
+            ImGui::PopItemWidth();
+            if (ImGui::Button("Lancer")) {
+                request(Action::Launch, static_cast<int>(i));
+            }
+            ImGui::PopID();
+        }
+        ImGui::End();
+    }
+
+    // A small panel over the running test, in the bottom left corner, which the scenes leave free.
+    void draw_running_panel() {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 10.0f, viewport->WorkPos.y + viewport->WorkSize.y - 10.0f),
+                                ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+        ImGui::SetNextWindowBgAlpha(0.85f);
+        ImGui::Begin("Test en cours", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+        ImGui::Text("Test en cours : %s", tests_[static_cast<std::size_t>(running_)].name);
+        ImGui::TextDisabled("%.0f FPS - Échap pour arrêter", static_cast<double>(ImGui::GetIO().Framerate));
+        if (ImGui::Button("Arrêter le test")) {
+            request(Action::ShowTests);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Accueil")) {
+            request(Action::ShowHome);
+        }
+        ImGui::End();
+    }
+
+    moteur::Application& app_;
+    double run_seconds_;  // > 0 quits by itself, for smoke tests
+    double elapsed_ = 0.0;
+    std::vector<TestEntry> tests_;
+    Screen screen_ = Screen::Home;
+    std::unique_ptr<TestScene> scene_;  // the running test, if any
+    int running_ = -1;                  // its index in tests_
+    Action action_ = Action::None;      // asked by the interface, done by the next update()
+    int action_test_ = -1;
+    std::string error_;                 // why the last test could not start
+};
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    Sandbox::Options options;
+    // Without arguments (or with --menu), the program opens on its menu. With scene options, it runs
+    // that scene directly, without any interface: that is what scripts and measurements use.
+    bool menu = argc == 1;
+    TestScene::Options options;
     bool vsync = true;
     bool report = false;
     bool map_explicit = false;
@@ -701,6 +1047,8 @@ int main(int argc, char** argv) {
             options.still = true;
         } else if (arg == "--report") {
             report = true;
+        } else if (arg == "--menu") {
+            menu = true;
         }
     }
     if (options.demo) {
@@ -719,9 +1067,18 @@ int main(int argc, char** argv) {
         config.title = "bac a sable";
         config.vsync = vsync;
         config.report_performance = report;
+        if (menu) {
+            config.debug_ui = true;
+            config.debug_ui_font = moteur::asset_path("fonts/Inter-Regular.ttf");  // accents
+        }
 
         moteur::Application app(config);
-        Sandbox game(app, options);
+        if (menu) {
+            Sandbox sandbox(app, options.run_seconds);
+            app.run(sandbox);
+            return 0;
+        }
+        TestScene game(app, options, true);
         app.run(game);
 
         std::cout << "simulated " << game.elapsed() << " s in " << game.ticks() << " ticks, "

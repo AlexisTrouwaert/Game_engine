@@ -252,7 +252,7 @@ Relevés le 2026-09-23 sur un MacBook **Apple M4 Pro**, macOS 27, écran Retina 
 | 4. Démarrage et backend | ✅ | `backend=metal, device=Apple M4 Pro`, sortie 0, ~117 FPS (VSync 120 Hz), aucune erreur Metal |
 | 5. Sprite, batching, tri | ✅ | Quadrants dans le bon ordre, bords nets. `--no-batching` : capture **identique octet pour octet**. 3 001 sprites = 1 draw call ; `--depth` : grand sprite entier au-dessus. 40 000 : « grown from 16384 to 65536 », 3 draw calls |
 | 6. Caméra, picking, souris Retina | ✅ en partie | `--mouse 1280 720` → `hovered tile: 30 30`. Aucune couture (zoom 1 et 3). **Reste à faire à la main** : clavier, molette, souris réelle, redimensionnement |
-| 7. Atlas et déterminisme | ✅ | `test.json` `636b61cca266` et `test_0.png` `c02006e8b7db` : **identiques à Windows**. `world.json` `dca6ef301c52`, `world_0.png` `09b20cd05771` (à comparer sous Windows). Bras et retournement corrects. JSON tronqué → `fatal: Atlas '...' is not valid: ...` |
+| 7. Atlas et déterminisme | ✅ | `test.json` `636b61cca266` et `test_0.png` `c02006e8b7db` : **identiques à Windows**. `world.json` `dca6ef301c52` et `world_0.png` `09b20cd05771` : **identiques à Windows** aussi. Bras et retournement corrects. JSON tronqué → `fatal: Atlas '...' is not valid: ...` |
 | 8. Texte | ✅ | Accents, `œ` et guillemets corrects, retour à la ligne, trois alignements ; `measured sentence: 266.36 20`, `measured paragraph: 420 80 (4 lines)` |
 | 9. Performance | ✅ | Voir ci-dessous |
 
@@ -291,4 +291,11 @@ Mes vérifications visuelles passent aujourd'hui par des scripts Windows qui lis
 
 ## Ce qui reste dans le jalon 2 (rappel)
 
-Le jalon 1 et les parties 2, 3, 4, 5, 8 et 10 du jalon 2 sont faites. Restent les parties 6, 7 et 9 ([JALON_2_RENDU_2D.md](JALON_2_RENDU_2D.md)). Le jeu étant en **3D**, la recommandation est de **réduire les parties 6 et 7** à ce qui sert en 3D, ou de passer directement à la définition du jalon 3D. Chaque nouvelle partie doit ensuite être ajoutée à cette checklist.
+Le jalon 1 et toutes les parties du jalon 2 sont faites, les parties 6 (animations) et 7 (carte de tuiles) en **version réduite**, le jeu étant en 3D ([JALON_2_RENDU_2D.md](JALON_2_RENDU_2D.md)). Elles ont été ajoutées **après** les relevés ci-dessus : au prochain passage sur le Mac, vérifier :
+
+- [ ] Les tests unitaires : **135** cas (dont 21 nouveaux : `test_animation.cpp`, `test_tilemap.cpp`), en Debug et en Release.
+- [ ] `--demo` : les créatures marchent (les jambes bougent, chacune à son rythme), sont retournées quand elles vont vers la gauche, font demi-tour devant les murs, et le compteur « pas (événements d'animation) » augmente.
+- [ ] **Menu** : lancer `bac_a_sable` sans argument. vcpkg compile d'abord Dear ImGui (nouvelle dépendance). Vérifier : barre DEBUG > Tests moteur (sous-menu), accents lisibles et nets sur Retina, chaque scène se lance et s'arrête (bouton et Échap), **Accueil** revient à l'accueil, aucune erreur Metal dans la console.
+- [ ] `--demo --seed 42 --freeze-after 30 --no-input --capture demo.png` : deux lancements donnent le même fichier. Sous Windows (1280×720) : `bd91e8b2c616`. Le Mac capture en 2560×1440, donc les deux fichiers ne peuvent pas être identiques ; comparer à l'œil.
+
+Ensuite, place au jalon 3D.

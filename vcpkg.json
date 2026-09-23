@@ -9,6 +9,10 @@
     "doctest",
     "nlohmann-json",
     {
+      "name": "imgui",
+      "features": ["sdl3-binding", "sdlgpu3-binding"]
+    },
+    {
       "name": "sdl3-shadercross",
       "platform": "windows"
     }

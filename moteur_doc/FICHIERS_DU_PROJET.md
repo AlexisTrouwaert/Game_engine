@@ -38,6 +38,8 @@ moteur/
       include/moteur/sprite_batcher.hpp   en-tête public : tri et lots (sans GPU)
       include/moteur/camera.hpp       en-tête public : caméra 2D (sans GPU)
       include/moteur/iso.hpp          en-tête public : projection isométrique (sans GPU)
+      include/moteur/tilemap.hpp      en-tête public : carte de tuiles et types de tuiles (sans GPU)
+      include/moteur/animation.hpp    en-tête public : clips et lecteur d'animation (sans GPU)
       include/moteur/atlas_builder.hpp    en-tête public : empaquetage d'atlas (sans GPU)
       include/moteur/sprite_region.hpp    en-tête public : région d'atlas et placement
       include/moteur/texture_atlas.hpp    en-tête public : lecture d'un atlas
@@ -50,14 +52,18 @@ moteur/
       include/moteur/image.hpp        en-tête public : chargement d'image
       include/moteur/paths.hpp        en-tête public : chemins des ressources
       include/moteur/screenshot.hpp   en-tête public : écriture PNG d'une capture GPU
+      include/moteur/debug_ui.hpp     en-tête public : interface de debug (Dear ImGui)
       version.cpp                     implémentation
       application.cpp                 fenêtre et boucle de jeu
       renderer.cpp                    périphérique GPU, frame, ressources
       screenshot.cpp                  conversion de pixels bruts en PNG (capture)
+      debug_ui.cpp                    ImGui : contexte, backends SDL3 et SDL_GPU
       sprite_renderer.cpp             pipeline de sprites, envoi et draw calls
       sprite_batcher.cpp              tri, sommets et découpe en lots
       camera.cpp                      matrices et conversions de la caméra
       iso.cpp                         conversions grille / monde, plage de tuiles
+      tilemap.cpp                     calques, découpe de plage, cases praticables
+      animation.cpp                   lecture des clips, événements, fichier JSON
       atlas_builder.cpp               rognage, marge, empaquetage, pages
       sprite_region.cpp               placement d'un sprite d'atlas
       texture_atlas.cpp               chargement du JSON et des pages
@@ -87,6 +93,8 @@ moteur/
     test_sprite_batcher.cpp           tests du tri et des lots
     test_camera.cpp                   tests de la caméra
     test_iso.cpp                      tests de la projection isométrique
+    test_tilemap.cpp                  tests de la carte de tuiles
+    test_animation.cpp                tests des animations
     test_atlas_builder.cpp            tests de l'empaquetage d'atlas
     test_sprite_region.cpp            tests du placement des sprites d'atlas
     test_image.cpp                    tests de l'alpha pré-multiplié
@@ -196,7 +204,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 | `name` | Nom du paquet, en minuscules. |
 | `version-string` | Version du projet. Libre, sans effet sur les dépendances. |
 | `builtin-baseline` | Identifiant d'un commit du dépôt vcpkg. Il **épingle les versions** de tous les ports : deux machines avec la même baseline compilent la même version de SDL3. Valeur actuelle : `5f96cd15fd745122cf27e0524606d6c1efc5fd07`. |
-| `dependencies` | Liste des bibliothèques : `sdl3`, `glm` (mathématiques : matrices et vecteurs), `stb` (décodage des PNG), `doctest` (tests unitaires), `nlohmann-json` (description des atlas), et `sdl3-shadercross` **uniquement sur Windows** (`"platform": "windows"`). Ce dernier apporte l'outil `shadercross`, le compilateur DirectX (DXC) et SPIRV-Cross. Il impose aussi la fonctionnalité `vulkan` de SDL3, sans effet sur le backend choisi. |
+| `dependencies` | Liste des bibliothèques : `sdl3`, `glm` (mathématiques : matrices et vecteurs), `stb` (décodage des PNG), `doctest` (tests unitaires), `nlohmann-json` (description des atlas et des animations), `imgui` avec les fonctionnalités `sdl3-binding` et `sdlgpu3-binding` (interface de debug ; ses shaders sont précompilés pour chaque backend, donc rien à ajouter à la chaîne des shaders), et `sdl3-shadercross` **uniquement sur Windows** (`"platform": "windows"`). Ce dernier apporte l'outil `shadercross`, le compilateur DirectX (DXC) et SPIRV-Cross. Il impose aussi la fonctionnalité `vulkan` de SDL3, sans effet sur le backend choisi. |
 
 **Quand le modifier** : ajouter une bibliothèque (GLM, EnTT, Dear ImGui, nlohmann-json, etc.) ou mettre à jour la baseline.
 
@@ -256,10 +264,10 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 | Ligne | Explication |
 |---|---|
 | `find_package(glm ...)` et `find_path(STB_INCLUDE_DIRS ...)` | Cherchent GLM (paquet CMake) et stb (simple dossier d'en-têtes, sans configuration CMake). |
-| `add_library(moteur STATIC application.cpp atlas_builder.cpp camera.cpp fixed_timestep.cpp font.cpp frame_stats.cpp image.cpp iso.cpp paths.cpp renderer.cpp screenshot.cpp sprite_batcher.cpp sprite_region.cpp sprite_renderer.cpp text_layout.cpp texture_atlas.cpp utf8.cpp version.cpp)` | Crée une bibliothèque statique à partir des fichiers listés. **Chaque nouveau `.cpp` doit être ajouté ici.** |
+| `add_library(moteur STATIC animation.cpp application.cpp atlas_builder.cpp camera.cpp debug_ui.cpp fixed_timestep.cpp font.cpp frame_stats.cpp image.cpp iso.cpp paths.cpp renderer.cpp screenshot.cpp sprite_batcher.cpp sprite_region.cpp sprite_renderer.cpp text_layout.cpp texture_atlas.cpp tilemap.cpp utf8.cpp version.cpp)` | Crée une bibliothèque statique à partir des fichiers listés. **Chaque nouveau `.cpp` doit être ajouté ici.** |
 | `target_include_directories(moteur PUBLIC include)` | Le dossier `include/` est exposé à la bibliothèque **et** à ceux qui la lient. Le code peut donc écrire `#include "moteur/version.hpp"`. |
 | `target_include_directories(moteur SYSTEM PRIVATE ...)` | Ajoute les en-têtes de stb. `SYSTEM` les traite comme du code tiers : leurs avertissements sont ignorés. `PRIVATE` : stb reste un détail interne. |
-| `target_link_libraries(moteur PUBLIC SDL3::SDL3 glm::glm PRIVATE nlohmann_json::nlohmann_json)` | Lie SDL3 et GLM. `PUBLIC` transmet ces dépendances : le projet ARPG les verra en liant `moteur`. Le JSON n'est utilisé que dans `texture_atlas.cpp`, donc `PRIVATE` : il ne se propage pas. |
+| `target_link_libraries(moteur PUBLIC SDL3::SDL3 glm::glm PRIVATE nlohmann_json::nlohmann_json)` | Lie SDL3 et GLM. `PUBLIC` transmet ces dépendances : le projet ARPG les verra en liant `moteur`. Le JSON n'est utilisé que dans `texture_atlas.cpp` et `animation.cpp`, donc `PRIVATE` : il ne se propage pas. |
 | `moteur_enable_warnings(moteur)` | Applique les avertissements définis dans `Warnings.cmake`. |
 
 **`PUBLIC` ou `PRIVATE` ?** `PUBLIC` : la dépendance apparaît dans nos en-têtes publics ou doit être visible par l'utilisateur. `PRIVATE` : détail interne, invisible de l'extérieur. Choisir `PRIVATE` par défaut dès qu'une dépendance n'apparaît pas dans un en-tête public : cela garde les interfaces propres.
@@ -468,6 +476,52 @@ La caméra **ne tourne pas**.
 - `tile_sprite_position(tuile)` : le coin haut-gauche de la boîte dans laquelle dessiner l'image de la tuile ; `tile_center(tuile)` : le milieu du losange.
 - `tiles_in(rectangle du monde, marge)` : le rectangle de tuiles qui contient toutes celles qui touchent le rectangle. Un rectangle d'écran devient un losange dans la grille, donc c'est la boîte englobante de ses quatre coins. La **marge** sert aux images plus hautes qu'une tuile (murs, arbres), qui dépassent au-dessus de leur case.
 
+### `src/moteur/include/moteur/debug_ui.hpp` et `debug_ui.cpp`
+
+**Rôle** : Dear ImGui pour les menus et fenêtres de debug, dessiné par-dessus les sprites.
+
+**Contenu**
+
+- Créé par le `Renderer` quand `ApplicationConfig::debug_ui` est vrai (`renderer.debug_ui()` renvoie sinon `nullptr`). Il charge une police TrueType (`debug_ui_font`, Inter pour le bac à sable : la police intégrée d'ImGui n'a pas les accents) et initialise les backends SDL3 (entrées) et SDL_GPU (rendu).
+- `Application::run()` lui passe chaque événement (`process_event`) ; si ImGui l'utilise (`captures` : souris au-dessus d'une de ses fenêtres, champ de texte actif), le jeu ne le reçoit pas. `new_frame()` est appelé juste avant `Game::render()`, qui peut donc appeler les fonctions `ImGui::`.
+- `Renderer::end_frame()` appelle `prepare()` avant le render pass (envoi des sommets) et `render()` à la fin du render pass, après les sprites : l'interface est toujours au-dessus, en pixels de fenêtre.
+- Pas de fichier `imgui.ini` : la disposition est fixée par le code.
+
+**À savoir** : l'interface passe par un render pass déjà ouvert, donc ne coûte ni copie ni passe en plus. Sans `debug_ui`, rien d'ImGui ne tourne : les mesures et les captures en ligne de commande sont inchangées.
+
+### `src/moteur/include/moteur/tilemap.hpp` et `tilemap.cpp`
+
+**Rôle** : la carte d'un niveau, sous forme de grille de cases, indépendante du rendu. Logique pure, testée. Servira aussi aux collisions et au pathfinding (jalon 4), même quand le rendu sera en 3D.
+
+**Contenu**
+
+- `TileId` (16 bits) et `kNoTile` (0, case vide).
+- `TileType` : nom du sprite (vide si le jeu dessine la tuile autrement), `walkable`, `opaque`.
+- `Tileset` : `add(type)` renvoie l'identifiant du nouveau type (à partir de 1) ; `type(id)` lève une exception pour `kNoTile` ou un identifiant inconnu.
+- `TileMap(largeur, hauteur, calques)` : toutes les cases vides au départ. Une taille ou un nombre de calques non positif lève une exception. La case (i, j) de la carte est la tuile (i, j) d'`IsoProjection`.
+- `at(calque, case)`, `set(calque, case, id)` (exception hors de la carte ou pour un calque inexistant), `fill(calque, id)`, `contains(case)`.
+- `clip(plage)` : la partie d'une `TileRange` qui tombe dans la carte. `map.clip(iso.tiles_in(camera.visible_rect(), marge))` donne les tuiles à dessiner.
+- `walkable(tileset, case)` : faux hors de la carte ou si une tuile d'un des calques n'est pas praticable.
+
+**Pourquoi les propriétés sont dans le `Tileset`** : la carte reste un tableau de petits nombres (2 octets par case et par calque), et changer une propriété d'un type change toutes ses cases.
+
+### `src/moteur/include/moteur/animation.hpp` et `animation.cpp`
+
+**Rôle** : jouer des séquences d'images de façon déterministe, pilotées par le pas fixe, avec vitesse variable et événements. Logique pure, testée.
+
+**Contenu**
+
+- `PlayMode` : `Once` (s'arrête sur la dernière image), `Loop`, `PingPong` (aller-retour sans répéter les images d'extrémité).
+- `AnimationClip(nom, images, mode, événements)` : chaque image est un nom de sprite et une durée en **ticks entiers** ; un événement est un nom sur une image. Le constructeur refuse un clip vide, une image de moins d'un tick ou un événement sur une image inexistante. `cycle_ticks()` donne la durée d'un cycle.
+- `AnimationPlayer` : `play(clip)`, `restart()`, `set_speed(multiplicateur)` (0 = pause, négatif refusé), `advance(ticks, &événements)` une fois par tick, `region()` (le sprite à dessiner), `frame_index()`, `finished()` (clip `Once` seulement), `time()` / `set_time()`. Le clip doit vivre plus longtemps que le lecteur.
+- **Arithmétique entière** : temps en millièmes de tick (`int64`), vitesse en millièmes (`kSpeedOne = 1000`). Pas de dérive, résultat identique sur les deux OS.
+- **Événements** : chaque `advance` ajoute à la liste fournie les événements des images dont le début tombe dans (temps avant, temps après] ; la première image compte au premier `advance`. Chaque événement se déclenche donc exactement une fois, même quand un grand pas saute des images ou des boucles. La liste n'est pas vidée par le lecteur.
+- `AnimationLibrary::load(chemin)` / `parse(texte, nom)` : lit un JSON versionné (format décrit en commentaire dans l'en-tête). `clip(nom)` lève une exception qui nomme le fichier et le clip ; `check_regions(atlas)` vérifie que chaque image existe dans l'atlas.
+
+### `assets/animations.json`
+
+**Rôle** : les clips du bac à sable. Pour l'instant un seul, `walk` : les huit images `walk_00` à `walk_07` de l'atlas `test`, 6 ticks chacune (10 images par seconde à 60 ticks par seconde), avec un événement `step` sur les images 1 et 5.
+
 ### `src/moteur/include/moteur/atlas_builder.hpp` et `atlas_builder.cpp`
 
 **Rôle** : préparer un atlas à partir d'images en mémoire, **sans aucun accès aux fichiers ni au GPU**. C'est le cœur de l'outil d'empaquetage, séparé pour être testé.
@@ -609,7 +663,7 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 
 **Rôle** : savoir où chercher les fichiers du programme.
 
-**Contenu** : `base_path()` renvoie le dossier de l'exécutable (avec un séparateur final), `asset_path("nom.png")` renvoie `<dossier de l'exécutable>/assets/nom.png`. Le chargement des shaders utilise aussi `base_path()`.
+**Contenu** : `base_path()` renvoie le dossier de l'exécutable (avec un séparateur final), `asset_path("nom.png")` renvoie `<dossier de l'exécutable>/assets/nom.png`. Le chargement des shaders utilise aussi `base_path()`. `read_text_file(chemin)` lit tout un fichier avec `SDL_LoadFile` (chemins UTF-8 sous Windows) ; il sert au chargement des atlas et des animations.
 
 **Pourquoi relatif à l'exécutable** : le programme fonctionne quel que soit le dossier de travail. Sur Mac, dans un bundle `.app`, l'emplacement des ressources sera différent : ce sera à adapter dans `base_path()` au moment du packaging, sans toucher au reste du code.
 
@@ -632,7 +686,8 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 
 **Contenu**
 
-- Classe `Sandbox`, qui implémente `Game`. Elle quitte quand on appuie sur Échap et compte les ticks et les frames.
+- Classe `TestScene`, qui implémente `Game` : **une** scène de test, choisie par ses `Options` (celles de la ligne de commande). Elle compte les ticks et les frames. Lancée depuis la ligne de commande (`standalone`), Échap et `--run-seconds` quittent le programme ; lancée depuis le menu, ils demandent seulement l'arrêt du test (`stop_requested()`).
+- Classe `Sandbox`, qui implémente `Game` : le programme lancé **sans argument** (ou avec `--menu`). Barre de menus ImGui (**DEBUG > Tests moteur** en sous-menu, avec « Toutes les scènes... » puis chaque scène ; **DEBUG > Accueil**), écran d'accueil, page de sélection (description, réglages et bouton **Lancer** de chaque scène) et panneau du test en cours (**Arrêter le test**, **Accueil**). Échap remonte d'un cran (test → sélection → accueil). Une scène est créée et détruite dans `update()`, jamais pendant une frame : le chargement attend le GPU, et les textures d'une scène sont utilisées par la frame en cours d'enregistrement. Si une scène ne peut pas démarrer, l'erreur s'affiche sur la page de sélection.
 - **Ressources** : il ne reste que la texture, chargée depuis `sprite.png` et libérée automatiquement. Le bac à sable ne crée plus ni pipeline, ni buffer, ni échantillonneur : c'est le moteur qui les possède.
 - **Sprite principal** : dessiné ×8 (un texel de l'image couvre 8×8 pixels à l'écran), au centre de la fenêtre.
 - **Mouvement** : `update()` calcule le décalage du sprite par rapport au centre de la fenêtre (sinus, amplitude ±300 px en x et ±60 px en y) et garde l'état précédent. `render()` interpole entre les deux avec `alpha`.
@@ -647,7 +702,7 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 - Options de la scène : `--map N` (taille de la carte, 60 par défaut), `--zoom Z`, `--camera X Y` (position du monde au centre de la fenêtre, en pixels), `--mouse X Y` (souris simulée en pixels de fenêtre, `-1 -1` pour aucune), `--interleave` (alterner les deux textures de sol tuile par tuile, ce qui casse le batching), `--no-input` (ignorer clavier et souris réels, sauf Échap, pour des mesures reproductibles).
 - À la fermeture en mode `--iso`, le programme écrit la tuile qui était sous la souris (`hovered tile: i j`), ce qui permet de la comparer à une valeur calculée à part.
 - **Scène de texte** : `--text` charge `Font` et affiche une phrase française (accents, œ, guillemets), un paragraphe avec retour à la ligne (largeur maximale 420 pixels), une démonstration des trois alignements dans une boîte de 300 pixels, et un compteur de FPS simplifié (recalculé une fois par seconde) en haut à droite. À la construction, le programme écrit sur la sortie standard la taille mesurée de la phrase et du paragraphe (`measured sentence: ...`, `measured paragraph: ...`), pour comparer à la boîte de pixels réellement allumés à l'écran.
-- **Scène de démonstration** (partie 9) : `--demo` réunit la carte isométrique de `--iso` (100×100 par défaut, `--map` pour changer), des **murs procéduraux** (`is_wall()` : quadrillage de lignes de grille avec des trous tous les 4 tuiles, dessinés avec la texture générique teintée, faute d'art dédié), des **créatures** (3 000 par défaut, `--sprites`, sprite `walk_03` de l'atlas `test` teinté par créature, positions et directions — l'une des 8 directions de la grille — tirées d'un générateur à graine fixe, `--seed`) et une **superposition de statistiques** (FPS, temps de frame, sprites, lots/draw calls) en haut à droite. Tri en profondeur des murs et créatures par `tuile.x + tuile.y`, qui suit l'ordre de la projection isométrique. **Réduit par rapport à la scène prévue au départ du jalon** : les créatures se déplacent mais ne sont pas animées (partie 6 non construite, le moteur 2D ne servant plus qu'à l'UI et aux effets une fois le jeu passé en 3D).
+- **Scène de démonstration** (partie 9) : `--demo` réunit une `TileMap` (100×100 par défaut, `--map` pour changer) à deux calques, le sol en damier de `--iso` et des **murs procéduraux** (`is_wall()` : quadrillage de lignes de grille avec des trous tous les 4 tuiles, dessinés avec la texture générique teintée, faute d'art dédié, et non praticables), des **créatures** (3 000 par défaut, `--sprites`, teintées, positions, directions — l'une des 8 directions de la grille — et allures tirées d'un générateur à graine fixe, `--seed`) et une **superposition de statistiques** (FPS, temps de frame, sprites, lots/draw calls, nombre d'événements `step` reçus) en haut à droite. Les créatures jouent le clip `walk` d'`assets/animations.json` à une vitesse liée à leur allure, chacune à sa propre phase, retournées quand elles vont vers la gauche de l'écran, et font demi-tour devant un mur ou le bord de la carte (`TileMap::walkable`). Tri en profondeur des murs et créatures par `tuile.x + tuile.y`, qui suit l'ordre de la projection isométrique. **Réduit par rapport à la scène prévue au départ du jalon** : un seul cycle de marche retourné selon la direction, au lieu de 8 directions (le moteur 2D ne servant plus qu'à l'UI et aux effets une fois le jeu passé en 3D).
 - Option `--seed N` : graine du générateur pseudo-aléatoire de `--demo` (position et direction des créatures).
 - Option `--capture chemin.png` (partie 9) : avec `--freeze-after N`, écrit la première frame gelée en PNG (`Renderer::request_capture()`), pour une comparaison de pixels automatique et reproductible. Fonctionne sur n'importe quelle scène du bac à sable, pas seulement `--demo`.
 - Option `--run-seconds N` : le programme se ferme seul après N secondes de simulation. Elle sert de test automatique.
@@ -676,6 +731,8 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 - `test_sprite_region.cpp` : pivot sur l'ancre, marges restituées, échelle autour du pivot, retournement en miroir autour du pivot (horizontal et vertical), sprite centré qui ne bouge pas, retourner deux fois.
 - `test_image.cpp` : alpha pré-multiplié (pixels opaques inchangés, transparents mis à zéro, arrondi au plus proche, image vide).
 - `test_camera.cpp` : la position au centre de la fenêtre, zoom, sens de l'axe Y, aller-retour monde / écran / monde (avec et sans alignement), alignement sur les pixels (y compris avec une fenêtre de taille impaire), rectangle visible, redimensionnement, interpolation, coins de la fenêtre en espace de découpage, accord entre la matrice et `world_to_screen`, zoom invalide, conversion points / pixels.
+- `test_tilemap.cpp` : numérotation du `Tileset`, calques indépendants, `fill`, refus des cases hors de la carte, `clip` d'une plage à l'intérieur, à cheval ou hors de la carte, plage visible d'une caméra dans un coin, `walkable` sur plusieurs calques.
+- `test_animation.cpp` : clips invalides, durée d'un cycle, image affichée à chaque tick (boucle, une fois, aller-retour), vitesses ×2, ×0,5 et 0, vitesse négative refusée, événements exactement une fois (y compris avec un pas de 20 ticks et une vitesse de ×0,7 sur 80 ticks), clip `Once` après la fin, `set_time`, lecture du JSON et messages d'erreur.
 - `test_iso.cpp` : les coins de tuile sur le réseau 2:1, la hauteur, `from_world` inverse de `to_world`, d'autres tailles de tuile, le milieu et les coins d'une tuile, les coordonnées négatives, la position de la boîte d'image, `tiles_in` (propriété vérifiée par force brute sur 121 × 121 tuiles), la marge, la taille d'une plage d'écran, et les tailles invalides.
 
 **Les valeurs de test sont des puissances de deux** (1/64, 1/4, etc.), exactes en virgule flottante : les résultats ne dépendent pas d'arrondis, donc sont identiques sur les deux OS.

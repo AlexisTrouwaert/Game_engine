@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "moteur/debug_ui.hpp"
 #include "moteur/paths.hpp"
 #include "moteur/screenshot.hpp"
 #include "moteur/sprite_renderer.hpp"
@@ -92,8 +93,13 @@ Renderer::Renderer(SDL_Window* window, const RendererConfig& config) : window_(w
 
     try {
         sprites_ = std::make_unique<SpriteRenderer>(*this);
+        if (config.debug_ui) {
+            debug_ui_ = std::make_unique<DebugUi>(window_, device_, swapchain_format(), config.debug_ui_font,
+                                                  config.debug_ui_font_size);
+        }
     } catch (...) {
         // The destructor does not run when a constructor throws: clean up here.
+        debug_ui_.reset();
         sprites_.reset();
         SDL_WaitForGPUIdle(device_);
         SDL_ReleaseWindowFromGPUDevice(device_, window_);
@@ -104,6 +110,7 @@ Renderer::Renderer(SDL_Window* window, const RendererConfig& config) : window_(w
 
 Renderer::~Renderer() {
     SDL_WaitForGPUIdle(device_);
+    debug_ui_.reset();  // like the sprites, its GPU resources must be released before the device
     sprites_.reset();  // its GPU resources must be released before the device
     SDL_ReleaseWindowFromGPUDevice(device_, window_);
     SDL_DestroyGPUDevice(device_);
@@ -314,6 +321,9 @@ bool Renderer::begin_frame() {
 void Renderer::end_frame() {
     // Phase 1: copies. They must happen before the render pass opens.
     sprites_->prepare(command_buffer_, stats_);
+    if (debug_ui_) {
+        debug_ui_->prepare(command_buffer_);
+    }
 
     // Phase 2: drawing.
     SDL_GPUColorTargetInfo target = {};
@@ -325,6 +335,9 @@ void Renderer::end_frame() {
     SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(command_buffer_, &target, 1, nullptr);
     if (pass != nullptr) {
         sprites_->render(command_buffer_, pass, width_, height_, stats_);
+        if (debug_ui_) {
+            debug_ui_->render(command_buffer_, pass);  // on top of everything
+        }
         SDL_EndGPURenderPass(pass);
     } else {
         SDL_Log("SDL_BeginGPURenderPass failed: %s", SDL_GetError());

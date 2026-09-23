@@ -42,6 +42,17 @@ Les tests unitaires (doctest) couvrent la logique qui n'a pas besoin de GPU. Ils
 ctest --test-dir build/windows-debug --output-on-failure
 ```
 
+## Menu du bac à sable
+
+Lancé **sans argument**, `bac_a_sable` s'ouvre sur un menu (Dear ImGui) :
+
+- une barre de menus en haut, avec **DEBUG > Tests moteur**, un sous-menu qui lance directement chaque scène de test ou ouvre la page de sélection (« Toutes les scènes... ») ; **DEBUG > Accueil** quitte le debug ;
+- l'**accueil**, où viendra le jeu ;
+- la **page de sélection** : chaque scène, sa description, ses réglages (nombre de sprites, taille de carte, graine...) et un bouton **Lancer** ;
+- pendant un test, un panneau en bas à gauche : **Arrêter le test** (ou Échap) revient à la sélection, **Accueil** revient à l'accueil.
+
+Avec des options de scène (`--demo`, `--sprites N`, `--iso`...), le programme lance directement la scène, **sans interface**, comme avant : c'est ce qu'utilisent les scripts, les mesures et les captures. `--menu` force le menu en gardant les autres options globales (par exemple `--menu --no-vsync`).
+
 ## Mesurer les performances
 
 Mesurer en **Release** : le build Debug active la validation du GPU et fausse les chiffres.
@@ -62,7 +73,7 @@ build/windows-release/apps/bac_a_sable/bac_a_sable --run-seconds 6 --report --sp
 - `--no-input` ignore le clavier et la souris réels (sauf Échap) : indispensable pour des mesures reproductibles, sinon une molette ou une touche pendant l'essai fausse le zoom.
 - `--atlas` affiche tous les sprites de l'atlas `test`, chacun à son pivot, puis un personnage de quatre façons (normal, retourné, ×2, retourné ×3).
 - `--text` affiche une phrase française, un paragraphe avec retour à la ligne, les trois alignements, et un compteur de FPS.
-- `--demo` réunit la carte isométrique, des murs procéduraux, des créatures mobiles (`--seed` pour leur position/direction) et une superposition de statistiques (FPS, sprites, lots/draw calls). Périmètre réduit : les créatures se déplacent mais ne sont pas animées (le moteur 2D ne sert plus qu'à l'UI et aux effets, le jeu final étant en 3D). Voir `moteur_doc/JALON_2_RENDU_2D.md`, partie 9.
+- `--demo` réunit une carte de tuiles (`TileMap`) avec des murs procéduraux, des créatures qui marchent avec leur animation et font demi-tour devant les murs (`--seed` pour leur position/direction) et une superposition de statistiques (FPS, sprites, lots/draw calls, événements d'animation). Voir `moteur_doc/JALON_2_RENDU_2D.md`, parties 6, 7 et 9.
 - `--capture chemin.png` (avec `--freeze-after N`) écrit la frame gelée en PNG, sur n'importe quelle scène : pour des comparaisons de pixels automatiques et reproductibles (même graine, même capture).
 
 ## Atlas de sprites
@@ -80,6 +91,25 @@ Les textures sont **pré-multipliées** au chargement (`create_texture`) : les P
 
 Si `cmake --preset` utilise le mauvais vcpkg (celui de Visual Studio, plus ancien), ajouter `-DCMAKE_TOOLCHAIN_FILE=<chemin du vcpkg>/scripts/buildsystems/vcpkg.cmake`.
 
+## Animations
+
+Les clips sont décrits dans `assets/animations.json` (format en commentaire dans `animation.hpp`) : des noms de sprites d'atlas, une durée en ticks de simulation, un mode (`once`, `loop`, `ping_pong`) et des événements sur certaines images.
+
+```
+auto library = moteur::AnimationLibrary::load(moteur::asset_path("animations.json"));
+library.check_regions(atlas);                    // chaque image existe dans l'atlas
+moteur::AnimationPlayer player(library.clip("walk"));
+player.set_speed(1.5);                           // vitesse d'attaque, de marche...
+player.advance(1, &events);                      // une fois par tick, dans update()
+sprites.draw(atlas.region(player.region()), ancre);
+```
+
+Les durées sont des ticks entiers : la lecture est identique sur toutes les machines, et chaque événement se déclenche exactement une fois.
+
+## Carte de tuiles
+
+`moteur::TileMap` est une grille de cases en calques, chaque case contenant un `TileId` dont le `Tileset` donne le sprite et les propriétés (`walkable`, `opaque`). `map.clip(iso.tiles_in(camera.visible_rect(), marge))` donne les tuiles à dessiner ; `map.walkable(tileset, case)` sert aux déplacements.
+
 ## Texte
 
 `moteur::Font::load(renderer, chemin, taille en pixels)` charge une police TrueType (`assets/fonts/Inter-Regular.ttf`, SIL Open Font License) et rasterise un jeu de caractères latin (accents et guillemets français compris) dans un atlas, avec le même outil que les sprites. `font.draw(sprites, "texte UTF-8", ancre, options)` dessine ; `font.measure(...)` mesure sans dessiner, avec exactement le même calcul de mise en page.
@@ -87,6 +117,8 @@ Si `cmake --preset` utilise le mauvais vcpkg (celui de Visual Studio, plus ancie
 Une seule taille par `Font` : pour rester net, une police se charge à sa taille physique finale plutôt que d'être agrandie après coup.
 
 ## Débogage
+
+Le moteur intègre **Dear ImGui** (`moteur::DebugUi`) pour les fenêtres de debug : il suffit de mettre `ApplicationConfig::debug_ui` et d'appeler les fonctions `ImGui::` depuis `Game::render()`. L'interface est dessinée par-dessus les sprites, en pixels de fenêtre, quelle que soit la caméra. Les clics sur une de ses fenêtres ne parviennent pas au jeu.
 
 Les ressources GPU sont **nommées** (`sprite.vertices`, `sprite.indices`, `sprite pipeline`, `sprite.sampler`, les shaders par leur nom de fichier, les pages d'atlas et de police par leur nom) : une capture RenderDoc (Windows) ou le débogueur Metal de Xcode (Mac) les affiche sous ces noms plutôt qu'anonymes. `create_buffer()`, `create_texture()`, `create_sampler()` et `load_shader()` acceptent un nom optionnel pour toute nouvelle ressource.
 

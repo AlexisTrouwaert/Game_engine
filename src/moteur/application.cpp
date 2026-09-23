@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <stdexcept>
 
+#include "moteur/debug_ui.hpp"
 #include "moteur/fixed_timestep.hpp"
 #include "moteur/frame_stats.hpp"
 
@@ -35,7 +36,13 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
     SDL_Log("Window: %dx%d points, %dx%d pixels", w, h, pixel_w, pixel_h);
 
     try {
-        renderer_ = std::make_unique<Renderer>(window_, RendererConfig{config_.gpu_debug, config_.vsync});
+        RendererConfig renderer_config;
+        renderer_config.debug = config_.gpu_debug;
+        renderer_config.vsync = config_.vsync;
+        renderer_config.debug_ui = config_.debug_ui;
+        renderer_config.debug_ui_font = config_.debug_ui_font;
+        renderer_config.debug_ui_font_size = config_.debug_ui_font_size;
+        renderer_ = std::make_unique<Renderer>(window_, renderer_config);
     } catch (...) {
         SDL_DestroyWindow(window_);
         SDL_Quit();
@@ -91,10 +98,17 @@ void Application::run(Game& game) {
         const double frame_time = static_cast<double>(iteration_start - previous) / frequency;
         previous = iteration_start;
 
+        DebugUi* ui = renderer_->debug_ui();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
                 quit();
+            }
+            if (ui != nullptr) {
+                ui->process_event(event);
+                if (ui->captures(event)) {
+                    continue;
+                }
             }
             game.on_event(event);
         }
@@ -111,6 +125,9 @@ void Application::run(Game& game) {
         const std::uint64_t wait_end = SDL_GetPerformanceCounter();
 
         if (drawable) {
+            if (ui != nullptr) {
+                ui->new_frame();
+            }
             game.render(*renderer_, timestep.alpha());
             const std::uint64_t record_end = SDL_GetPerformanceCounter();
             renderer_->end_frame();

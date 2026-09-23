@@ -2,6 +2,7 @@ find_package(doctest CONFIG REQUIRED)
 
 add_executable(moteur_tests
     main.cpp
+    test_animation.cpp
     test_atlas_builder.cpp
     test_camera.cpp
     test_fixed_timestep.cpp
@@ -11,6 +12,7 @@ add_executable(moteur_tests
     test_sprite_batcher.cpp
     test_sprite_region.cpp
     test_text_layout.cpp
+    test_tilemap.cpp
     test_utf8.cpp
 )
 
