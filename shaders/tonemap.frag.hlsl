@@ -11,7 +11,8 @@ Texture2D<float4> scene : register(t0, space2);
 SamplerState scene_sampler : register(s0, space2);  // linear: also scales a reduced render size up
 
 cbuffer ToneMapping : register(b0, space3) {
-    float4 settings;  // x: exposure (multiplies the scene before tone mapping)
+    float4 settings;  // x: exposure (multiplies the scene before tone mapping); y: 1 skips the tone
+                      // mapping (debug views, whose values are meant to be seen as they are)
 };
 
 float3 pbr_neutral(float3 color) {
@@ -39,5 +40,6 @@ float3 linear_to_srgb(float3 color) {  // not "linear": that is an HLSL keyword
 
 float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
     const float3 hdr = scene.Sample(scene_sampler, uv).rgb * settings.x;
-    return float4(linear_to_srgb(pbr_neutral(max(hdr, 0.0))), 1.0);
+    const float3 mapped = settings.y > 0.5 ? saturate(hdr) : pbr_neutral(max(hdr, 0.0));
+    return float4(linear_to_srgb(mapped), 1.0);
 }

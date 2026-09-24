@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "moteur/billboard_renderer.hpp"
+#include "moteur/debug_lines.hpp"
 #include "moteur/debug_ui.hpp"
 #include "moteur/mesh_renderer.hpp"
 #include "moteur/paths.hpp"
@@ -83,7 +85,38 @@ SDL_GPUTransferBuffer* make_filled_transfer_buffer(SDL_GPUDevice* device, const 
     return transfer;
 }
 
+SDL_GPUSampleCount sample_count(AntiAliasing mode) {
+    switch (mode) {
+        case AntiAliasing::Msaa2: return SDL_GPU_SAMPLECOUNT_2;
+        case AntiAliasing::Msaa4: return SDL_GPU_SAMPLECOUNT_4;
+        default: return SDL_GPU_SAMPLECOUNT_1;
+    }
+}
+
+constexpr AntiAliasing kAntiAliasingModes[] = {AntiAliasing::None, AntiAliasing::Fxaa, AntiAliasing::Msaa2,
+                                               AntiAliasing::Msaa4};
+
 }  // namespace
+
+const char* anti_aliasing_name(AntiAliasing mode) {
+    switch (mode) {
+        case AntiAliasing::None: return "none";
+        case AntiAliasing::Fxaa: return "fxaa";
+        case AntiAliasing::Msaa2: return "msaa2";
+        case AntiAliasing::Msaa4: return "msaa4";
+    }
+    return "none";
+}
+
+bool parse_anti_aliasing(const std::string& name, AntiAliasing& mode) {
+    for (const AntiAliasing candidate : kAntiAliasingModes) {
+        if (name == anti_aliasing_name(candidate)) {
+            mode = candidate;
+            return true;
+        }
+    }
+    return false;
+}
 
 Renderer::Renderer(SDL_Window* window, const RendererConfig& config) : window_(window) {
     device_ = SDL_CreateGPUDevice(kShaderFormats, config.debug, nullptr);
@@ -106,12 +139,23 @@ Renderer::Renderer(SDL_Window* window, const RendererConfig& config) : window_(w
     const char* gpu_name =
         SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device_), SDL_PROP_GPU_DEVICE_NAME_STRING, "unknown");
     depth_format_ = pick_depth_format(device_);
-    SDL_Log("GPU: backend=%s, device=%s, present=%s, debug=%s, depth=%s", SDL_GetGPUDeviceDriver(device_),
-            gpu_name, present_mode_name(present_mode), config.debug ? "on" : "off", depth_format_name());
+    // The compressed formats chosen for textures (BC7 for colors, BC5 for normal maps), whose
+    // support on Apple Silicon is checked from this line.
+    const auto samples_format = [this](SDL_GPUTextureFormat format) {
+        return SDL_GPUTextureSupportsFormat(device_, format, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER) ? "yes"
+                                                                                                                  : "no";
+    };
+    SDL_Log("GPU: backend=%s, device=%s, present=%s, debug=%s, depth=%s, bc7=%s, bc5=%s", SDL_GetGPUDeviceDriver(device_),
+            gpu_name, present_mode_name(present_mode), config.debug ? "on" : "off", depth_format_name(),
+            samples_format(SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB), samples_format(SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM));
 
     try {
         meshes_ = std::make_unique<MeshRenderer>(*this, kSceneFormat, depth_format_);
+        billboards_ = std::make_unique<BillboardRenderer>(*this, kSceneFormat, depth_format_);
+        debug_lines_ = std::make_unique<DebugLineRenderer>(*this, kSceneFormat, depth_format_);
         tone_mapper_ = std::make_unique<ToneMapper>(*this, swapchain_format());
+        fxaa_ = std::make_unique<Fxaa>(*this, swapchain_format());
+        depth_view_ = std::make_unique<DepthView>(*this, swapchain_format());
         // Both sprite renderers draw in the "compose" pass, which has no depth texture.
         sprites_ = std::make_unique<SpriteRenderer>(*this, SDL_GPU_TEXTUREFORMAT_INVALID, "sprite");
         screen_sprites_ = std::make_unique<SpriteRenderer>(*this, SDL_GPU_TEXTUREFORMAT_INVALID, "screen sprite");
@@ -124,7 +168,11 @@ Renderer::Renderer(SDL_Window* window, const RendererConfig& config) : window_(w
         debug_ui_.reset();
         screen_sprites_.reset();
         sprites_.reset();
+        depth_view_.reset();
+        fxaa_.reset();
         tone_mapper_.reset();
+        debug_lines_.reset();
+        billboards_.reset();
         meshes_.reset();
         SDL_WaitForGPUIdle(device_);
         SDL_ReleaseWindowFromGPUDevice(device_, window_);
@@ -139,10 +187,16 @@ Renderer::~Renderer() {
     debug_ui_.reset();
     screen_sprites_.reset();
     sprites_.reset();
+    depth_view_.reset();
+    fxaa_.reset();
     tone_mapper_.reset();
+    debug_lines_.reset();
+    billboards_.reset();
     meshes_.reset();
     scene_texture_ = {};
+    scene_msaa_texture_ = {};
     depth_texture_ = {};
+    ldr_texture_ = {};
     SDL_ReleaseWindowFromGPUDevice(device_, window_);
     SDL_DestroyGPUDevice(device_);
 }
@@ -159,6 +213,40 @@ MeshRenderer& Renderer::meshes() {
     return *meshes_;
 }
 
+BillboardRenderer& Renderer::billboards() {
+    return *billboards_;
+}
+
+DebugLineRenderer& Renderer::debug_lines() {
+    return *debug_lines_;
+}
+
+void Renderer::render_debug_texture(SDL_GPURenderPass* pass) {
+    if (debug_texture_ == DebugTexture::None) {
+        return;
+    }
+    // In the bottom right corner: the sun's map as a square, the atlas with its proportions.
+    SDL_GPUTexture* texture = nullptr;
+    float aspect = 1.0f;  // width / height
+    if (debug_texture_ == DebugTexture::SunShadowMap) {
+        texture = meshes_->shadow_map();
+    } else if (meshes_->point_rows_ > 0) {
+        texture = meshes_->point_shadow_atlas();
+        aspect = 6.0f / static_cast<float>(meshes_->point_rows_);
+    }
+    if (texture == nullptr) {
+        return;
+    }
+    const auto w = static_cast<float>(width_);
+    const auto h = static_cast<float>(height_);
+    float area_width = std::min(w * 0.5f, h * 0.45f * aspect);
+    float area_height = area_width / aspect;
+    const float margin = 10.0f;
+    const SDL_GPUViewport area = {w - area_width - margin, h - area_height - margin, area_width, area_height, 0.0f, 1.0f};
+    const SDL_GPUViewport full = {0.0f, 0.0f, w, h, 0.0f, 1.0f};
+    depth_view_->render(pass, texture, area, full);
+}
+
 const char* Renderer::depth_format_name() const {
     switch (depth_format_) {
         case SDL_GPU_TEXTUREFORMAT_D32_FLOAT: return "D32_FLOAT";
@@ -172,6 +260,24 @@ void Renderer::set_render_scale(float scale) {
     render_scale_ = std::clamp(scale, 0.25f, 1.0f);
 }
 
+bool Renderer::supports(AntiAliasing mode) const {
+    const SDL_GPUSampleCount samples = sample_count(mode);
+    return samples == SDL_GPU_SAMPLECOUNT_1 || (SDL_GPUTextureSupportsSampleCount(device_, kSceneFormat, samples) &&
+                                                SDL_GPUTextureSupportsSampleCount(device_, depth_format_, samples));
+}
+
+void Renderer::set_anti_aliasing(AntiAliasing mode) {
+    const AntiAliasing asked = mode;
+    while (!supports(mode)) {
+        mode = mode == AntiAliasing::Msaa4 ? AntiAliasing::Msaa2 : AntiAliasing::None;
+    }
+    if (mode != asked) {
+        SDL_Log("Anti-aliasing %s not supported by this GPU: %s instead", anti_aliasing_name(asked),
+                anti_aliasing_name(mode));
+    }
+    anti_aliasing_ = mode;
+}
+
 void Renderer::set_exposure(float exposure) {
     exposure_ = std::max(exposure, 0.001f);
 }
@@ -182,11 +288,21 @@ void Renderer::ensure_scene_targets() {
     };
     const std::uint32_t width = scaled(width_);
     const std::uint32_t height = scaled(height_);
-    if (scene_texture_ && scene_width_ == width && scene_height_ == height) {
+    if (scene_texture_ && scene_width_ == width && scene_height_ == height && targets_anti_aliasing_ == anti_aliasing_) {
         return;
     }
-    // A frame still in flight may use the previous textures: SDL only frees them once the GPU is done.
-    const auto create = [&](SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage, const char* name) {
+    // The pipelines of the scene pass are made for a number of samples.
+    const SDL_GPUSampleCount samples = sample_count(anti_aliasing_);
+    if (samples != scene_samples_) {
+        meshes_->create_scene_pipelines(samples);
+        billboards_->create_pipeline(samples);
+        debug_lines_->create_pipelines(samples);
+        scene_samples_ = samples;
+    }
+    // A frame still in flight may use the previous textures and pipelines: SDL only frees them once
+    // the GPU is done.
+    const auto create = [&](SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage, const char* name,
+                            SDL_GPUSampleCount texture_samples = SDL_GPU_SAMPLECOUNT_1) {
         SDL_GPUTextureCreateInfo info = {};
         info.type = SDL_GPU_TEXTURETYPE_2D;
         info.format = format;
@@ -195,7 +311,7 @@ void Renderer::ensure_scene_targets() {
         info.height = height;
         info.layer_count_or_depth = 1;
         info.num_levels = 1;
-        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        info.sample_count = texture_samples;
         const NameProperty name_property(SDL_PROP_GPU_TEXTURE_CREATE_NAME_STRING, name);
         info.props = name_property.id();
         SDL_GPUTexture* raw = SDL_CreateGPUTexture(device_, &info);
@@ -204,10 +320,21 @@ void Renderer::ensure_scene_targets() {
         }
         return GpuTexture(device_, raw);
     };
+    // With MSAA the pass draws into a multisampled texture (never sampled), resolved into the plain
+    // one at its end.
     scene_texture_ = create(kSceneFormat, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER, "scene color");
-    depth_texture_ = create(depth_format_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, "scene depth");
+    scene_msaa_texture_ = samples == SDL_GPU_SAMPLECOUNT_1
+                              ? GpuTexture()
+                              : create(kSceneFormat, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, "scene color (msaa)", samples);
+    depth_texture_ = create(depth_format_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, "scene depth", samples);
+    // With FXAA, the tone mapping draws into a texture of the swapchain's format, which FXAA reads.
+    ldr_texture_ = anti_aliasing_ == AntiAliasing::Fxaa
+                       ? create(swapchain_format(), SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
+                                "tone mapped scene")
+                       : GpuTexture();
     scene_width_ = width;
     scene_height_ = height;
+    targets_anti_aliasing_ = anti_aliasing_;
 }
 
 GpuShader Renderer::load_shader(const std::string& name, const ShaderInfo& info) {
@@ -480,43 +607,154 @@ bool Renderer::begin_frame() {
 }
 
 void Renderer::end_frame() {
+    stats_.gpu_timed = gpu_timing_;
+    // Each part of the frame is recorded into the frame's command buffer. With GPU timing on, it
+    // gets its own command buffer instead, submitted and waited for right away (see
+    // set_gpu_timing()); the parts still run in the same order.
+    const auto part = [this](GpuTime slot, const auto& record) {
+        if (!gpu_timing_) {
+            record(command_buffer_);
+            return;
+        }
+        SDL_GPUCommandBuffer* commands = SDL_AcquireGPUCommandBuffer(device_);
+        if (commands == nullptr) {
+            record(command_buffer_);
+            return;
+        }
+        record(commands);
+        const std::uint64_t start = SDL_GetPerformanceCounter();
+        SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
+        if (fence != nullptr) {
+            SDL_WaitForGPUFences(device_, true, &fence, 1);
+            SDL_ReleaseGPUFence(device_, fence);
+        }
+        stats_.gpu_ms[slot] += static_cast<float>(static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 /
+                                                  static_cast<double>(SDL_GetPerformanceFrequency()));
+    };
+
     // Phase 1: copies. They must happen before any render pass opens.
-    sprites_->prepare(command_buffer_, stats_);
-    screen_sprites_->prepare(command_buffer_, stats_);
-    if (debug_ui_) {
-        debug_ui_->prepare(command_buffer_);
-    }
+    part(kGpuUpload, [this](SDL_GPUCommandBuffer* commands) {
+        meshes_->prepare(commands, stats_);  // culling and batching of every 3D pass, too
+        // Debug lines use the meshes' camera when the game gave none, and the meshes add their own.
+        if (meshes_->has_work()) {
+            if (!debug_lines_->has_camera_) {
+                debug_lines_->set_camera(meshes_->view_projection());
+            }
+            meshes_->add_debug_lines(debug_lines_->lines());
+        }
+        billboards_->prepare(commands, stats_);
+        debug_lines_->prepare(commands, stats_);
+        sprites_->prepare(commands, stats_);
+        screen_sprites_->prepare(commands, stats_);
+        if (debug_ui_) {
+            debug_ui_->prepare(commands);
+        }
+    });
 
     // Phase 2: the render passes. The debug groups name them in RenderDoc and Xcode captures.
-    const bool has_scene = meshes_->has_work();
+    const bool has_scene = meshes_->has_work() || billboards_->has_work() || debug_lines_->has_work();
+    if (has_scene && meshes_->wants_shadows()) {
+        part(kGpuShadow, [this](SDL_GPUCommandBuffer* commands) {
+            SDL_GPUDepthStencilTargetInfo shadow = {};
+            shadow.texture = meshes_->shadow_map();
+            shadow.clear_depth = 1.0f;
+            shadow.load_op = SDL_GPU_LOADOP_CLEAR;
+            shadow.store_op = SDL_GPU_STOREOP_STORE;  // read by the "scene" pass
+            shadow.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+            shadow.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+            SDL_PushGPUDebugGroup(commands, "shadow");
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, nullptr, 0, &shadow);
+            if (pass != nullptr) {
+                meshes_->render_shadows(commands, pass, stats_);
+                SDL_EndGPURenderPass(pass);
+            } else {
+                SDL_Log("SDL_BeginGPURenderPass (shadow) failed: %s", SDL_GetError());
+            }
+            SDL_PopGPUDebugGroup(commands);
+        });
+    }
+    if (has_scene && meshes_->wants_point_shadows()) {
+        part(kGpuPointShadows, [this](SDL_GPUCommandBuffer* commands) {
+            // Only the tiles of the lights whose shadow changed are drawn: the others are kept (LOAD).
+            SDL_GPUDepthStencilTargetInfo atlas = {};
+            atlas.texture = meshes_->point_shadow_atlas();
+            atlas.clear_depth = 1.0f;
+            atlas.load_op = meshes_->point_shadow_atlas_is_new() ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
+            atlas.store_op = SDL_GPU_STOREOP_STORE;
+            atlas.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+            atlas.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+            SDL_PushGPUDebugGroup(commands, "point shadows");
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, nullptr, 0, &atlas);
+            if (pass != nullptr) {
+                meshes_->render_point_shadows(commands, pass, stats_);
+                SDL_EndGPURenderPass(pass);
+            } else {
+                SDL_Log("SDL_BeginGPURenderPass (point shadows) failed: %s", SDL_GetError());
+            }
+            SDL_PopGPUDebugGroup(commands);
+        });
+    }
     if (has_scene) {
-        // The 3D world, in linear light. The clear color is given in screen (sRGB) terms like the
-        // 2D one, so it is converted to linear first.
-        const glm::vec3 clear = srgb_to_linear(glm::vec3(clear_color_.r, clear_color_.g, clear_color_.b));
-        SDL_GPUColorTargetInfo scene = {};
-        scene.texture = scene_texture_.get();
-        scene.clear_color = {clear.r, clear.g, clear.b, 1.0f};
-        scene.load_op = SDL_GPU_LOADOP_CLEAR;
-        scene.store_op = SDL_GPU_STOREOP_STORE;  // read by the tone mapping
+        part(kGpuScene, [this](SDL_GPUCommandBuffer* commands) {
+            // The 3D world, in linear light. The clear color is given in screen (sRGB) terms like the
+            // 2D one, so it is converted to linear first.
+            const glm::vec3 clear = srgb_to_linear(glm::vec3(clear_color_.r, clear_color_.g, clear_color_.b));
+            SDL_GPUColorTargetInfo scene = {};
+            scene.texture = scene_texture_.get();
+            scene.clear_color = {clear.r, clear.g, clear.b, 1.0f};
+            scene.load_op = SDL_GPU_LOADOP_CLEAR;
+            scene.store_op = SDL_GPU_STOREOP_STORE;  // read by the tone mapping
+            if (scene_msaa_texture_) {
+                // MSAA: the samples are averaged into the plain texture, and not kept themselves.
+                scene.texture = scene_msaa_texture_.get();
+                scene.resolve_texture = scene_texture_.get();
+                scene.store_op = SDL_GPU_STOREOP_RESOLVE;
+            }
 
-        // Nothing reads the depth after the pass: DONT_CARE spares tiled GPUs (Apple) writing it back.
-        SDL_GPUDepthStencilTargetInfo depth = {};
-        depth.texture = depth_texture_.get();
-        depth.clear_depth = 1.0f;
-        depth.load_op = SDL_GPU_LOADOP_CLEAR;
-        depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
-        depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-        depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+            // Nothing reads the depth after the pass: DONT_CARE spares tiled GPUs (Apple) writing it back.
+            SDL_GPUDepthStencilTargetInfo depth = {};
+            depth.texture = depth_texture_.get();
+            depth.clear_depth = 1.0f;
+            depth.load_op = SDL_GPU_LOADOP_CLEAR;
+            depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
+            depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+            depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
 
-        SDL_PushGPUDebugGroup(command_buffer_, "scene");
-        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(command_buffer_, &scene, 1, &depth);
-        if (pass != nullptr) {
-            meshes_->render(command_buffer_, pass, stats_);
-            SDL_EndGPURenderPass(pass);
-        } else {
-            SDL_Log("SDL_BeginGPURenderPass (scene) failed: %s", SDL_GetError());
-        }
-        SDL_PopGPUDebugGroup(command_buffer_);
+            SDL_PushGPUDebugGroup(commands, "scene");
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, &scene, 1, &depth);
+            if (pass != nullptr) {
+                meshes_->render(commands, pass, stats_);
+                billboards_->render(commands, pass, stats_);   // after the opaque meshes, blended
+                debug_lines_->render(commands, pass, stats_);  // last: some are drawn over everything
+                SDL_EndGPURenderPass(pass);
+            } else {
+                SDL_Log("SDL_BeginGPURenderPass (scene) failed: %s", SDL_GetError());
+            }
+            SDL_PopGPUDebugGroup(commands);
+        });
+    }
+
+    // The debug views other than the wireframe are meant to be seen as they are.
+    const MeshView view = meshes_->view();
+    const bool raw_view = view != MeshView::Lit && view != MeshView::Wireframe;
+    const bool fxaa = has_scene && ldr_texture_;
+    if (fxaa) {
+        // FXAA works on screen colors: the tone mapping first, into a texture of its own.
+        part(kGpuCompose, [&](SDL_GPUCommandBuffer* commands) {
+            SDL_GPUColorTargetInfo ldr = {};
+            ldr.texture = ldr_texture_.get();
+            ldr.load_op = SDL_GPU_LOADOP_DONT_CARE;  // every pixel is written
+            ldr.store_op = SDL_GPU_STOREOP_STORE;
+            SDL_PushGPUDebugGroup(commands, "tonemap");
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, &ldr, 1, nullptr);
+            if (pass != nullptr) {
+                tone_mapper_->render(commands, pass, scene_texture_.get(), exposure_, raw_view);
+                SDL_EndGPURenderPass(pass);
+            } else {
+                SDL_Log("SDL_BeginGPURenderPass (tonemap) failed: %s", SDL_GetError());
+            }
+            SDL_PopGPUDebugGroup(commands);
+        });
     }
 
     // The screen: the tone-mapped scene covers every pixel, so there is nothing to clear then.
@@ -528,9 +766,12 @@ void Renderer::end_frame() {
     SDL_PushGPUDebugGroup(command_buffer_, "compose");
     SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(command_buffer_, &target, 1, nullptr);
     if (pass != nullptr) {
-        if (has_scene) {
-            tone_mapper_->render(command_buffer_, pass, scene_texture_.get(), exposure_);
+        if (fxaa) {
+            fxaa_->render(command_buffer_, pass, ldr_texture_.get(), scene_width_, scene_height_);
+        } else if (has_scene) {
+            tone_mapper_->render(command_buffer_, pass, scene_texture_.get(), exposure_, raw_view);
         }
+        render_debug_texture(pass);
         sprites_->render(command_buffer_, pass, width_, height_, stats_);
         screen_sprites_->render(command_buffer_, pass, width_, height_, stats_);
         if (debug_ui_) {
@@ -542,6 +783,8 @@ void Renderer::end_frame() {
     }
     SDL_PopGPUDebugGroup(command_buffer_);
     meshes_->clear();
+    billboards_->clear();
+    debug_lines_->clear();
     sprites_->clear();
     screen_sprites_->clear();
 
@@ -575,7 +818,19 @@ void Renderer::end_frame() {
         }
     }
 
-    if (!SDL_SubmitGPUCommandBuffer(command_buffer_)) {
+    if (gpu_timing_) {
+        // The compose pass (and the capture read-back, if any) is what is left in this buffer.
+        const std::uint64_t start = SDL_GetPerformanceCounter();
+        SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(command_buffer_);
+        if (fence == nullptr) {
+            SDL_Log("SDL_SubmitGPUCommandBufferAndAcquireFence failed: %s", SDL_GetError());
+        } else {
+            SDL_WaitForGPUFences(device_, true, &fence, 1);
+            SDL_ReleaseGPUFence(device_, fence);
+            stats_.gpu_ms[kGpuCompose] += static_cast<float>(static_cast<double>(SDL_GetPerformanceCounter() - start) *
+                                                             1000.0 / static_cast<double>(SDL_GetPerformanceFrequency()));
+        }
+    } else if (!SDL_SubmitGPUCommandBuffer(command_buffer_)) {
         SDL_Log("SDL_SubmitGPUCommandBuffer failed: %s", SDL_GetError());
     }
     command_buffer_ = nullptr;

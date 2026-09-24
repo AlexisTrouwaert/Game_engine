@@ -46,19 +46,21 @@ Documentation détaillée : [Jalon 2 - Rendu 2D](JALON_2_RENDU_2D.md)
 ### 3. Rendu 3D
 Documentation détaillée : [Jalon 3 - Rendu 3D](JALON_3_RENDU_3D.md)
 
-- [ ] Passes multiples, profondeur et conventions (repère, couleur)
-- [ ] Caméra 3D isométrique et picking du sol
-- [ ] Maillages et chargement de modèles glTF
-- [ ] Textures (mipmaps) et couleur linéaire
-- [ ] Matériaux, éclairage et ombres
-- [ ] Instanciation et culling
-- [ ] Le 2D (interface, barres de vie, billboards) par-dessus la 3D
-- [ ] Scène de démonstration 3D
+- [x] Passes multiples, profondeur et conventions (repère, couleur)
+- [x] Caméra 3D isométrique et picking du sol
+- [x] Maillages et chargement de modèles glTF
+- [x] Textures (mipmaps) et couleur linéaire
+- [x] Matériaux, éclairage et ombres *(soleil et lumières ponctuelles)*
+- [x] Instanciation et culling
+- [x] Le 2D (interface, barres de vie, billboards) par-dessus la 3D
+- [x] Scène de démonstration 3D
+- [x] Anticrénelage configurable *(aucun, FXAA, MSAA 2×, MSAA 4×)*
 
 ### 4. Systèmes de base
 - [ ] Intégration ECS (EnTT)
 - [ ] Gestion des inputs (clavier, souris, manette)
 - [ ] Gestionnaire d'assets (chargement, cache)
+- [ ] Compression des textures : KTX2 (UASTC transcodé, ou BC7 / BC5 prêts), décidée au jalon 3
 - [ ] Gestion de scènes / états de jeu
 - [ ] Audio (effets, musique)
 - [ ] Intégration Dear ImGui (debug) *(commencé : `DebugUi` et le menu des tests du bac à sable)*
@@ -84,7 +86,6 @@ Documentation détaillée : [Jalon 3 - Rendu 3D](JALON_3_RENDU_3D.md)
 
 ### 8. Consolidation
 - [ ] Profilage et optimisation
-- [ ] Compression des textures (BC7 / ASTC, ou KTX2 transcodé)
 - [ ] Packaging Windows et macOS (signature / notarisation)
 - [ ] Documentation de l'API du moteur
 

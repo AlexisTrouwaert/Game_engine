@@ -14,8 +14,13 @@ namespace moteur {
 
 struct ApplicationConfig {
     std::string title = "moteur";
-    int width = 1280;
+    int width = 1280;   // points (see pixel_width)
     int height = 720;
+    // > 0: the window is sized so that it has exactly this many pixels, whatever the screen's
+    // density (a 2x Retina screen gets a window of half as many points). For captures compared
+    // between machines. Exact for whole densities (1, 2); other densities round, and say so.
+    int pixel_width = 0;
+    int pixel_height = 0;
     double fixed_hz = 60.0;        // logic update rate
     double max_frame_time = 0.25;  // seconds; caps catch-up after a stall
     bool vsync = true;
@@ -26,6 +31,8 @@ struct ApplicationConfig {
 #endif
     // Logs a summary of CPU time per frame when the loop ends (see Application::run).
     bool report_performance = false;
+    // Measures the GPU time of each part of the frame (Renderer::set_gpu_timing(): slows it down).
+    bool gpu_timing = false;
     // Dear ImGui for debug windows and menus (see DebugUi). The game calls ImGui:: from render().
     bool debug_ui = false;
     std::string debug_ui_font;  // TrueType file; empty for ImGui's built-in font (ASCII only)

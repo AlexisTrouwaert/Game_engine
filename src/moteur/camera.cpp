@@ -2,6 +2,8 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "moteur/fixed_timestep.hpp"
+
 #include <cmath>
 #include <stdexcept>
 
@@ -23,7 +25,7 @@ void Camera2D::set_zoom(float zoom) {
 
 Camera2D Camera2D::interpolated(double alpha) const {
     Camera2D copy = *this;
-    copy.position_ = glm::mix(previous_position_, position_, static_cast<float>(alpha));
+    copy.position_ = interpolate(previous_position_, position_, static_cast<float>(alpha));
     copy.previous_position_ = copy.position_;
     return copy;
 }

@@ -25,10 +25,13 @@
 #include "moteur/camera3d.hpp"
 #include "moteur/color.hpp"
 #include "moteur/environment.hpp"
+#include "moteur/fixed_timestep.hpp"
 #include "moteur/font.hpp"
 #include "moteur/image.hpp"
 #include "moteur/iso.hpp"
 #include "moteur/mesh.hpp"
+#include "moteur/billboard_renderer.hpp"
+#include "moteur/debug_lines.hpp"
 #include "moteur/mesh_renderer.hpp"
 #include "moteur/model.hpp"
 #include "moteur/paths.hpp"
@@ -36,6 +39,10 @@
 #include "moteur/texture_atlas.hpp"
 #include "moteur/tilemap.hpp"
 #include "moteur/version.hpp"
+
+#include "blender_compare.hpp"
+#include "demo3d.hpp"
+#include "sandbox_scene.hpp"
 
 namespace {
 
@@ -54,20 +61,6 @@ glm::vec4 screen_color(float r, float g, float b) {
     return glm::vec4(moteur::srgb_to_linear(glm::vec3(r, g, b)), 1.0f);
 }
 
-// Small deterministic random generator, so that a stress test is the same on every run and every OS.
-class Random {
-public:
-    explicit Random(std::uint32_t seed) : state_(seed) {}
-    // Uniform in [0, 1).
-    float next() {
-        state_ = state_ * 1664525u + 1013904223u;
-        return static_cast<float>(state_ >> 8) / 16777216.0f;
-    }
-
-private:
-    std::uint32_t state_;
-};
-
 struct Mover {
     glm::vec2 position;
     glm::vec2 velocity;  // pixels per second
@@ -76,6 +69,7 @@ struct Mover {
 
 // What the "À propos" window lists, read from assets/credits.json: the third-party libraries and
 // fonts with their licenses, and the authors of the assets. Paths are relative to the executable.
+// An entry with a "platform" ("windows", "macos") is only listed on that OS.
 struct Credits {
     struct Entry {
         std::string name;
@@ -91,7 +85,16 @@ struct Credits {
     std::vector<Entry> libraries;
     std::vector<Entry> fonts;
     std::vector<Entry> models;
+    std::vector<Entry> environments;
     std::string error;  // why the file could not be read, if it could not
+
+#if defined(SDL_PLATFORM_WINDOWS)
+    static constexpr const char* kPlatform = "windows";
+#elif defined(SDL_PLATFORM_MACOS)
+    static constexpr const char* kPlatform = "macos";
+#else
+    static constexpr const char* kPlatform = "other";
+#endif
 
     static Credits load(const std::string& path) {
         Credits credits;
@@ -100,6 +103,10 @@ struct Credits {
             const auto read = [](const nlohmann::json& list) {
                 std::vector<Entry> entries;
                 for (const nlohmann::json& item : list) {
+                    const std::string platform = item.value("platform", "");
+                    if (!platform.empty() && platform != kPlatform) {
+                        continue;
+                    }
                     Entry entry;
                     entry.name = item.value("name", "");
                     entry.version = item.value("version", "");
@@ -117,6 +124,7 @@ struct Credits {
             credits.libraries = read(doc.value("libraries", nlohmann::json::array()));
             credits.fonts = read(doc.value("fonts", nlohmann::json::array()));
             credits.models = read(doc.value("models", nlohmann::json::array()));
+            credits.environments = read(doc.value("environments", nlohmann::json::array()));
         } catch (const std::exception& e) {
             credits.error = "Crédits illisibles (" + path + ") : " + e.what();
         }
@@ -142,7 +150,7 @@ struct Creature {
 
 // One test scene of the engine, chosen by its Options: the sprite stress test, the isometric map,
 // the atlas, the text, or the demo. Created when the test starts and destroyed when it stops.
-class TestScene final : public moteur::Game {
+class TestScene final : public SandboxScene {
 public:
     struct Options {
         double run_seconds = 0.0;  // > 0 makes the program quit by itself (used for smoke tests)
@@ -164,6 +172,15 @@ public:
         bool orthographic = false;  // start with the orthographic projection instead of the chosen perspective
         float view_height = 0.0f;   // > 0: metres of world visible at the target (--camera X Z sets the target)
         float render_scale = 1.0f;  // fraction of the window's pixels the 3D is rendered at
+        bool has_sun = false;       // --sun YAW ELEVATION: where the sun is, in degrees
+        glm::vec2 sun = {60.0f, 55.0f};
+        int stress_meshes = 0;      // --meshes N: N extra small objects around the scene, for the 3D stress test
+        bool no_culling = false;    // --no-culling: every mesh goes to the GPU, to compare
+        bool fixed_torches = false; // --fixed-torches: the torches stay still (their shadows are then kept)
+        bool night = false;         // --night: no sun and almost no sky light, only the torches
+        bool show_ray = false;      // --show-ray: the ray under the mouse, as a debug line
+        int stress_billboards = 0;  // --billboards N: N extra glowing billboards over the floor
+        int point_budget = -1;      // --point-shadows N: torches with a shadow per frame (-1: the engine's default)
 
         // Isometric scene: a map of tiles seen through a camera.
         bool iso = false;
@@ -197,6 +214,23 @@ public:
             cube_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_cube(), "cube");
             tile_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_plane(), "tile");
             sphere_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_sphere(0.5f, 32, 16), "sphere");
+            small_sphere_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_sphere(0.5f, 12, 6), "small sphere");
+            stress_count_ = options.stress_meshes;
+            app.renderer().meshes().set_culling(!options.no_culling);
+            torches_move_ = !options.fixed_torches;
+            show_ray_ = options.show_ray;
+            if (options.night) {
+                sun_intensity_ = 0.0f;
+                environment_intensity_ = 0.03f;
+            }
+            {
+                moteur::ShadowOptions shadows;  // each test starts from the engine's defaults
+                if (options.point_budget >= 0) {
+                    shadows.point_budget = options.point_budget;
+                }
+                app.renderer().meshes().set_shadows(shadows);
+            }
+            build_stress_objects();
             camera3d_.set_projection(options.orthographic ? moteur::Projection::Orthographic
                                                           : moteur::Projection::Perspective);
             if (options.has_camera) {
@@ -206,8 +240,18 @@ public:
                 camera3d_.set_visible_height(options.view_height);
             }
             app.renderer().set_render_scale(options.render_scale);
+            if (options.has_sun) {
+                sun_yaw_ = options.sun.x;
+                sun_elevation_ = options.sun.y;
+            }
+            if (options.fake_mouse) {
+                mouse_ = options.fake_mouse_position;
+            }
             load_models(app.renderer());
             load_environments(app.renderer());
+            create_billboard_textures(app.renderer());
+            spawn_creatures();
+            build_stress_billboards(options.stress_billboards);
             return;
         }
 
@@ -329,7 +373,19 @@ public:
             stop();
         }
         if (options_.render3d && !options_.no_input) {
-            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_P && !event.key.repeat) {
+            if (!options_.fake_mouse && event.type == SDL_EVENT_MOUSE_MOTION) {
+                mouse_ = app_.to_pixels({event.motion.x, event.motion.y});
+            } else if (!options_.fake_mouse && event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
+                mouse_ = {-1.0f, -1.0f};
+            } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+                // Click to move: the character walks to the point of the ground under the cursor.
+                const glm::vec2 pixel = app_.to_pixels({event.button.x, event.button.y});
+                if (const auto ground = drawn_camera3d_.ground_point(pixel); ground && on_floor(*ground)) {
+                    goal_ = *ground;
+                }
+            } else if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F && !event.key.repeat) {
+                follow_ = !follow_;
+            } else if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_P && !event.key.repeat) {
                 toggle_projection();
             } else if (event.type == SDL_EVENT_MOUSE_WHEEL && event.wheel.y != 0.0f) {
                 camera3d_.set_visible_height(
@@ -365,10 +421,32 @@ public:
 
         if (options_.render3d) {
             last_stats_ = app_.renderer().stats();  // see the demo scene below
+            camera3d_.begin_update();  // draw and pick between this state and the next
+            previous_character_ = character_;
+            for (Creature3D& creature : creatures3d_) {
+                creature.previous = creature.position;
+            }
             if (!frozen) {
-                spin_ += static_cast<float>(dt);
-                if (!options_.no_input) {
-                    move_camera3d(static_cast<float>(dt));
+                const auto step = static_cast<float>(dt);
+                spin_ += step;
+                spin_stress_objects(step);
+                update_creatures(step);
+                if (goal_) {
+                    // Straight to the clicked point (the pathfinding of milestone 6 will go around walls).
+                    constexpr float kWalkSpeed = 4.0f;  // metres per second
+                    const glm::vec3 to_goal = *goal_ - character_;
+                    const float distance = glm::length(to_goal);
+                    if (distance <= kWalkSpeed * step) {
+                        character_ = *goal_;
+                        goal_.reset();
+                    } else {
+                        character_ += to_goal / distance * (kWalkSpeed * step);
+                    }
+                }
+                if (follow_) {
+                    camera3d_.follow(character_, step, 0.25f);
+                } else if (!options_.no_input) {
+                    move_camera3d(step);
                 }
             }
             return;
@@ -442,7 +520,7 @@ public:
         }
 
         if (options_.render3d) {
-            render_3d(renderer);
+            render_3d(renderer, alpha);
             return;
         }
         if (options_.text) {
@@ -468,7 +546,7 @@ public:
         const auto draw_main_sprite = [&] {
             const glm::vec2 size(static_cast<float>(texture_.width) * kSpriteScale,
                                  static_cast<float>(texture_.height) * kSpriteScale);
-            const glm::vec2 offset = glm::mix(previous_offset_, offset_, static_cast<float>(alpha));
+            const glm::vec2 offset = moteur::interpolate(previous_offset_, offset_, static_cast<float>(alpha));
             moteur::SpriteOptions options;
             options.depth = options_.depth ? 2.0f : 0.0f;  // in front of everything
             sprites.draw(texture_, view_size_ * 0.5f - size * 0.5f + offset, size, options);
@@ -494,7 +572,7 @@ public:
         }
     }
 
-    bool stop_requested() const { return stop_requested_; }
+    bool stop_requested() const override { return stop_requested_; }
     long ticks() const { return ticks_; }
     long frames() const { return frames_; }
     double elapsed() const { return elapsed_; }
@@ -539,11 +617,8 @@ private:
         }
     }
 
-    // Placeholder walls: a lattice of grid lines with gaps for doorways, so the demo map looks
-    // like a set of rooms without needing a level editor.
-    static bool is_wall(int i, int j) {
-        return (i % 10 == 0 && j % 4 != 0) || (j % 10 == 0 && i % 4 != 0);
-    }
+    // Placeholder walls, shared with the 3D demo (see sandbox_scene.hpp).
+    static bool is_wall(int i, int j) { return demo_wall(i, j); }
 
     // Once per rendered (not simulated) frame: frames per real second, shown by the text/demo
     // scenes. The window title already gives the exact FPS; this is a simplified display copy.
@@ -612,15 +687,295 @@ private:
         }
     }
 
+    // Milestone 3, part 10: the 2D over the 3D.
+    //
+    // Creatures walk in circles and take hits: each has a health bar and a name above its head, and
+    // every hit shows its damage rising from the head. Those are interface elements, in window
+    // pixels (screen_sprites()), placed with the projection of a point of the world: constant size
+    // on the screen, never hidden by the scenery (as in most ARPGs). They use the same interpolated
+    // camera and positions as the meshes, so they stay glued to them.
+    struct Creature3D {
+        std::string name;
+        glm::vec3 center{0.0f};  // of its circle
+        float radius = 1.0f;
+        float speed = 1.0f;      // radians per second
+        float angle = 0.0f;
+        glm::vec3 position{0.0f};
+        glm::vec3 previous{0.0f};  // at the previous tick
+        float health = 1.0f;       // in [0, 1]
+    };
+    struct FloatingNumber {
+        glm::vec3 position{0.0f};  // where it appeared
+        int value = 0;
+        float age = 0.0f;          // seconds
+    };
+    static constexpr float kCreatureHeight = 1.2f;
+    static constexpr float kNumberLife = 1.2f;  // seconds
+
+    void spawn_creatures() {
+        struct Spot {
+            const char* name;
+            glm::vec3 center;
+            float radius, speed;
+        };
+        static constexpr Spot kSpots[] = {
+            {"Gobelin", {-6.0f, 0.0f, 1.5f}, 1.5f, 0.9f},  {"Squelette", {5.0f, 0.0f, -6.0f}, 1.5f, -0.7f},
+            {"Rat géant", {-2.0f, 0.0f, -7.0f}, 1.2f, 1.3f}, {"Chaman", {7.0f, 0.0f, 1.0f}, 1.2f, 0.8f},
+            {"Ogre", {4.5f, 0.0f, 8.0f}, 1.0f, -0.5f},
+        };
+        creatures3d_.clear();
+        for (const Spot& spot : kSpots) {
+            Creature3D creature;
+            creature.name = spot.name;
+            creature.center = spot.center;
+            creature.radius = spot.radius;
+            creature.speed = spot.speed;
+            creature.position = creature.previous = spot.center + glm::vec3(spot.radius, 0.0f, 0.0f);
+            creatures3d_.push_back(creature);
+        }
+    }
+
+    void update_creatures(float dt) {
+        tick_seconds_ = dt;
+        for (Creature3D& creature : creatures3d_) {
+            creature.angle += creature.speed * dt;
+            creature.position = creature.center + creature.radius * glm::vec3(std::cos(creature.angle), 0.0f,
+                                                                               std::sin(creature.angle));
+        }
+        // A hit every half second, on a creature and for an amount drawn from the scene's seeded
+        // generator: the same on every run.
+        if (!creatures3d_.empty() && ticks_ % 30 == 0) {
+            const float pick = hit_random_.next();
+            const float amount = hit_random_.next();
+            Creature3D& target = creatures3d_[static_cast<std::size_t>(pick * static_cast<float>(creatures3d_.size())) %
+                                              creatures3d_.size()];
+            const int damage = 5 + static_cast<int>(amount * 30.0f);
+            target.health -= static_cast<float>(damage) / 100.0f;
+            if (target.health <= 0.0f) {
+                target.health = 1.0f;  // back on its feet: it is a test
+            }
+            floating_numbers_.push_back({target.position + glm::vec3(0.0f, kCreatureHeight + 0.3f, 0.0f), damage, 0.0f});
+        }
+        for (FloatingNumber& number : floating_numbers_) {
+            number.age += dt;
+        }
+        std::erase_if(floating_numbers_, [](const FloatingNumber& number) { return number.age >= kNumberLife; });
+    }
+
+    void draw_creatures(moteur::Renderer& renderer, const moteur::Camera3D& camera, float blend) {
+        const auto at = [](glm::vec3 position, glm::vec3 scale) {
+            return glm::scale(glm::translate(glm::mat4(1.0f), position), scale);
+        };
+        moteur::Material skin;
+        skin.base_color = glm::vec4(moteur::srgb_to_linear(glm::vec3(0.55f, 0.18f, 0.15f)), 1.0f);
+        skin.roughness = 0.6f;
+        // Interface sizes follow the screen's pixel density (1 on a common screen, 2 on Retina).
+        const float ui = app_.to_pixels({1.0f, 0.0f}).x - app_.to_pixels({0.0f, 0.0f}).x;
+        const glm::vec2 bar(64.0f * ui, 7.0f * ui);
+        moteur::SpriteRenderer& screen = renderer.screen_sprites();
+        moteur::TextOptions name_style;
+        name_style.align = moteur::TextAlign::Center;
+        name_style.max_width = 200.0f;
+        name_style.color = {1.0f, 0.95f, 0.85f, 0.9f};
+        // One depth per kind of element: all frames, then all fills, then all names, so that each
+        // kind forms one batch (at equal depth, sprites keep their order and the texture would
+        // change at every creature).
+        name_style.depth = 1.2f;
+        for (const Creature3D& creature : creatures3d_) {
+            const glm::vec3 position = moteur::interpolate(creature.previous, creature.position, blend);
+            renderer.meshes().draw(cube_mesh_, at(position + glm::vec3(0.0f, kCreatureHeight * 0.5f, 0.0f),
+                                                  {0.6f, kCreatureHeight, 0.6f}), skin);
+            const auto head = camera.world_to_screen(position + glm::vec3(0.0f, kCreatureHeight + 0.25f, 0.0f));
+            if (!head || head->x < -bar.x || head->y < -bar.y || head->x > view_size_.x + bar.x ||
+                head->y > view_size_.y + bar.y) {
+                continue;  // behind the camera or off screen
+            }
+            const glm::vec2 corner = glm::round(*head - glm::vec2(bar.x * 0.5f, bar.y));  // whole pixels: crisp
+            moteur::SpriteOptions frame;
+            frame.tint = {0.0f, 0.0f, 0.0f, 0.7f};
+            frame.depth = 1.0f;
+            screen.draw(white_texture_, corner - glm::vec2(ui), bar + glm::vec2(2.0f * ui), frame);
+            moteur::SpriteOptions fill;
+            const float health = std::clamp(creature.health, 0.0f, 1.0f);
+            fill.tint = glm::vec4(glm::mix(glm::vec3(0.85f, 0.15f, 0.1f), glm::vec3(0.2f, 0.8f, 0.25f), health), 1.0f);
+            fill.depth = 1.1f;
+            screen.draw(white_texture_, corner, {std::round(bar.x * health), bar.y}, fill);
+            font_->draw(screen, creature.name,
+                        glm::vec2(head->x - name_style.max_width * 0.5f, corner.y - font_->line_height() - 2.0f * ui),
+                        name_style);
+        }
+        // Damage, rising and fading. Its age is advanced by the fraction of tick already elapsed.
+        moteur::TextOptions number_style;
+        number_style.align = moteur::TextAlign::Center;
+        number_style.max_width = 100.0f;
+        for (const FloatingNumber& number : floating_numbers_) {
+            const float age = std::min(number.age + blend * tick_seconds_, kNumberLife);
+            const auto point = camera.world_to_screen(number.position + glm::vec3(0.0f, 0.8f * age, 0.0f));
+            if (!point) {
+                continue;
+            }
+            number_style.color = {1.0f, 0.85f, 0.3f, 1.0f - age / kNumberLife};
+            number_style.depth = 1.3f;
+            font_->draw(screen, std::to_string(number.value), glm::vec2(point->x - 50.0f, point->y), number_style);
+        }
+    }
+
+    // Billboards: halos of the torches (drawn with them), cards standing on both sides of the wall
+    // (those behind are partly hidden by it), sparks around the spinning cube, and the stress test.
+    void create_billboard_textures(moteur::Renderer& renderer) {
+        // A soft round glow, white: the billboard's color gives its tint.
+        moteur::Image glow;
+        glow.width = 64;
+        glow.height = 64;
+        glow.pixels.resize(64 * 64 * 4);
+        for (int y = 0; y < 64; ++y) {
+            for (int x = 0; x < 64; ++x) {
+                const float dx = (static_cast<float>(x) + 0.5f) / 32.0f - 1.0f;
+                const float dy = (static_cast<float>(y) + 0.5f) / 32.0f - 1.0f;
+                const float r = std::min(std::sqrt(dx * dx + dy * dy), 1.0f);
+                const float falloff = (1.0f - r) * (1.0f - r);
+                const auto i = static_cast<std::size_t>((y * 64 + x) * 4);
+                glow.pixels[i] = glow.pixels[i + 1] = glow.pixels[i + 2] = 255;
+                glow.pixels[i + 3] = static_cast<std::uint8_t>(std::lround(falloff * 255.0f));
+            }
+        }
+        moteur::TextureSettings data;
+        data.mipmaps = true;  // premultiplied (the default); a mask, so not sRGB
+        glow_texture_ = renderer.create_texture(glow, data, "glow");
+        moteur::TextureSettings colors;
+        colors.srgb = true;
+        colors.mipmaps = true;
+        card_texture_ = renderer.create_texture(moteur::load_image(moteur::asset_path("sprite.png")), colors, "card");
+        moteur::Image white;
+        white.width = 1;
+        white.height = 1;
+        white.pixels = {255, 255, 255, 255};
+        white_texture_ = renderer.create_texture(white, "white");
+    }
+
+    void build_stress_billboards(int count) {
+        stress_billboards_.clear();
+        Random random(options_.seed + 1);
+        static constexpr glm::vec3 kColors[4] = {{2.0f, 0.8f, 0.3f}, {0.4f, 1.2f, 2.5f}, {0.6f, 2.2f, 0.8f}, {2.0f, 0.5f, 1.8f}};
+        for (int i = 0; i < count; ++i) {
+            const glm::vec3 position((random.next() * 2.0f - 1.0f) * 10.0f, 0.2f + 2.3f * random.next(),
+                                     (random.next() * 2.0f - 1.0f) * 10.0f);
+            stress_billboards_.push_back({position, kColors[static_cast<std::size_t>(random.next() * 4.0f) % 4]});
+        }
+    }
+
+    void draw_billboards(moteur::Renderer& renderer) {
+        moteur::BillboardRenderer& billboards = renderer.billboards();
+        moteur::BillboardOptions card;
+        card.facing = moteur::BillboardFacing::Upright;
+        for (int k = 0; k < 4; ++k) {
+            const float x = -5.5f + 2.0f * static_cast<float>(k);
+            billboards.draw(card_texture_, {x, 0.75f, -4.6f}, {1.5f, 1.5f}, card);  // behind the wall
+        }
+        for (const float x : {-4.5f, 1.5f}) {
+            billboards.draw(card_texture_, {x, 0.75f, -2.4f}, {1.5f, 1.5f}, card);  // in front of it
+        }
+        moteur::BillboardOptions spark;
+        spark.additive = true;
+        for (int k = 0; k < 12; ++k) {
+            const float angle = spin_ * 1.5f + glm::two_pi<float>() * static_cast<float>(k) / 12.0f;
+            const glm::vec3 position(3.5f + 1.3f * std::cos(angle), 1.0f + 0.4f * std::sin(angle * 2.0f + spin_),
+                                     2.5f + 1.3f * std::sin(angle));
+            spark.color = glm::vec4(3.0f, 1.8f, 0.6f, 1.0f);
+            billboards.draw(glow_texture_, position, {0.3f, 0.3f}, spark);
+        }
+        moteur::BillboardOptions stress;
+        stress.additive = true;
+        for (const StressBillboard& billboard : stress_billboards_) {
+            stress.color = glm::vec4(billboard.color, 1.0f);
+            billboards.draw(glow_texture_, billboard.position, {0.5f, 0.5f}, stress);
+        }
+    }
+
     // Milestone 3, part 4: the first meshes. A 20 x 20 m checkered floor (one 1 m tile per grid
     // cell, cell (i, j) covering [i, i+1] x [j, j+1]), a wall of 1 m cubes, a spinning cube, a
     // sphere, a character-sized box (0.7 x 1.8 x 0.7 m) and four 3 m pillars in the corners, which
     // show best how the two projections differ.
-    void render_3d(moteur::Renderer& renderer) {
+    struct StressObject {
+        glm::vec3 position{0.0f};
+        float size = 1.0f;
+        float angle = 0.0f;  // around the vertical, radians
+        bool sphere = false;
+        bool spins = false;
+        moteur::Material material;
+        glm::mat4 world{1.0f};
+        moteur::Aabb bounds;
+    };
+
+    // The stress test: stress_count_ small cubes and spheres, 2.5 per square metre around the
+    // origin (so about as many are visible whatever their number), in a few colors and finishes.
+    // One in four spins. Deterministic: the same objects on every run.
+    void build_stress_objects() {
+        stress_objects_.clear();
+        const int count = std::max(0, stress_count_);
+        if (count == 0) {
+            return;
+        }
+        constexpr float kDensity = 2.5f;  // objects per square metre
+        stress_half_size_ = 0.5f * std::sqrt(static_cast<float>(count) / kDensity);
+        static constexpr glm::vec3 kColors[6] = {
+            {0.8f, 0.25f, 0.2f}, {0.25f, 0.6f, 0.3f}, {0.25f, 0.4f, 0.8f},
+            {0.85f, 0.75f, 0.3f}, {0.6f, 0.6f, 0.62f}, {0.55f, 0.35f, 0.7f},
+        };
+        Random random(options_.seed);
+        stress_objects_.reserve(static_cast<std::size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            StressObject object;
+            object.sphere = random.next() < 0.5f;
+            object.spins = i % 4 == 0;
+            object.size = 0.2f + 0.3f * random.next();
+            object.position = glm::vec3((random.next() * 2.0f - 1.0f) * stress_half_size_, 0.0f,
+                                        (random.next() * 2.0f - 1.0f) * stress_half_size_);
+            object.position.y = object.size * 0.5f;
+            object.angle = random.next() * 6.2831853f;
+            const glm::vec3 color = kColors[static_cast<std::size_t>(random.next() * 6.0f) % 6];
+            object.material.base_color = glm::vec4(moteur::srgb_to_linear(color), 1.0f);
+            object.material.metallic = random.next() < 0.25f ? 1.0f : 0.0f;
+            object.material.roughness = 0.2f + 0.7f * random.next();
+            place_stress_object(object);
+            stress_objects_.push_back(object);
+        }
+    }
+
+    void place_stress_object(StressObject& object) const {
+        const moteur::Mesh& mesh = object.sphere ? small_sphere_mesh_ : cube_mesh_;
+        object.world = glm::scale(glm::rotate(glm::translate(glm::mat4(1.0f), object.position), object.angle,
+                                              glm::vec3(0.0f, 1.0f, 0.0f)),
+                                  glm::vec3(object.size));
+        object.bounds = moteur::transform_box(mesh.bounds, object.world);
+    }
+
+    void spin_stress_objects(float dt) {
+        for (StressObject& object : stress_objects_) {
+            if (object.spins) {
+                object.angle += dt;
+                place_stress_object(object);
+            }
+        }
+    }
+
+    // The floor of the 3D scene: cells (i, j) for i and j in [-kFloorHalf, kFloorHalf).
+    static constexpr int kFloorHalf = 10;
+    static bool on_floor(glm::vec3 point) {
+        const auto half = static_cast<float>(kFloorHalf);
+        return point.x >= -half && point.x < half && point.z >= -half && point.z < half;
+    }
+
+    void render_3d(moteur::Renderer& renderer, double alpha) {
         renderer.set_clear_color(0.05f, 0.06f, 0.08f);
         camera3d_.set_viewport(view_size_);
+        // Drawing and picking use the same interpolated camera, so the highlighted cell is always
+        // the one drawn under the cursor, even while the camera glides.
+        const moteur::Camera3D camera = camera3d_.interpolated(alpha);
+        drawn_camera3d_ = camera;  // clicks pick with it too
         moteur::MeshRenderer& meshes = renderer.meshes();
-        meshes.set_camera(camera3d_.view_projection(), camera3d_.position());
+        meshes.set_camera(camera.view_projection(), camera.position());
+        renderer.billboards().set_camera(camera);
 
         // Light: the sun, the surroundings, and torches circling the middle of the floor.
         const float sun_yaw = glm::radians(sun_yaw_), sun_elevation = glm::radians(sun_elevation_);
@@ -631,26 +986,42 @@ private:
                                environment_intensity_);
         static const glm::vec3 kTorchColors[4] = {{1.0f, 0.45f, 0.12f}, {1.0f, 0.6f, 0.2f}, {0.3f, 0.5f, 1.0f},
                                                   {0.4f, 1.0f, 0.5f}};
+        const float torch_time = torches_move_ ? spin_ : 0.0f;
         for (int k = 0; k < torch_count_; ++k) {
-            const float angle = spin_ * 0.4f + glm::two_pi<float>() * static_cast<float>(k) / static_cast<float>(torch_count_);
-            const glm::vec3 position(6.0f * std::cos(angle), 0.9f + 0.3f * std::sin(spin_ * 2.0f + static_cast<float>(k)),
+            const float angle = torch_time * 0.4f + glm::two_pi<float>() * static_cast<float>(k) / static_cast<float>(torch_count_);
+            const glm::vec3 position(6.0f * std::cos(angle), 0.9f + 0.3f * std::sin(torch_time * 2.0f + static_cast<float>(k)),
                                      6.0f * std::sin(angle));
             const glm::vec3 color = kTorchColors[k % 4];
-            meshes.add_light({position, color, torch_intensity_, 6.0f});
+            meshes.add_light({position, color, torch_intensity_, 6.0f, torch_shadows_});
             moteur::Material flame;
             flame.base_color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
             flame.emissive = color * 12.0f;  // a small bright source, well above 1 in HDR
+            flame.casts_shadow = false;      // it is the light: it would shadow itself
             meshes.draw(sphere_mesh_, glm::scale(glm::translate(glm::mat4(1.0f), position), glm::vec3(0.15f)), flame);
+            // A halo around the flame: added light, hidden by what stands in front of it.
+            moteur::BillboardOptions halo;
+            halo.color = glm::vec4(color * 1.5f, 1.0f);
+            halo.additive = true;
+            renderer.billboards().draw(glow_texture_, position, {1.1f, 1.1f}, halo);
         }
 
         const auto at = [](glm::vec3 position, glm::vec3 scale = glm::vec3(1.0f)) {
             return glm::scale(glm::translate(glm::mat4(1.0f), position), scale);
         };
-        for (int j = -10; j < 10; ++j) {
-            for (int i = -10; i < 10; ++i) {
+        for (int j = -kFloorHalf; j < kFloorHalf; ++j) {
+            for (int i = -kFloorHalf; i < kFloorHalf; ++i) {
                 const bool light = ((i + j) & 1) == 0;
                 const glm::vec4 color = light ? screen_color(0.55f, 0.6f, 0.5f) : screen_color(0.42f, 0.47f, 0.38f);
                 meshes.draw(tile_mesh_, at({static_cast<float>(i) + 0.5f, 0.0f, static_cast<float>(j) + 0.5f}), color);
+            }
+        }
+        if (!stress_objects_.empty()) {
+            // The ground under the stress objects, beyond the checkered floor, slightly lower.
+            meshes.draw(tile_mesh_, at({0.0f, -0.002f, 0.0f}, glm::vec3(2.0f * stress_half_size_ + 2.0f)),
+                        screen_color(0.3f, 0.32f, 0.3f));
+            for (const StressObject& object : stress_objects_) {
+                // The box in the world was computed when the object last moved: not every frame.
+                meshes.draw(object.sphere ? small_sphere_mesh_ : cube_mesh_, object.world, object.material, object.bounds);
             }
         }
         for (int i = -6; i <= 2; ++i) {  // a wall, one cube per cell, along X
@@ -659,7 +1030,40 @@ private:
         const glm::mat4 spinning = glm::rotate(at({3.5f, 1.0f, 2.5f}), spin_, glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f)));
         meshes.draw(cube_mesh_, spinning, screen_color(0.85f, 0.35f, 0.25f));
         meshes.draw(sphere_mesh_, at({-2.5f, 0.5f, 2.5f}), screen_color(0.3f, 0.5f, 0.85f));
-        meshes.draw(cube_mesh_, at({0.5f, 0.9f, 0.5f}, {0.7f, 1.8f, 0.7f}), screen_color(0.9f, 0.8f, 0.3f));
+        // Moving things are drawn between their last two positions, like the camera (see update()).
+        const auto blend = static_cast<float>(alpha);
+        const glm::vec3 character = moteur::interpolate(previous_character_, character_, blend);
+        meshes.draw(cube_mesh_, at(character + glm::vec3(0.0f, 0.9f, 0.0f), {0.7f, 1.8f, 0.7f}), screen_color(0.9f, 0.8f, 0.3f));
+        draw_creatures(renderer, camera, blend);
+        draw_billboards(renderer);
+
+        // The cell under the cursor (cell (i, j) covers [i, i+1] x [j, j+1]) and the walk target.
+        const auto glow = [](glm::vec3 color) {
+            moteur::Material material;
+            material.base_color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            material.emissive = color;
+            material.casts_shadow = false;
+            return material;
+        };
+        has_hovered_tile_ = false;
+        if (mouse_.x >= 0.0f && mouse_.y >= 0.0f) {
+            if (const auto ground = camera.ground_point(mouse_); ground && on_floor(*ground)) {
+                hovered_tile_ = glm::ivec2(static_cast<int>(std::floor(ground->x)), static_cast<int>(std::floor(ground->z)));
+                has_hovered_tile_ = true;
+                const glm::vec3 cell(static_cast<float>(hovered_tile_.x) + 0.5f, 0.005f, static_cast<float>(hovered_tile_.y) + 0.5f);
+                meshes.draw(tile_mesh_, at(cell), glow({0.9f, 0.75f, 0.2f}));
+                if (show_ray_) {
+                    // The ray under the mouse, the last 6 m before the ground, and where it lands.
+                    const moteur::Ray ray = camera.screen_ray(mouse_);
+                    moteur::DebugLineBuffer& lines = renderer.debug_lines().lines();
+                    lines.line(*ground - ray.direction * 6.0f, *ground, {1.0f, 0.3f, 1.0f, 1.0f}, true);
+                    lines.axes(*ground, 0.5f);
+                }
+            }
+        }
+        if (goal_) {
+            meshes.draw(tile_mesh_, at(*goal_ + glm::vec3(0.0f, 0.01f, 0.0f), glm::vec3(0.35f)), glow({0.2f, 1.5f, 0.4f}));
+        }
         for (const glm::vec2 corner : {glm::vec2(-8.5f, -8.5f), glm::vec2(8.5f, -8.5f), glm::vec2(-8.5f, 8.5f),
                                        glm::vec2(8.5f, 8.5f)}) {
             meshes.draw(cube_mesh_, at({corner.x, 1.5f, corner.y}, {0.5f, 3.0f, 0.5f}), screen_color(0.75f, 0.75f, 0.8f));
@@ -696,13 +1100,10 @@ private:
                 label.color = {1.0f, 0.5f, 0.45f, 1.0f};
             }
             // Above the model, in window pixels: project a point of the world onto the screen.
-            const glm::vec4 clip = camera3d_.view_projection() * glm::vec4(slot + glm::vec3(0.0f, top + 0.3f, 0.0f), 1.0f);
-            if (clip.w > 0.0f) {
-                const glm::vec2 ndc = glm::vec2(clip) / clip.w;
-                const glm::vec2 pixel((ndc.x * 0.5f + 0.5f) * view_size_.x, (0.5f - ndc.y * 0.5f) * view_size_.y);
+            if (const auto pixel = camera.world_to_screen(slot + glm::vec3(0.0f, top + 0.3f, 0.0f))) {
                 const float lines = static_cast<float>(std::count(caption.begin(), caption.end(), '\n') + 1);
                 font_->draw(renderer.screen_sprites(), caption,
-                            pixel - glm::vec2(150.0f, lines * font_->line_height()), label);
+                            *pixel - glm::vec2(150.0f, lines * font_->line_height()), label);
             }
         }
 
@@ -743,10 +1144,25 @@ private:
                           static_cast<double>(camera3d_.distance()));
         }
         font_->draw(screen, text, corner + glm::vec2(0.0f, line), detail);
-        std::snprintf(text, sizeof(text), "%d maillages, %zu triangles, %d draw calls, rendu %ux%u, %d lumières. P : changer de projection",
-                      last_stats_.meshes, last_stats_.triangles, last_stats_.draw_calls, renderer.scene_width(),
-                      renderer.scene_height(), torch_count_ + 1);
+        std::snprintf(text, sizeof(text),
+                      "scène : %d / %d maillages, %zu triangles, %d draw calls ; ombre : %d / %d, %d draw calls ; rendu %ux%u, %d lumières",
+                      last_stats_.meshes, last_stats_.meshes_submitted, last_stats_.triangles, last_stats_.mesh_draw_calls,
+                      last_stats_.shadow_casters, last_stats_.shadow_casters_submitted, last_stats_.shadow_draw_calls,
+                      renderer.scene_width(), renderer.scene_height(), torch_count_ + 1);
         font_->draw(screen, text, corner + glm::vec2(0.0f, 2.0f * line), detail);
+        std::snprintf(text, sizeof(text),
+                      "torches ombrées : %d, recalculées : %d (%d maillages, %d draw calls) ; billboards : %d (%d draw calls)",
+                      last_stats_.point_shadow_lights, last_stats_.point_shadow_updates, last_stats_.point_shadow_casters,
+                      last_stats_.point_shadow_draw_calls, last_stats_.billboards, last_stats_.billboard_draw_calls);
+        font_->draw(screen, text, corner + glm::vec2(0.0f, 3.0f * line), detail);
+        if (has_hovered_tile_) {
+            std::snprintf(text, sizeof(text), "Case (%d, %d) sous la souris. Clic : y aller. F : suivre le personnage (%s). P : projection",
+                          hovered_tile_.x, hovered_tile_.y, follow_ ? "oui" : "non");
+        } else {
+            std::snprintf(text, sizeof(text), "Clic sur le sol : y aller. F : suivre le personnage (%s). P : projection",
+                          follow_ ? "oui" : "non");
+        }
+        font_->draw(screen, text, corner + glm::vec2(0.0f, 4.0f * line), detail);
     }
 
     // Every .glb and .gltf file of assets/models/, sorted by name. A model that cannot be loaded is
@@ -841,12 +1257,14 @@ private:
 
 public:
     // Settings of the running test, shown by the menu in its panel (ImGui).
-    void draw_controls() {
+    void draw_controls() override {
         if (!options_.render3d) {
             return;
         }
         int projection = camera3d_.projection() == moteur::Projection::Orthographic ? 0 : 1;
         ImGui::SeparatorText("Caméra");
+        ImGui::Checkbox("Suivre le personnage (F)", &follow_);
+        ImGui::Checkbox("Rayon de la souris", &show_ray_);
         if (ImGui::RadioButton("Orthographique", &projection, 0)) {
             camera3d_.set_projection(moteur::Projection::Orthographic);
         }
@@ -890,6 +1308,40 @@ public:
         ImGui::SliderFloat("Direction du soleil (°)", &sun_yaw_, 0.0f, 360.0f, "%.0f");
         ImGui::SliderInt("Torches", &torch_count_, 0, moteur::MeshRenderer::kMaxPointLights);
         ImGui::SliderFloat("Intensité des torches", &torch_intensity_, 0.0f, 20.0f, "%.1f");
+        ImGui::Checkbox("Torches mobiles", &torches_move_);
+        moteur::ShadowOptions shadows = app_.renderer().meshes().shadows();
+        bool changed = ImGui::Checkbox("Ombres du soleil", &shadows.enabled);
+        static const int kResolutions[] = {1024, 2048, 4096};
+        if (ImGui::BeginCombo("Résolution des ombres", std::to_string(shadows.resolution).c_str())) {
+            for (const int resolution : kResolutions) {
+                if (ImGui::Selectable(std::to_string(resolution).c_str(), resolution == shadows.resolution)) {
+                    shadows.resolution = resolution;
+                    changed = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        changed |= ImGui::SliderFloat("Décalage normal (texels)", &shadows.normal_offset, 0.0f, 5.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Biais de profondeur", &shadows.depth_bias, 0.0f, 0.005f, "%.5f",
+                                      ImGuiSliderFlags_Logarithmic);
+        ImGui::Checkbox("Ombres des torches", &torch_shadows_);
+        changed |= ImGui::SliderInt("Torches ombrées (budget)", &shadows.point_budget, 0,
+                                    moteur::MeshRenderer::kMaxShadowedPointLights);
+        static const int kFaceResolutions[] = {256, 512, 1024};
+        if (ImGui::BeginCombo("Résolution par face", std::to_string(shadows.point_resolution).c_str())) {
+            for (const int resolution : kFaceResolutions) {
+                if (ImGui::Selectable(std::to_string(resolution).c_str(), resolution == shadows.point_resolution)) {
+                    shadows.point_resolution = resolution;
+                    changed = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        changed |= ImGui::SliderFloat("Décalage normal torches", &shadows.point_normal_offset, 0.0f, 5.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Biais torches (m)", &shadows.point_depth_bias, 0.0f, 0.2f, "%.3f");
+        if (changed) {
+            app_.renderer().meshes().set_shadows(shadows);
+        }
         ImGui::PopItemWidth();
         ImGui::SeparatorText("Rendu");
         ImGui::PushItemWidth(200.0f);
@@ -897,11 +1349,50 @@ public:
         if (ImGui::SliderFloat("Résolution de rendu", &scale, 0.25f, 1.0f, "%.2f")) {
             app_.renderer().set_render_scale(scale);
         }
+        anti_aliasing_combo(app_.renderer());
         float exposure = app_.renderer().exposure();
         if (ImGui::SliderFloat("Exposition", &exposure, 0.1f, 8.0f, "%.2f", ImGuiSliderFlags_Logarithmic)) {
             app_.renderer().set_exposure(exposure);
         }
+        if (ImGui::SliderInt("Objets de charge", &stress_count_, 0, 50000, "%d", ImGuiSliderFlags_Logarithmic)) {
+            build_stress_objects();
+        }
+        bool culling = app_.renderer().meshes().culling();
+        if (ImGui::Checkbox("Frustum culling", &culling)) {
+            app_.renderer().meshes().set_culling(culling);
+        }
         ImGui::PopItemWidth();
+        if (ImGui::BeginTable("passes", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
+            ImGui::TableSetupColumn("Passe");
+            ImGui::TableSetupColumn("Soumis");
+            ImGui::TableSetupColumn("Dessinés");
+            ImGui::TableSetupColumn("Triangles");
+            ImGui::TableSetupColumn("Draw calls");
+            ImGui::TableHeadersRow();
+            const auto row = [](const char* name, int submitted, int drawn, std::size_t triangles, int calls) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(name);
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", submitted);
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", drawn);
+                ImGui::TableNextColumn();
+                ImGui::Text("%zu", triangles);
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", calls);
+            };
+            row("Scène", last_stats_.meshes_submitted, last_stats_.meshes, last_stats_.triangles, last_stats_.mesh_draw_calls);
+            row("Ombre", last_stats_.shadow_casters_submitted, last_stats_.shadow_casters, last_stats_.shadow_triangles,
+                last_stats_.shadow_draw_calls);
+            row("Torches", last_stats_.point_shadow_lights, last_stats_.point_shadow_casters,
+                last_stats_.point_shadow_triangles, last_stats_.point_shadow_draw_calls);
+            row("Billboards", last_stats_.billboards, last_stats_.billboards,
+                static_cast<std::size_t>(last_stats_.billboards) * 2, last_stats_.billboard_draw_calls);
+            ImGui::EndTable();
+        }
+        ImGui::Text("Torches : %d ombrées, %d recalculées cette frame", last_stats_.point_shadow_lights,
+                    last_stats_.point_shadow_updates);
         if (ImGui::Button("Réglage retenu")) {
             const moteur::Camera3D chosen;  // the defaults are the chosen framing
             camera3d_.set_projection(chosen.projection());
@@ -1129,7 +1620,29 @@ private:
     moteur::Mesh cube_mesh_;
     moteur::Mesh tile_mesh_;
     moteur::Mesh sphere_mesh_;
+    moteur::Mesh small_sphere_mesh_;  // few triangles, for the stress test
+    std::vector<StressObject> stress_objects_;
+    int stress_count_ = 0;
+    float stress_half_size_ = 0.0f;
     float spin_ = 0.0f;  // seconds of rotation of the spinning cube
+    moteur::Camera3D drawn_camera3d_;       // the camera of the last frame drawn
+    glm::vec3 character_{0.5f, 0.0f, 0.5f};  // where the character box stands (its feet)
+    glm::vec3 previous_character_{0.5f, 0.0f, 0.5f};  // at the previous tick, for interpolation
+    std::vector<Creature3D> creatures3d_;
+    std::vector<FloatingNumber> floating_numbers_;
+    Random hit_random_{777};
+    float tick_seconds_ = 1.0f / 60.0f;  // length of a logic tick, for what moves between ticks
+    struct StressBillboard {
+        glm::vec3 position;
+        glm::vec3 color;
+    };
+    std::vector<StressBillboard> stress_billboards_;
+    moteur::Texture glow_texture_;
+    moteur::Texture card_texture_;
+    moteur::Texture white_texture_;
+    std::optional<glm::vec3> goal_;          // where it walks to, after a click
+    bool follow_ = false;                    // the camera follows the character
+    bool show_ray_ = false;                  // debug line: the ray under the mouse
     struct NamedEnvironment {
         std::string name;
         moteur::Environment environment;
@@ -1142,6 +1655,8 @@ private:
     float sun_yaw_ = 60.0f;        // degrees around the vertical axis, from +X towards +Z
     int torch_count_ = 16;
     float torch_intensity_ = 6.0f;
+    bool torches_move_ = true;
+    bool torch_shadows_ = true;  // PointLight::casts_shadows of every torch
     std::vector<ShownModel> models_;
 
     // Text scene.
@@ -1176,6 +1691,7 @@ public:
         demo.demo = true;
         demo.map_size = 100;
         demo.movers = 3000;
+        Demo3D::Options demo3d;  // its defaults are the demonstration's
 
         tests_ = {
             {"Sprites et test de charge",
@@ -1202,6 +1718,15 @@ public:
              "Sol en damier (cases de 1 m), cubes, sphère, personnage (1,8 m), piliers de 3 m, et les "
              "modèles glTF de assets/models. P change de projection ; réglages dans le panneau.",
              TestKind::Render3D, render3d},
+            {"Démo 3D",
+             "La carte de la démo 2D construite en 3D : murs, décor, créatures qui font demi-tour devant "
+             "les murs, soleil et torches avec ombres, barres de vie. Clic droit : choisir une créature, "
+             "clic gauche : l'envoyer, Tab : la suivante, F : la suivre.",
+             TestKind::Demo3D, {}, demo3d},
+            {"Comparaison avec Blender",
+             "Les modèles de test et deux sphères, éclairés par l'environnement de test seul, face à une "
+             "caméra fixe : la même scène que tools/blender/compare_render.py rend dans Blender.",
+             TestKind::BlenderCompare, {}, {}},
         };
     }
 
@@ -1228,6 +1753,7 @@ public:
         // Scenes are created and destroyed here, outside of any frame: loading uploads textures
         // and waits for the GPU, and a scene's textures may be in use by the frame being recorded.
         apply_request();
+        last_stats_ = app_.renderer().stats();  // of the frame just drawn (reset when a frame begins)
         if (scene_) {
             scene_->update(dt);
             if (scene_->stop_requested()) {
@@ -1239,6 +1765,9 @@ public:
     void render(moteur::Renderer& renderer, double alpha) override {
         if (scene_) {
             scene_->render(renderer, alpha);
+            if (debug_axes_) {
+                renderer.debug_lines().lines().axes({0.0f, 0.0f, 0.0f}, 2.0f);  // with the scene's camera
+            }
         } else {
             renderer.set_clear_color(0.08f, 0.09f, 0.11f);
         }
@@ -1257,13 +1786,14 @@ public:
 private:
     enum class Screen { Home, Tests, Running };
     enum class Action { None, ShowHome, ShowTests, Launch };
-    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D };
+    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare };
 
     struct TestEntry {
         const char* name;
         const char* description;
         TestKind kind;
         TestScene::Options options;
+        Demo3D::Options demo3d = {};  // for TestKind::Demo3D
     };
 
     void request(Action action, int test = -1) {
@@ -1289,7 +1819,13 @@ private:
                 scene_.reset();  // the previous test, if any, releases its resources first
                 try {
                     const TestEntry& test = tests_[static_cast<std::size_t>(action_test_)];
-                    scene_ = std::make_unique<TestScene>(app_, test.options, false);
+                    if (test.kind == TestKind::Demo3D) {
+                        scene_ = std::make_unique<Demo3D>(app_, test.demo3d, false);
+                    } else if (test.kind == TestKind::BlenderCompare) {
+                        scene_ = std::make_unique<BlenderCompare>(app_, BlenderCompare::Options{}, false);
+                    } else {
+                        scene_ = std::make_unique<TestScene>(app_, test.options, false);
+                    }
                     running_ = action_test_;
                     screen_ = Screen::Running;
                     error_.clear();
@@ -1395,6 +1931,10 @@ private:
         for (const Credits::Entry& entry : credits_.models) {
             draw_credit(entry);
         }
+        ImGui::SeparatorText("Environnement de test");
+        for (const Credits::Entry& entry : credits_.environments) {
+            draw_credit(entry);
+        }
         ImGui::End();
     }
 
@@ -1495,8 +2035,16 @@ private:
                 case TestKind::Render3D:
                     ImGui::Checkbox("Commencer en orthographique", &options.orthographic);
                     break;
+                case TestKind::Demo3D:
+                    ImGui::SliderInt("Créatures", &test.demo3d.creatures, 0, 5000);
+                    ImGui::SliderInt("Objets de décor", &test.demo3d.decor, 0, 30000);
+                    ImGui::SliderInt("Taille de la carte", &test.demo3d.map_size, 20, 400);
+                    ImGui::InputScalar("Graine", ImGuiDataType_U32, &test.demo3d.seed);
+                    ImGui::Checkbox("Sol fusionné par blocs de 10 x 10 (sinon une case par instance)", &test.demo3d.merged_floor);
+                    break;
                 case TestKind::Atlas:
                 case TestKind::Text:
+                case TestKind::BlenderCompare:
                     break;  // nothing to set
             }
             ImGui::PopItemWidth();
@@ -1506,6 +2054,46 @@ private:
             ImGui::PopID();
         }
         ImGui::End();
+    }
+
+    // Debug views of the renderer, for any 3D test (milestone 3, part 12).
+    void draw_debug_controls() {
+        moteur::Renderer& renderer = app_.renderer();
+        moteur::MeshRenderer& meshes = renderer.meshes();
+        if (!ImGui::CollapsingHeader("Débogage")) {
+            return;
+        }
+        ImGui::PushItemWidth(200.0f);
+        static const char* const kViews[] = {"Éclairé", "Fil de fer", "Normales", "Couleur de base", "Distance"};
+        int view = static_cast<int>(meshes.view());
+        if (ImGui::Combo("Vue", &view, kViews, IM_ARRAYSIZE(kViews))) {
+            meshes.set_view(static_cast<moteur::MeshView>(view));
+        }
+        static const char* const kTextures[] = {"Aucune", "Carte d'ombre du soleil", "Atlas des ombres des torches"};
+        int texture = static_cast<int>(renderer.debug_texture());
+        if (ImGui::Combo("Texture affichée", &texture, kTextures, IM_ARRAYSIZE(kTextures))) {
+            renderer.set_debug_texture(static_cast<moteur::DebugTexture>(texture));
+        }
+        ImGui::PopItemWidth();
+        moteur::MeshDebug debug = meshes.debug();
+        bool changed = ImGui::Checkbox("Boîtes englobantes", &debug.bounds);
+        changed |= ImGui::Checkbox("Zone de l'ombre du soleil", &debug.shadow_frustum);
+        changed |= ImGui::Checkbox("Portée des lumières", &debug.lights);
+        if (changed) {
+            meshes.set_debug(debug);
+        }
+        ImGui::Checkbox("Axes du repère (X rouge, Y vert, Z bleu)", &debug_axes_);
+        bool timing = renderer.gpu_timing();
+        if (ImGui::Checkbox("Temps GPU par passe (ralentit)", &timing)) {
+            renderer.set_gpu_timing(timing);
+        }
+        if (last_stats_.gpu_timed) {
+            const float* g = last_stats_.gpu_ms;
+            ImGui::Text("GPU (ms) : envois %.2f, ombre %.2f, torches %.2f, scène %.2f, composition %.2f",
+                        static_cast<double>(g[moteur::kGpuUpload]), static_cast<double>(g[moteur::kGpuShadow]),
+                        static_cast<double>(g[moteur::kGpuPointShadows]), static_cast<double>(g[moteur::kGpuScene]),
+                        static_cast<double>(g[moteur::kGpuCompose]));
+        }
     }
 
     // A small panel over the running test, in the bottom left corner, which the scenes leave free.
@@ -1521,6 +2109,7 @@ private:
         ImGui::TextDisabled("%.0f FPS - Échap pour arrêter", static_cast<double>(ImGui::GetIO().Framerate));
         if (scene_) {
             scene_->draw_controls();
+            draw_debug_controls();
         }
         if (ImGui::Button("Arrêter le test")) {
             request(Action::ShowTests);
@@ -1537,7 +2126,9 @@ private:
     double elapsed_ = 0.0;
     std::vector<TestEntry> tests_;
     Screen screen_ = Screen::Home;
-    std::unique_ptr<TestScene> scene_;  // the running test, if any
+    std::unique_ptr<SandboxScene> scene_;  // the running test, if any
+    bool debug_axes_ = false;
+    moteur::RenderStats last_stats_;
     int running_ = -1;                  // its index in tests_
     Action action_ = Action::None;      // asked by the interface, done by the next update()
     int action_test_ = -1;
@@ -1558,6 +2149,16 @@ int main(int argc, char** argv) {
     bool report = false;
     bool map_explicit = false;
     bool sprites_explicit = false;
+    bool demo3d = false;
+    Demo3D::Options demo3d_options;
+    bool blender_compare = false;
+    // Debug views (milestone 3, part 12).
+    moteur::MeshView debug_view = moteur::MeshView::Lit;
+    moteur::DebugTexture debug_texture = moteur::DebugTexture::None;
+    moteur::MeshDebug mesh_debug;
+    bool gpu_timing = false;
+    moteur::AntiAliasing anti_aliasing = moteur::AntiAliasing::None;
+    glm::ivec2 pixel_size(0);
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         const bool has_one = i + 1 < argc;
@@ -1596,6 +2197,61 @@ int main(int argc, char** argv) {
             options.render3d = true;
         } else if (arg == "--ortho") {
             options.orthographic = true;
+        } else if (arg == "--sun" && has_two) {
+            options.has_sun = true;
+            options.sun = {static_cast<float>(std::strtod(argv[i + 1], nullptr)),
+                           static_cast<float>(std::strtod(argv[i + 2], nullptr))};
+        } else if (arg == "--view" && has_one) {
+            const std::string_view name = argv[i + 1];
+            debug_view = name == "wireframe" ? moteur::MeshView::Wireframe
+                         : name == "normals" ? moteur::MeshView::Normals
+                         : name == "albedo"  ? moteur::MeshView::BaseColor
+                         : name == "distance" ? moteur::MeshView::Distance
+                                             : moteur::MeshView::Lit;
+        } else if (arg == "--debug-texture" && has_one) {
+            const std::string_view name = argv[i + 1];
+            debug_texture = name == "sun" ? moteur::DebugTexture::SunShadowMap
+                            : name == "points" ? moteur::DebugTexture::PointShadowAtlas
+                                               : moteur::DebugTexture::None;
+        } else if (arg == "--show-ray") {
+            options.show_ray = true;
+        } else if (arg == "--show-bounds") {
+            mesh_debug.bounds = true;
+        } else if (arg == "--show-lights") {
+            mesh_debug.lights = true;
+        } else if (arg == "--show-shadow-frustum") {
+            mesh_debug.shadow_frustum = true;
+        } else if (arg == "--aa" && has_one) {
+            if (!moteur::parse_anti_aliasing(argv[i + 1], anti_aliasing)) {
+                std::cerr << "--aa: expected none, fxaa, msaa2 or msaa4, got " << argv[i + 1] << '\n';
+                return 1;
+            }
+        } else if (arg == "--gpu-timing") {
+            gpu_timing = true;
+        } else if (arg == "--blender-compare") {
+            blender_compare = true;
+        } else if (arg == "--demo3d") {
+            demo3d = true;
+        } else if (arg == "--creatures" && has_one) {
+            demo3d_options.creatures = std::max(0, std::atoi(argv[i + 1]));
+        } else if (arg == "--decor" && has_one) {
+            demo3d_options.decor = std::max(0, std::atoi(argv[i + 1]));
+        } else if (arg == "--tile-floor") {
+            demo3d_options.merged_floor = false;
+        } else if (arg == "--pixel-size" && has_two) {
+            pixel_size = {std::atoi(argv[i + 1]), std::atoi(argv[i + 2])};
+        } else if (arg == "--billboards" && has_one) {
+            options.stress_billboards = std::max(0, std::atoi(argv[i + 1]));
+        } else if (arg == "--night") {
+            options.night = true;
+        } else if (arg == "--fixed-torches") {
+            options.fixed_torches = true;
+        } else if (arg == "--point-shadows" && has_one) {
+            options.point_budget = std::max(0, std::atoi(argv[i + 1]));
+        } else if (arg == "--no-culling") {
+            options.no_culling = true;
+        } else if (arg == "--meshes" && has_one) {
+            options.stress_meshes = std::max(0, std::atoi(argv[i + 1]));
         } else if (arg == "--render-scale" && has_one) {
             options.render_scale = static_cast<float>(std::strtod(argv[i + 1], nullptr));
         } else if (arg == "--view-height" && has_one) {
@@ -1636,15 +2292,53 @@ int main(int argc, char** argv) {
         config.title = "bac a sable";
         config.vsync = vsync;
         config.report_performance = report;
+        config.gpu_timing = gpu_timing;
+        config.pixel_width = pixel_size.x;
+        config.pixel_height = pixel_size.y;
         if (menu) {
             config.debug_ui = true;
             config.debug_ui_font = moteur::asset_path("fonts/Inter-Regular.ttf");  // accents
         }
 
         moteur::Application app(config);
+        app.renderer().meshes().set_view(debug_view);
+        app.renderer().meshes().set_debug(mesh_debug);
+        app.renderer().set_debug_texture(debug_texture);
+        app.renderer().set_anti_aliasing(anti_aliasing);
         if (menu) {
             Sandbox sandbox(app, options.run_seconds);
             app.run(sandbox);
+            return 0;
+        }
+        if (blender_compare) {
+            BlenderCompare::Options compare_options;
+            compare_options.capture_path = options.capture_path;
+            compare_options.run_seconds = options.run_seconds;
+            BlenderCompare compare(app, compare_options, true);
+            app.run(compare);
+            return 0;
+        }
+        if (demo3d) {
+            demo3d_options.seed = options.seed;
+            if (map_explicit) {
+                demo3d_options.map_size = options.map_size;
+            }
+            demo3d_options.freeze_after_ticks = options.freeze_after_ticks;
+            demo3d_options.capture_path = options.capture_path;
+            demo3d_options.run_seconds = options.run_seconds;
+            demo3d_options.no_input = options.no_input;
+            demo3d_options.fake_mouse = options.fake_mouse;
+            demo3d_options.fake_mouse_position = options.fake_mouse_position;
+            demo3d_options.point_budget = options.point_budget;
+            Demo3D game(app, demo3d_options, true);
+            app.run(game);
+            std::cout << "simulated " << game.elapsed() << " s in " << game.ticks() << " ticks, " << game.frames()
+                      << " frames\n";
+            if (const auto cell = game.hovered_cell()) {
+                std::cout << "hovered cell: " << cell->x << " " << cell->y << '\n';
+            } else {
+                std::cout << "hovered cell: none\n";
+            }
             return 0;
         }
         TestScene game(app, options, true);
@@ -1652,7 +2346,7 @@ int main(int argc, char** argv) {
 
         std::cout << "simulated " << game.elapsed() << " s in " << game.ticks() << " ticks, "
                   << game.frames() << " frames\n";
-        if (options.iso) {
+        if (options.iso || options.render3d) {
             if (game.has_hovered_tile()) {
                 std::cout << "hovered tile: " << game.hovered_tile().x << " " << game.hovered_tile().y << '\n';
             } else {

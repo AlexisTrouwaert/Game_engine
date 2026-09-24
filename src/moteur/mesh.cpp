@@ -92,15 +92,6 @@ void compute_tangents(MeshData& mesh) {
     genTangSpaceDefault(&context);
 }
 
-void Aabb::add(glm::vec3 point) {
-    if (empty()) {
-        min = max = point;
-        return;
-    }
-    min = glm::min(min, point);
-    max = glm::max(max, point);
-}
-
 Aabb MeshData::bounds() const {
     Aabb box;
     for (const Vertex3D& vertex : vertices) {

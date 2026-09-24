@@ -17,3 +17,5 @@ Thumbs.db
 # Test models downloaded by tools/models/fetch_test_models.py (CC0, about 11 MB), kept
 # out of Git until Git LFS is decided
 assets/models/polyhaven/
+# Test environment (HDRI) downloaded by the same script (CC0, about 1.6 MB)
+assets/environments/

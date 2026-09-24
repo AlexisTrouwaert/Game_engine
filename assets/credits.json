@@ -50,6 +50,15 @@
       "license_file": "licenses/cgltf.txt"
     },
     {
+      "name": "WinPixEventRuntime",
+      "version": "1.0.240308001",
+      "license": "MIT",
+      "copyright": "Copyright (c) Microsoft Corporation",
+      "url": "https://devblogs.microsoft.com/pix/winpixeventruntime/",
+      "license_file": "licenses/winpixevent.txt",
+      "platform": "windows"
+    },
+    {
       "name": "MikkTSpace",
       "version": "2020-10-06",
       "license": "zlib",
@@ -65,6 +74,16 @@
       "copyright": "Copyright 2020 The Inter Project Authors",
       "url": "https://rsms.me/inter",
       "license_file": "assets/fonts/Inter-OFL.txt"
+    }
+  ],
+  "environments": [
+    {
+      "name": "Studio Small 09",
+      "authors": "Sergej Majboroda",
+      "license": "CC0",
+      "source": "Poly Haven",
+      "url": "https://polyhaven.com/a/studio_small_09",
+      "file": "assets/environments/studio_small_09_1k.hdr"
     }
   ],
   "models": [

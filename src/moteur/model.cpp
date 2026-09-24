@@ -193,14 +193,10 @@ Image read_image(const cgltf_image& image, const std::string& base_directory, co
 Aabb ModelData::bounds() const {
     Aabb box;
     for (const ModelPart& part : parts) {
-        const Aabb local = part.mesh.bounds();
-        if (local.empty()) {
-            continue;
-        }
-        for (int corner = 0; corner < 8; ++corner) {
-            const glm::vec3 point((corner & 1) ? local.max.x : local.min.x, (corner & 2) ? local.max.y : local.min.y,
-                                  (corner & 4) ? local.max.z : local.min.z);
-            box.add(glm::vec3(part.transform * glm::vec4(point, 1.0f)));
+        const Aabb moved = transform_box(part.mesh.bounds(), part.transform);
+        if (!moved.empty()) {
+            box.add(moved.min);
+            box.add(moved.max);
         }
     }
     return box;

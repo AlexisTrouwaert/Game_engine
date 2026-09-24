@@ -268,6 +268,43 @@ Performance en Release (Metal, M4 Pro, temps CPU en ms) :
 
 Coût d'un draw call sous Metal, estimé sur la phase `submit` : environ **30 à 80 ns** (27 ns à 40 000 sprites, 80 ns à 10 000 ; mesure bruitée), contre 15 à 17 ns sous Direct3D 12. Le batching reste donc indispensable, mais les chiffres avec batching sont équivalents à ceux de Windows.
 
+## Jalon 3 : Rendu 3D
+
+Tout le jalon 3 a été construit et vérifié **sous Windows seulement** (RTX 4070 Ti SUPER, écran 165 Hz). Ces points ferment le jalon ; la machine visée est un **M3** (M4 préférable), à **60 FPS** minimum. Avant tout : `python3 tools/models/fetch_test_models.py` (les modèles de test ne sont pas dans Git) et vérifier que `shaders/generated/msl/` contient `fxaa.frag.msl`, `billboard.*`, `debug_line.*`, `depth_view.frag.msl`, `shadow*`, `point_shadow.*` (exportés sous Windows).
+
+**Démarrage et formats**
+
+- [ ] Tests unitaires : **198** cas, en Debug et en Release.
+- [ ] La ligne `GPU:` : `backend=metal`, et relever `depth=` (Windows : `D32_FLOAT`), `bc7=` et `bc5=`. **Les deux doivent valoir `yes`** : c'est l'hypothèse de la décision sur la compression des textures (BC7 / BC5 sur les deux OS). Si l'un vaut `no`, la décision est à revoir (ASTC).
+- [ ] Build Debug : aucun avertissement de compilation, aucune erreur Metal dans la console dans les scènes ci-dessous.
+
+**Rendu**
+
+- [ ] Scène « Rendu 3D » (`--3d`) : modèles Poly Haven et modèle de référence à leur taille, avec leurs textures ; sphère éclairée (dégradé et reflet aux mêmes endroits que sous Windows) ; dégradé de gris identique ; ombres du soleil sans acné ni scintillement (`--sun 235 40`).
+- [ ] Caméra sur Retina : la case sous la souris est juste aux quatre coins, à plusieurs zooms ; suivi (F) et déplacement.
+- [ ] Nuit et torches : `--3d --night --point-shadows 8 --billboards 200` : ombres des torches, billboards cachés par les maillages, pas d'erreur.
+- [ ] Vues de debug : `--view wireframe|normals|albedo|distance`, `--show-bounds --show-lights --show-shadow-frustum`, et surtout **`--debug-texture sun`** et **`--debug-texture points`** (le shader lit la profondeur en `texture2d<float>` sous Metal : risque propre au Mac).
+- [ ] Anticrénelage : `--aa fxaa`, `--aa msaa2`, `--aa msaa4`, et la liste du panneau « Rendu » changée pendant que la démo tourne : bords lisses, aucun mode grisé, aucune erreur.
+- [ ] Captures du Xcode (débogueur Metal) : les groupes `shadow`, `point shadows`, `scene`, `tonemap` (FXAA), `compose`.
+
+**Démo 3D et performance** (Release, `--no-vsync --report`)
+
+- [ ] `--demo3d` tient la cadence de l'écran (Windows : 165 Hz).
+- [ ] `--demo3d --creatures 1000 --decor 10000` : relever le temps CPU (Windows : 2,4 ms) et les FPS ; au moins 60.
+- [ ] `--3d --meshes 10000` : relever le temps CPU (Windows : 1,2 ms pour 10 000 objets).
+- [ ] 4 torches ombrées : coût relevé (Windows : +0,04 ms de CPU, environ 5 % de FPS).
+- [ ] `--gpu-timing` pour chaque `--aa` (Windows, total GPU : 2,04 / 2,45 / 2,30 / 2,40 ms pour aucun / FXAA / MSAA 2× / MSAA 4×).
+- [ ] Si les 60 FPS ne tiennent pas : essayer « Résolution de rendu » à 0,75 puis 0,5 et relever.
+
+**Capture comparée à taille égale**
+
+```
+bac_a_sable --demo3d --seed 42 --freeze-after 60 --no-input --run-seconds 3 --pixel-size 1280 720 --capture demo3d_mac.png
+```
+
+- [ ] Deux lancements donnent le même fichier.
+- [ ] Comparer à la capture Windows (`5fef643792bf`, 1280×720) : identique, ou différences expliquées (arrondis des GPU, filtrage). *`--run-seconds` est indispensable : `--freeze-after` fige la scène sans quitter.*
+
 ## Après le Mac : les tests qui restent à faire
 
 Ces points ne sont **pas vérifiés non plus sous Windows**. Ils ne dépendent pas du Mac.
@@ -296,7 +333,8 @@ Le jalon 1 et toutes les parties du jalon 2 sont faites, les parties 6 (animatio
 - [ ] Les tests unitaires : **135** cas (dont 21 nouveaux : `test_animation.cpp`, `test_tilemap.cpp`), en Debug et en Release.
 - [ ] `--demo` : les créatures marchent (les jambes bougent, chacune à son rythme), sont retournées quand elles vont vers la gauche, font demi-tour devant les murs, et le compteur « pas (événements d'animation) » augmente.
 - [ ] **Menu** : lancer `bac_a_sable` sans argument. vcpkg compile d'abord Dear ImGui (nouvelle dépendance). Vérifier : barre DEBUG > Tests moteur (sous-menu), accents lisibles et nets sur Retina, chaque scène se lance et s'arrête (bouton et Échap), **Accueil** revient à l'accueil, aucune erreur Metal dans la console.
-- [ ] **Modèles 3D** : `python3 tools/models/fetch_test_models.py`, puis la scène « Rendu 3D » : le modèle de référence et les quatre modèles Poly Haven s'affichent avec leurs textures, à leur taille ; les shaders `mesh` (PBR) et `tonemap` utilisent le MSL exporté ; la grille de sphères et les dômes en relief du modèle de référence ont le même aspect que sous Windows ; couleurs comparables à Windows ; le curseur « Résolution de rendu » du panneau change la netteté de la 3D mais pas celle du texte (c'est lui qui doit donner de la marge sur un M3). **Aide > À propos** liste les licences.
+- [ ] **Modèles 3D** : `python3 tools/models/fetch_test_models.py`, puis la scène « Rendu 3D » : le modèle de référence et les quatre modèles Poly Haven s'affichent avec leurs textures, à leur taille ; les shaders `mesh` (PBR), `tonemap` et `shadow` utilisent le MSL exporté ; avec `--sun 235 40`, les ombres partent de la base des objets, sans acné, et ne scintillent pas quand la caméra bouge ; relever le format de la carte d'ombre (D32 ou D16) ; la grille de sphères et les dômes en relief du modèle de référence ont le même aspect que sous Windows ; couleurs comparables à Windows ; le curseur « Résolution de rendu » du panneau change la netteté de la 3D mais pas celle du texte (c'est lui qui doit donner de la marge sur un M3). **Aide > À propos** liste les licences.
+- [ ] **Anticrénelage** (jalon 3, partie 12 bis) : dans la démo 3D, `--aa fxaa`, `--aa msaa2` et `--aa msaa4` (et la liste « Anticrénelage » du panneau « Rendu », à changer pendant que la scène tourne) : les bords des murs deviennent lisses, aucune erreur Metal ; aucun mode grisé dans la liste. Relever les temps avec `--gpu-timing --no-vsync --report` pour chaque mode (Windows : total 2,04 / 2,45 / 2,30 / 2,40 ms).
 - [ ] `--demo --seed 42 --freeze-after 30 --no-input --capture demo.png` : deux lancements donnent le même fichier. Sous Windows (1280×720) : `bd91e8b2c616`. Le Mac capture en 2560×1440, donc les deux fichiers ne peuvent pas être identiques ; comparer à l'œil.
 
 Ensuite, place au jalon 3D.

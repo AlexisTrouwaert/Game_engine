@@ -3,11 +3,9 @@
 
 using namespace metal;
 
-struct type_Object
+struct type_Frame
 {
     float4x4 view_projection;
-    float4x4 world;
-    float4x4 normal_matrix;
 };
 
 struct main0_out
@@ -16,6 +14,9 @@ struct main0_out
     float3 out_var_TEXCOORD1 [[user(locn1)]];
     float4 out_var_TEXCOORD2 [[user(locn2)]];
     float2 out_var_TEXCOORD3 [[user(locn3)]];
+    float4 out_var_TEXCOORD4 [[user(locn4)]];
+    float4 out_var_TEXCOORD5 [[user(locn5)]];
+    float4 out_var_TEXCOORD6 [[user(locn6)]];
     float4 gl_Position [[position]];
 };
 
@@ -25,17 +26,32 @@ struct main0_in
     float3 in_var_TEXCOORD1 [[attribute(1)]];
     float2 in_var_TEXCOORD2 [[attribute(2)]];
     float4 in_var_TEXCOORD3 [[attribute(3)]];
+    float4 in_var_TEXCOORD4 [[attribute(4)]];
+    float4 in_var_TEXCOORD5 [[attribute(5)]];
+    float4 in_var_TEXCOORD6 [[attribute(6)]];
+    float4 in_var_TEXCOORD7 [[attribute(7)]];
+    float4 in_var_TEXCOORD8 [[attribute(8)]];
+    float4 in_var_TEXCOORD9 [[attribute(9)]];
+    float4 in_var_TEXCOORD10 [[attribute(10)]];
+    float4 in_var_TEXCOORD11 [[attribute(11)]];
+    float4 in_var_TEXCOORD12 [[attribute(12)]];
 };
 
-vertex main0_out main0(main0_in in [[stage_in]], constant type_Object& Object [[buffer(0)]])
+vertex main0_out main0(main0_in in [[stage_in]], constant type_Frame& Frame [[buffer(0)]])
 {
     main0_out out = {};
-    float4 _47 = Object.world * float4(in.in_var_TEXCOORD0, 1.0);
-    out.out_var_TEXCOORD0 = _47.xyz;
-    out.out_var_TEXCOORD1 = in.in_var_TEXCOORD1 * float3x3(float4(Object.normal_matrix[0][0], Object.normal_matrix[1][0], Object.normal_matrix[2][0], Object.normal_matrix[3][0]).xyz, float4(Object.normal_matrix[0][1], Object.normal_matrix[1][1], Object.normal_matrix[2][1], Object.normal_matrix[3][1]).xyz, float4(Object.normal_matrix[0][2], Object.normal_matrix[1][2], Object.normal_matrix[2][2], Object.normal_matrix[3][2]).xyz);
-    out.out_var_TEXCOORD2 = float4(in.in_var_TEXCOORD3.xyz * float3x3(float4(Object.world[0][0], Object.world[1][0], Object.world[2][0], Object.world[3][0]).xyz, float4(Object.world[0][1], Object.world[1][1], Object.world[2][1], Object.world[3][1]).xyz, float4(Object.world[0][2], Object.world[1][2], Object.world[2][2], Object.world[3][2]).xyz), in.in_var_TEXCOORD3.w);
+    float4 _62 = float4(in.in_var_TEXCOORD0, 1.0);
+    float _63 = dot(in.in_var_TEXCOORD4, _62);
+    float _64 = dot(in.in_var_TEXCOORD5, _62);
+    float _65 = dot(in.in_var_TEXCOORD6, _62);
+    out.out_var_TEXCOORD0 = float3(_63, _64, _65);
+    out.out_var_TEXCOORD1 = float3(dot(in.in_var_TEXCOORD7.xyz, in.in_var_TEXCOORD1), dot(in.in_var_TEXCOORD8.xyz, in.in_var_TEXCOORD1), dot(in.in_var_TEXCOORD9.xyz, in.in_var_TEXCOORD1));
+    out.out_var_TEXCOORD2 = float4(dot(in.in_var_TEXCOORD4.xyz, in.in_var_TEXCOORD3.xyz), dot(in.in_var_TEXCOORD5.xyz, in.in_var_TEXCOORD3.xyz), dot(in.in_var_TEXCOORD6.xyz, in.in_var_TEXCOORD3.xyz), in.in_var_TEXCOORD3.w);
     out.out_var_TEXCOORD3 = in.in_var_TEXCOORD2;
-    out.gl_Position = Object.view_projection * _47;
+    out.out_var_TEXCOORD4 = in.in_var_TEXCOORD10;
+    out.out_var_TEXCOORD5 = in.in_var_TEXCOORD11;
+    out.out_var_TEXCOORD6 = in.in_var_TEXCOORD12;
+    out.gl_Position = Frame.view_projection * float4(_63, _64, _65, 1.0);
     return out;
 }
 

@@ -64,7 +64,7 @@ build/windows-release/apps/bac_a_sable/bac_a_sable --run-seconds 6 --report --sp
 ```
 
 - `--sprites N` ajoute N sprites qui rebondissent (scène identique à chaque lancement).
-- `--report` écrit à la fermeture les temps CPU par frame (moyenne, percentile 99, maximum, par phase).
+- `--report` écrit à la fermeture les temps CPU par frame (moyenne, percentile 99, maximum, par phase), et pour la 3D, par passe (scène, ombre) : maillages soumis et dessinés, triangles, draw calls.
 - `--no-vsync` retire la limite de l'écran : sans lui, les FPS sont plafonnés à la fréquence de l'écran.
 - `--no-batching` fait un draw call par sprite, pour comparer (l'image est identique).
 - `--depth` enregistre les sprites dans le désordre et les fait trier par hauteur : mesure le coût du tri.
@@ -74,8 +74,16 @@ build/windows-release/apps/bac_a_sable/bac_a_sable --run-seconds 6 --report --sp
 - `--atlas` affiche tous les sprites de l'atlas `test`, chacun à son pivot, puis un personnage de quatre façons (normal, retourné, ×2, retourné ×3).
 - `--text` affiche une phrase française, un paragraphe avec retour à la ligne, les trois alignements, et un compteur de FPS.
 - `--demo` réunit une carte de tuiles (`TileMap`) avec des murs procéduraux, des créatures qui marchent avec leur animation et font demi-tour devant les murs (`--seed` pour leur position/direction) et une superposition de statistiques (FPS, sprites, lots/draw calls, événements d'animation). Voir `moteur_doc/JALON_2_RENDU_2D.md`, parties 6, 7 et 9.
+- `--sun ORIENTATION HAUTEUR` (avec `--3d`) : place le soleil, en degrés (par exemple `--sun 235 40` pour des ombres qui tombent vers la caméra).
+- `--demo3d` : la scène de démonstration 3D (la carte de la démo 2D en 3D, décor, créatures, torches, barres de vie). Avec `--seed N`, `--map N`, `--creatures N` (300), `--decor N` (3 000), `--tile-floor` (une instance par case de sol au lieu de blocs fusionnés, pour comparer). Clic droit : choisir une créature, clic gauche : l'envoyer, Tab : la suivante, F : la suivre. Capture reproductible : `--demo3d --seed 42 --freeze-after 60 --no-input --capture demo3d.png`.
+- `--blender-compare` : les modèles de test et deux sphères éclairés par l'environnement de test seul, la scène que `tools/blender/compare_render.py` rend dans Blender. Avec `--capture image.png`, écrit aussi `image.png.json` pour Blender (voir `moteur_doc/FICHIERS_DU_PROJET.md`).
+- Débogage (avec `--3d` ou `--demo3d`) : `--view wireframe|normals|albedo|distance`, `--debug-texture sun|points` (carte d'ombre à l'écran), `--show-bounds`, `--show-lights`, `--show-shadow-frustum`, `--show-ray` (scène `--3d`), et `--gpu-timing` (temps GPU approximatifs par passe dans `--report` ; ralentit le rendu). Anticrénelage : `--aa none|fxaa|msaa2|msaa4` (aussi dans le panneau « Rendu »). Les mêmes réglages sont dans le panneau « Débogage » du menu.
+- `--pixel-size L H` : la fenêtre a exactement L×H pixels, quelle que soit la densité de l'écran (pour comparer des captures Windows et Mac Retina, par exemple `--pixel-size 1280 720`).
+- `--billboards N` (avec `--3d`) : N halos lumineux en plus au-dessus du sol, pour mesurer les billboards. La scène montre aussi des créatures avec barre de vie, nom et dégâts flottants.
+- `--night` (avec `--3d`) : ni soleil ni ciel, seulement les torches. `--point-shadows N` : nombre de torches ombrées par frame (4 par défaut, 0 pour aucune). `--fixed-torches` : les torches ne tournent plus (leurs ombres sont alors gardées d'une frame à l'autre).
+- `--meshes N` (avec `--3d`) : test de charge 3D, N petits cubes et sphères en plus (2,5 par m², une sur quatre tourne ; mêmes objets à chaque lancement). `--no-culling` envoie tout au GPU, pour comparer. Exemple : `--3d --meshes 10000 --no-vsync --run-seconds 6 --report`.
 - `--render-scale S` (avec `--3d`) : rend la 3D à la fraction S de la fenêtre (0,25 à 1), l'interface restant nette.
-- `--3d` affiche la scène « Rendu 3D » du jalon 3 : un sol, des cubes, une sphère et des piliers vus par la caméra 3D, en perspective (inclinaison 50°, champ 30° : le réglage retenu ; `--ortho` pour commencer en orthographique). **P** change de projection, flèches ou ZQSD déplacent la caméra, la molette zoome.
+- `--3d` affiche la scène « Rendu 3D » du jalon 3 : un sol, des cubes, une sphère et des piliers vus par la caméra 3D, en perspective (inclinaison 50°, champ 30° : le réglage retenu ; `--ortho` pour commencer en orthographique). **P** change de projection, flèches ou ZQSD déplacent la caméra, la molette zoome. La case sous la souris est surlignée ; un clic gauche y envoie le « personnage » (la boîte jaune), **F** fait suivre le personnage par la caméra. Avec `--mouse X Y`, la souris est simulée et la case survolée est écrite à la fermeture.
 - `--capture chemin.png` (avec `--freeze-after N`) écrit la frame gelée en PNG, sur n'importe quelle scène : pour des comparaisons de pixels automatiques et reproductibles (même graine, même capture).
 
 ## Atlas de sprites
@@ -123,7 +131,7 @@ renderer.meshes().draw(model, matrice_monde);
 
 **Modèles de test** : `python tools/models/fetch_test_models.py` télécharge quatre modèles de Poly Haven (CC0, environ 11 Mo) dans `assets/models/polyhaven/`, hors de Git. À relancer sur chaque nouvelle machine.
 
-**Éclairage** : rendu PBR (le matériau de glTF, `moteur::Material`), avec un soleil, jusqu'à 32 lumières ponctuelles par frame et un éclairage d'environnement : un ciel procédural, ou toute image `.hdr` déposée dans `assets/environments/` (la scène « Rendu 3D » les propose dans son panneau).
+**Éclairage** : rendu PBR (le matériau de glTF, `moteur::Material`), avec un soleil qui projette des ombres (réglables avec `MeshRenderer::set_shadows()`), jusqu'à 32 lumières ponctuelles par frame et un éclairage d'environnement : un ciel procédural, ou toute image `.hdr` déposée dans `assets/environments/` (la scène « Rendu 3D » les propose dans son panneau).
 
 Conventions : celles de glTF (main droite, Y vers le haut, mètres). La 3D est calculée en **couleurs linéaires**, rendue en HDR puis convertie pour l'écran (tone mapping PBR Neutral) : les couleurs passées au `MeshRenderer` sont linéaires, `moteur::srgb_to_linear()` convertit une couleur choisie à l'œil. Les textures de couleur des modèles sont en sRGB avec mipmaps. Depuis Blender, exporter en glTF 2.0 avec « +Y vers le haut » (option par défaut). Le modèle de référence `assets/models/reference.glb` (cube de 1 m, flèches des axes, texture en quadrants) se régénère avec `python tools/models/make_reference_model.py`.
 

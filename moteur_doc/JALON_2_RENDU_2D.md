@@ -1236,7 +1236,7 @@ Avantages :
 
 - [x] La scène tourne à la cadence de l'écran avec les statistiques de l'objectif de performance atteintes (voir la partie 1). *`--demo` avec 3 000 créatures + carte 100×100 : 168 FPS avec VSync activé sur la machine de développement (voir le compteur intégré), cohérent avec les mesures de charge de la partie 3 pour un nombre de sprites comparable.*
 - [x] Deux lancements avec la même graine donnent la même capture. *Vérifié par hachage SHA-256 : deux exécutions de `--demo --seed 42 --freeze-after 30` produisent un PNG identique au bit près.*
-- [ ] Les captures de Windows et de Mac sont comparées (identiques ou différences expliquées). *Référence Windows : `--demo --seed 42 --freeze-after 30 --no-input --capture demo.png` → `bd91e8b2c616` (1280×720, stable sur deux lancements ; avec les animations et la carte des parties 6 et 7). Les atlas sont identiques sur les deux OS, mais le Mac capture en 2560×1440 (Retina) : une comparaison au pixel près demande la même résolution en pixels des deux côtés.*
+- [ ] Les captures de Windows et de Mac sont comparées (identiques ou différences expliquées). *Référence Windows : `--demo --seed 42 --freeze-after 30 --no-input --capture demo.png` → `bd91e8b2c616` (1280×720, stable sur deux lancements ; avec les animations et la carte des parties 6 et 7). Les atlas sont identiques sur les deux OS, mais le Mac capture en 2560×1440 (Retina) : une comparaison au pixel près demande la même résolution en pixels des deux côtés. Depuis le jalon 3 (partie 11), `--pixel-size 1280 720` la donne : sur Windows, la capture ne change pas (`bd91e8b2c616`).*
 
 ---
 

@@ -17,6 +17,10 @@
     {
       "name": "sdl3-shadercross",
       "platform": "windows"
+    },
+    {
+      "name": "winpixevent",
+      "platform": "windows"
     }
   ]
 }

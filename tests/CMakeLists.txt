@@ -3,17 +3,22 @@ find_package(doctest CONFIG REQUIRED)
 add_executable(moteur_tests
     main.cpp
     test_animation.cpp
+    test_anti_aliasing.cpp
     test_atlas_builder.cpp
+    test_billboard_batcher.cpp
     test_camera.cpp
     test_camera3d.cpp
     test_color.cpp
+    test_debug_lines.cpp
     test_environment.cpp
     test_fixed_timestep.cpp
     test_iso.cpp
     test_frame_stats.cpp
     test_image.cpp
     test_mesh.cpp
+    test_mesh_batcher.cpp
     test_model.cpp
+    test_shadow.cpp
     test_sprite_batcher.cpp
     test_sprite_region.cpp
     test_text_layout.cpp

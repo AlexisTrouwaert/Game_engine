@@ -38,12 +38,17 @@ moteur/
       include/moteur/sprite_batcher.hpp   en-tête public : tri et lots (sans GPU)
       include/moteur/camera.hpp       en-tête public : caméra 2D (sans GPU)
       include/moteur/iso.hpp          en-tête public : projection isométrique (sans GPU)
-      include/moteur/camera3d.hpp     en-tête public : caméra 3D isométrique (sans GPU)
+      include/moteur/aabb.hpp         en-tête public : boîte englobante alignée sur les axes
+      include/moteur/camera3d.hpp     en-tête public : caméra 3D isométrique, picking, frustum (sans GPU)
       include/moteur/color.hpp        en-tête public : sRGB et tone mapping (sans GPU)
       include/moteur/mesh.hpp         en-tête public : maillages 3D, primitives, tampons GPU
-      include/moteur/mesh_renderer.hpp    en-tête public : dessin des maillages 3D (PBR)
+      include/moteur/billboard_batcher.hpp    en-tête public : tri et sommets des billboards (sans GPU)
+      include/moteur/billboard_renderer.hpp   en-tête public : sprites dans le monde 3D
+      include/moteur/mesh_batcher.hpp     en-tête public : culling et regroupement des maillages (sans GPU)
+      include/moteur/mesh_renderer.hpp    en-tête public : dessin des maillages 3D (PBR, instancié)
       include/moteur/material.hpp     en-tête public : matériau PBR (glTF)
       include/moteur/environment.hpp  en-tête public : éclairage d'environnement (IBL)
+      include/moteur/shadow.hpp       en-tête public : ombres du soleil et des lumières ponctuelles (sans GPU)
       include/moteur/model.hpp        en-tête public : modèles glTF (CPU et GPU)
       include/moteur/tilemap.hpp      en-tête public : carte de tuiles et types de tuiles (sans GPU)
       include/moteur/animation.hpp    en-tête public : clips et lecteur d'animation (sans GPU)
@@ -59,22 +64,28 @@ moteur/
       include/moteur/image.hpp        en-tête public : chargement d'image
       include/moteur/paths.hpp        en-tête public : chemins des ressources
       include/moteur/screenshot.hpp   en-tête public : écriture PNG d'une capture GPU
+      include/moteur/debug_lines.hpp      en-tête public : lignes de debug (boîtes, frustums, axes)
       include/moteur/debug_ui.hpp     en-tête public : interface de debug (Dear ImGui)
       version.cpp                     implémentation
       application.cpp                 fenêtre et boucle de jeu
       renderer.cpp                    périphérique GPU, frame, ressources
       screenshot.cpp                  conversion de pixels bruts en PNG (capture)
+      debug_lines.cpp                 lignes de debug : construction et dessin
       debug_ui.cpp                    ImGui : contexte, backends SDL3 et SDL_GPU
       sprite_renderer.cpp             pipeline de sprites, envoi et draw calls
       sprite_batcher.cpp              tri, sommets et découpe en lots
       camera.cpp                      matrices et conversions de la caméra
       iso.cpp                         conversions grille / monde, plage de tuiles
-      camera3d.cpp                    matrices vue et projection, orthographique ou perspective
+      camera3d.cpp                    matrices, rayon de la souris, frustum, interpolation, suivi
       color.cpp                       conversions sRGB / linéaire, tone mapping PBR Neutral
       tone_mapper.hpp / .cpp          interne : passe plein écran HDR -> écran
       mesh.cpp                        primitives (cube, plan, sphère), boîtes, envoi au GPU
-      mesh_renderer.cpp               pipelines 3D, matériaux, lumières, environnement
+      billboard_batcher.cpp           coins face à la caméra, tri, lots par texture
+      billboard_renderer.cpp          pipeline des billboards, envoi des sommets
+      mesh_batcher.cpp                frustum culling, lots (maillage, textures), données d'instance
+      mesh_renderer.cpp               pipelines 3D, matériaux, lumières, environnement, instances
       environment.cpp                 ciel, lecture .hdr, harmoniques sphériques, préfiltrage
+      shadow.cpp                      cadrage de la carte du soleil, faces, sélection et cache des ombres ponctuelles
       model.cpp                       lecture glTF (cgltf), pièces, matériaux, images, envoi au GPU
       tilemap.cpp                     calques, découpe de plage, cases praticables
       animation.cpp                   lecture des clips, événements, fichier JSON
@@ -91,11 +102,16 @@ moteur/
   apps/
     bac_a_sable/                      exécutable de test
       CMakeLists.txt
-      main.cpp
+      main.cpp                        menu, scènes de test, ligne de commande
+      demo3d.hpp, demo3d.cpp          scène de démonstration 3D
+      blender_compare.hpp, .cpp       scène comparée avec Blender
+      sandbox_scene.hpp               interface des scènes du menu, aléatoire, murs des démos
   tools/
     atlas_packer/                     outil d'empaquetage d'atlas
       CMakeLists.txt
       main.cpp
+    models/                           modèle de référence, téléchargement des assets de test
+    blender/                          rendu Blender de la scène comparée, comparaison d'images
   art/                                sources d'art (les PNG que l'on dessine)
     world/                            le sol isométrique + pivots.json
     test/                             19 images de test (orbes, barres, marche...)
@@ -110,18 +126,30 @@ moteur/
     test_camera3d.cpp                 tests de la caméra 3D
     test_color.cpp                    tests des conversions de couleur
     test_environment.cpp              tests de l'éclairage d'environnement
+    test_shadow.cpp                   tests du cadrage des ombres
     test_mesh.cpp                     tests des primitives 3D
+    test_mesh_batcher.cpp             tests du culling et des lots de maillages
+    test_billboard_batcher.cpp        tests des billboards
+    test_debug_lines.cpp              tests des lignes de debug
     test_model.cpp                    tests de la lecture glTF
     test_tilemap.cpp                  tests de la carte de tuiles
     test_animation.cpp                tests des animations
+    test_anti_aliasing.cpp            tests des noms des modes d'anticrénelage
     test_atlas_builder.cpp            tests de l'empaquetage d'atlas
     test_sprite_region.cpp            tests du placement des sprites d'atlas
     test_image.cpp                    tests de l'alpha pré-multiplié
     test_utf8.cpp                     tests du décodage UTF-8
     test_text_layout.cpp              tests de la mise en page du texte
   shaders/
-    sprite.vert.hlsl                  sources HLSL
+    sprite.vert.hlsl                  sources HLSL : sprites
     sprite.frag.hlsl
+    mesh.vert.hlsl, mesh.frag.hlsl    maillages 3D (PBR)
+    tonemap.vert.hlsl, tonemap.frag.hlsl    passe de composition (tone mapping)
+    fxaa.frag.hlsl                    anticrénelage FXAA
+    shadow.vert.hlsl, shadow.frag.hlsl      ombre du soleil
+    point_shadow.vert.hlsl, point_shadow.frag.hlsl, shadow_clear.vert.hlsl    ombres ponctuelles
+    billboard.vert.hlsl, billboard.frag.hlsl    sprites dans le monde 3D
+    debug_line.vert.hlsl, debug_line.frag.hlsl, depth_view.frag.hlsl    débogage
     generated/msl/                    MSL pré-généré (versionné, utilisé sur macOS)
   assets/
     sprite.png                        image de test (32x32, avec transparence)
@@ -223,7 +251,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 | `name` | Nom du paquet, en minuscules. |
 | `version-string` | Version du projet. Libre, sans effet sur les dépendances. |
 | `builtin-baseline` | Identifiant d'un commit du dépôt vcpkg. Il **épingle les versions** de tous les ports : deux machines avec la même baseline compilent la même version de SDL3. Valeur actuelle : `5f96cd15fd745122cf27e0524606d6c1efc5fd07`. |
-| `dependencies` | Liste des bibliothèques : `sdl3`, `glm` (mathématiques : matrices et vecteurs), `stb` (décodage des PNG), `doctest` (tests unitaires), `nlohmann-json` (description des atlas et des animations), `cgltf` (lecture des modèles glTF), `imgui` avec les fonctionnalités `sdl3-binding` et `sdlgpu3-binding` (interface de debug ; ses shaders sont précompilés pour chaque backend, donc rien à ajouter à la chaîne des shaders), et `sdl3-shadercross` **uniquement sur Windows** (`"platform": "windows"`). Ce dernier apporte l'outil `shadercross`, le compilateur DirectX (DXC) et SPIRV-Cross. Il impose aussi la fonctionnalité `vulkan` de SDL3, sans effet sur le backend choisi. |
+| `dependencies` | Liste des bibliothèques : `sdl3`, `glm` (mathématiques : matrices et vecteurs), `stb` (décodage des PNG), `doctest` (tests unitaires), `nlohmann-json` (description des atlas et des animations), `cgltf` (lecture des modèles glTF), `imgui` avec les fonctionnalités `sdl3-binding` et `sdlgpu3-binding` (interface de debug ; ses shaders sont précompilés pour chaque backend, donc rien à ajouter à la chaîne des shaders), et `sdl3-shadercross` **uniquement sur Windows** (`"platform": "windows"`). Ce dernier apporte l'outil `shadercross`, le compilateur DirectX (DXC) et SPIRV-Cross. Il impose aussi la fonctionnalité `vulkan` de SDL3, sans effet sur le backend choisi. Enfin `winpixevent`, **uniquement sur Windows** : la DLL `WinPixEventRuntime.dll` de Microsoft (MIT), copiée à côté de l'exécutable, grâce à laquelle SDL nomme les passes dans les captures RenderDoc et PIX sous Direct3D 12 (sans elle, rien ne change sauf ces noms). |
 
 **Quand le modifier** : ajouter une bibliothèque (GLM, EnTT, Dear ImGui, nlohmann-json, etc.) ou mettre à jour la baseline.
 
@@ -329,7 +357,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 
 | Élément | Explication |
 |---|---|
-| `ApplicationConfig` | Titre, taille de la fenêtre, fréquence de la logique (`fixed_hz`, 60 par défaut), plafond de rattrapage (`max_frame_time`, 0,25 s), `vsync` (activé par défaut), `gpu_debug` (activé hors Release) et `report_performance` (affiche un résumé des temps CPU à la fin). |
+| `ApplicationConfig` | `gpu_timing` (temps GPU par passe, voir `Renderer::set_gpu_timing`), titre, taille de la fenêtre (en points), `pixel_width` / `pixel_height` (si > 0 : la fenêtre est dimensionnée pour avoir exactement ce nombre de pixels, quelle que soit la densité de l'écran, pour comparer des captures entre machines), fréquence de la logique (`fixed_hz`, 60 par défaut), plafond de rattrapage (`max_frame_time`, 0,25 s), `vsync` (activé par défaut), `gpu_debug` (activé hors Release) et `report_performance` (affiche un résumé des temps CPU à la fin, et les compteurs 3D par passe). |
 | `Game` | Interface que le programme implémente. `update(dt)` est appelé à fréquence fixe avec un `dt` constant. `render(renderer, alpha)` est appelé une fois par frame dessinable et sert à **enregistrer** ce qu'il faut dessiner (`renderer.sprites().draw(...)`) : rien n'est envoyé au GPU tant que la frame n'est pas terminée. `alpha` est l'avancement entre deux mises à jour, pour l'interpolation. `on_event()` reçoit les événements SDL bruts. |
 | `Application` | Crée SDL, la fenêtre et le `Renderer` dans son constructeur, les libère dans l'ordre inverse dans son destructeur (RAII), et contient la boucle `run(Game&)`. `quit()` demande l'arrêt. Non copiable. |
 | `to_pixels(point)` | Convertit une position en points de fenêtre (ce que SDL donne pour la souris) en pixels (ce que le rendu dessine). Identique sur un écran normal, différent d'un facteur 2 sur beaucoup de Mac. |
@@ -359,7 +387,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 | `RendererConfig` | `debug` (couche de validation du GPU), `vsync`, et l'interface de debug (`debug_ui`, sa police et sa taille). |
 | `ShaderInfo` | Ce qu'un shader déclare : son étage (vertex ou fragment) et le nombre de samplers, uniformes et tampons de stockage qu'il utilise. SDL_GPU s'en sert pour valider les liaisons. |
 | `Texture` | Une texture GPU (`GpuTexture`) et sa taille en pixels. |
-| `RenderStats` | Compteurs de la dernière frame : sprites dessinés, draw calls et octets envoyés au GPU. Remis à zéro à chaque `begin_frame()`. |
+| `RenderStats` | Compteurs de la dernière frame : sprites dessinés, draw calls (toutes passes) et octets envoyés au GPU ; pour la 3D, par passe : maillages soumis, dessinés (après culling), triangles et draw calls de la passe « scene » (`meshes_submitted`, `meshes`, `triangles`, `mesh_draw_calls`) et de la passe « shadow » (`shadow_casters_submitted`, `shadow_casters`, `shadow_triangles`, `shadow_draw_calls`) ; pour les ombres ponctuelles, les lumières ombrées et redessinées, et les maillages, triangles et draw calls de leur passe (`point_shadow_*`) ; les billboards et leurs draw calls ; les lignes de debug ; avec `gpu_timed`, les temps GPU approximatifs de chaque partie de la frame (`gpu_ms`, indices `GpuTime`). Remis à zéro à chaque `begin_frame()`. |
 | `load_shader()` | Charge `shaders/<nom>.<ext>` à côté de l'exécutable, avec l'extension et le point d'entrée du backend actif. Lève une exception si le fichier manque ou si le shader est rejeté. Renvoie un `GpuShader` qui se libère seul. Le shader est nommé `<nom>` pour les outils de capture. |
 | `swapchain_format()` | Format des pixels de la fenêtre, nécessaire pour créer un pipeline graphique. |
 | `create_buffer(usage, données, taille, nom)` | Crée un buffer GPU (sommets ou indices), y envoie les données et attend la fin. Renvoie un `GpuBuffer`. |
@@ -367,6 +395,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 | `create_transfer_buffer()` | Crée une zone de transfert : la mémoire que le CPU écrit avant qu'un copy pass l'envoie au GPU. |
 | `create_texture(image, nom)` | Crée une texture RGBA8 à partir d'une `Image`, sans mipmaps, en UNORM (pas de conversion sRGB). **L'alpha est pré-multiplié dans la couleur** avant l'envoi, quel que soit l'alpha de l'image. Renvoie une `Texture`. |
 | `create_sampler(filtre, nom)` | Crée un échantillonneur avec le filtrage voulu (`NEAREST` pour le pixel art, `LINEAR` pour un rendu lissé) et renvoie un `GpuSampler`. Les coordonnées hors de [0, 1] sont ramenées au bord. |
+| `Renderer` (passes) | Avant la passe « scene » : la passe **« shadow »**, profondeur des maillages vue du soleil, quand il y a de la 3D, que les ombres sont activées et que le soleil éclaire. |
 | `Renderer` | Possède le périphérique GPU. Une frame se déroule en deux phases : `begin_frame()` acquiert l'image de la fenêtre (et recrée la cible de la scène 3D et sa profondeur si la taille de rendu a changé), le jeu **enregistre** ce qu'il veut dessiner, puis `end_frame()` envoie les données (copy passes), dessine et soumet. La passe **« scene »**, seulement si des maillages ont été enregistrés, dessine la 3D en couleurs linéaires HDR (`kSceneFormat`, `R16G16B16A16_FLOAT`) à la résolution de rendu ; la passe **« compose »**, sur l'écran, y applique le tone mapping (ou efface l'écran sans 3D), puis dessine les sprites du monde, l'interface et ImGui. **Une frame sans 3D est identique à celle du rendu 2D d'origine.** Chaque passe est nommée par un groupe de debug. Non copiable. |
 | `set_render_scale()`, `set_exposure()`, `scene_width()`, `scene_height()` | Résolution de rendu de la 3D (fraction de la fenêtre, de 0,25 à 1 ; l'interface reste à pleine résolution), exposition avant tone mapping, et taille de l'image 3D de la frame. |
 | `TextureSettings`, `create_texture(image, réglages, nom)` | Choisit le format sRGB (le GPU convertit en linéaire à la lecture : textures de couleur), les **mipmaps** (chaîne complète, générée par le GPU) et la pré-multiplication de l'alpha. `create_texture(image, nom)` garde le comportement d'origine, celui des sprites. |
@@ -459,6 +488,8 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 
 **Contenu** : `FixedTimestep(pas, temps_max)`. `advance(durée)` ajoute le temps écoulé (plafonné à `temps_max`, les durées négatives comptent pour zéro) et renvoie combien de mises à jour exécuter. `alpha()` donne l'avancement entre deux mises à jour, dans [0, 1). Lève `std::invalid_argument` si un paramètre n'est pas positif.
 
+`interpolate(précédent, actuel, t)` : la valeur à dessiner entre deux pas, calculée `précédent + (actuel − précédent)·t`, **exactement** `précédent` quand rien n'a bougé (ce que `glm::mix` ne garantit pas : une scène figée bougerait d'un arrondi selon `t`, et deux captures identiques différeraient). À utiliser pour toute interpolation entre deux ticks (les caméras le font).
+
 ### `src/moteur/include/moteur/frame_stats.hpp` et `frame_stats.cpp`
 
 **Rôle** : résumer une série de mesures (temps CPU par frame, en millisecondes).
@@ -522,7 +553,11 @@ La caméra **ne tourne pas**.
 
 ### `src/moteur/tone_mapper.hpp` et `tone_mapper.cpp` (internes)
 
-**Rôle** : la passe plein écran qui convertit l'image HDR linéaire de la scène 3D en couleurs d'écran (exposition, PBR Neutral, encodage sRGB), au début de la passe « compose ». Un triangle plein écran sans tampon de sommets, un échantillonneur linéaire qui agrandit aussi une résolution de rendu réduite. Hors de `include/` : seul le `Renderer` s'en sert.
+**Rôle** : la passe plein écran qui convertit l'image HDR linéaire de la scène 3D en couleurs d'écran (exposition, PBR Neutral, encodage sRGB), au début de la passe « compose ». Un triangle plein écran sans tampon de sommets, un échantillonneur linéaire qui agrandit aussi une résolution de rendu réduite. Hors de `include/` : seul le `Renderer` s'en sert. Le même fichier contient `Fxaa` (anticrénelage FXAA sur l'image déjà convertie, jalon 3, partie 12 bis) et `DepthView` (une carte d'ombre à l'écran).
+
+### `shaders/fxaa.frag.hlsl`
+
+**Rôle** : le filtre FXAA (variante « qualité » de FXAA 3.11, réécrite et commentée) : sur une image en couleurs d'écran, repère les bords à fort contraste, les suit jusqu'à leurs extrémités et mélange le pixel avec son voisin de l'autre côté, d'autant plus qu'il est près du bout de la marche d'escalier. Réutilise `tonemap.vert.hlsl` pour le triangle plein écran. MSL exporté.
 
 ### `shaders/tonemap.vert.hlsl` et `shaders/tonemap.frag.hlsl`
 
@@ -557,19 +592,88 @@ La caméra **ne tourne pas**.
 - `prefilter_specular(image, largeur, niveaux, échantillons)` : le spéculaire, une image par pas de rugosité, par échantillonnage d'importance GGX (suite de Hammersley), en lisant une chaîne de mipmaps de la source selon l'angle solide de chaque échantillon (moins de bruit).
 - `Environment::create()` : préfiltre (256×128 à 8×4, 6 niveaux) et envoie une texture `R16G16B16A16_FLOAT` à mipmaps ; garde les harmoniques.
 
+### `src/moteur/include/moteur/shadow.hpp` et `shadow.cpp`
+
+**Rôle** : où regarde la carte d'ombre du soleil (jalon 3, partie 8), et la tenue des ombres des lumières ponctuelles (partie 8 bis). Logique pure, testée.
+
+**Contenu** : `fit_sun_shadow(caméra, direction du soleil, ShadowSettings)` renvoie un `ShadowFrame` (vue-projection du soleil, centre, rayon, taille d'un texel en mètres). La zone couverte est le sol visible (rayons des coins de l'écran coupés par le sol et par `max_height`), englobée dans une sphère au rayon arrondi au mètre ; son centre est aligné sur les texels vus du soleil, pour que la carte glisse par texels entiers quand la caméra bouge (pas de scintillement des bords d'ombre).
+
+**Lumières ponctuelles** :
+
+- `point_shadow_faces(position, portée, taille de case)` : les vues-projections des six faces du cube (+X, −X, +Y, −Y, +Z, −Z), un peu plus larges que 90° (`kPointShadowMarginTexels` = 2 texels de marge), et la taille d'un texel par mètre de distance. `point_shadow_face(direction)` : la face d'une direction (sa plus grande composante), la même règle que le shader.
+- `select_point_shadows(candidates, frustum, point focal, budget)` : les lumières dont la sphère touche la vue, les plus proches du point focal, au plus `budget`.
+- `PointShadowSlots` : quelle ligne de l'atlas tient quelle ombre. `assign(signatures)` garde la ligne d'une signature déjà dessinée (rien à redessiner) et donne aux autres une ligne libre (`render = true`). `reset(n)` oublie tout.
+
+### `shaders/point_shadow.vert.hlsl`, `point_shadow.frag.hlsl` et `shadow_clear.vert.hlsl`
+
+**Rôle** : la passe des ombres des lumières ponctuelles. Le vertex shader est celui de l'ombre du soleil, avec la position monde en plus ; le fragment shader écrit **`distance / portée`** comme profondeur (`SV_Depth`, `[[depth(any)]]` en MSL), ce qui donne un biais en mètres. `shadow_clear.vert.hlsl` efface une case de l'atlas : un triangle à la profondeur 1 qui couvre le viewport, sans entrée de sommet (avec le `shadow.frag.hlsl` vide).
+
+### `shaders/shadow.vert.hlsl` et `shaders/shadow.frag.hlsl`
+
+**Rôle** : la passe d'ombre. Le vertex shader, instancié, reçoit la position du sommet (`TEXCOORD0`) et les trois lignes de la matrice monde de l'instance (`TEXCOORD1` à `3`), et projette le point vu du soleil ; le fragment shader est vide (seule la profondeur est écrite, par le matériel), mais SDL_GPU en exige un. **Les emplacements des entrées d'un shader doivent se suivre à partir de 0** : la compilation (HLSL, SPIR-V, puis DXIL ou MSL) les renumérote dans l'ordre, et des emplacements `0, 4, 5, 6` deviendraient `0, 1, 2, 3` (pipeline refusé par D3D12).
+
 ### `src/moteur/include/moteur/mesh_renderer.hpp` et `mesh_renderer.cpp`
 
-**Rôle** : dessiner les maillages 3D (jalon 3, partie 4).
+**Rôle** : dessiner les maillages 3D (jalon 3, parties 4 à 9).
 
 **Contenu**
 
 - `set_camera(vue-projection, œil)` : la caméra de la frame et la position de l'œil (les reflets en dépendent), oubliées à la fin de la frame. Sans elles, rien n'est dessiné.
 - `set_sun(direction vers le soleil, couleur, intensité)` et `set_environment(environnement, intensité)` : gardés d'une frame à l'autre. `add_light(PointLight)` : une lumière ponctuelle pour cette frame (jusqu'à `kMaxPointLights` = 32 ; au-delà, comptées dans `RenderStats::dropped_lights`).
-- `draw(maillage, monde, Material)` : le cas général. **Rendu PBR** (Lambert + Cook-Torrance GGX, environnement, soleil, lumières ponctuelles, émissif), deux pipelines (simple face, double face : sans élimination, normale retournée derrière). Textures liées seulement quand elles changent ; données de la frame envoyées une fois.
+- `set_shadows(ShadowOptions)` : ombres du soleil (activées, résolution, décalage normal, biais). Les matériaux `casts_shadow = false` n'y figurent pas.
+- `set_culling(bool)` : le frustum culling, actif par défaut ; coupé, tout part au GPU (pour comparer : l'image ne doit pas changer).
+- **Débogage** : `set_view(MeshView)` (éclairé, fil de fer, normales, couleur de base, distance ; hors fil de fer, la composition saute le tone mapping) et `set_debug(MeshDebug)` (boîtes des maillages dessinés, zone de l'ombre du soleil, portée des lumières, ajoutées aux lignes de debug après le culling).
+- **Ombres des lumières ponctuelles** (`PointLight::casts_shadows`, réglages `point_*` de `ShadowOptions`) : `prepare_point_shadows()` choisit les lumières (`select_point_shadows`), crée l'atlas (6 cases de `point_resolution` par ligne, une ligne par lumière du budget ; une texture 1×1 le remplace tant qu'il n'existe pas), calcule la signature de chaque lumière (position, portée, et chaque objet dans sa sphère : maillage, matrice, faces), demande les lignes à `PointShadowSlots`, et regroupe les objets de chaque face à redessiner. `render_point_shadows()`, dans la passe « point shadows » : par face, viewport et scissor sur sa case, effacement, puis les lots. `invalidate_point_shadows()` oublie le cache.
+- **Déroulement d'une frame** : le `Renderer` appelle `prepare()` avant toute passe de rendu : cadrage de la carte d'ombre (`prepare_shadows()`, avec `fit_sun_shadow()`), puis, pour chaque passe, `MeshBatcher::build()` (culling contre le frustum de la caméra, puis contre la boîte couverte par la carte d'ombre ; regroupement), et envoi des instances des deux passes, à la suite, dans un seul tampon (`mesh.instances`, agrandi en doublant). Ensuite `render_shadows()` dans la passe « shadow » et `render()` dans la passe « scene » : **un draw call instancié par lot**. Chaque lot relie sa tranche du tampon d'instances (décalage de la liaison) : l'indice d'instance part de 0 dans le shader, sur tous les backends.
+- `draw(maillage, monde, Material)` : le cas général ; la boîte du maillage est transformée dans le monde à l'enregistrement (`transform_box`). `draw(maillage, monde, Material, boîte)` : la même chose avec une boîte déjà calculée, pour le décor qui ne bouge pas. **Rendu PBR** (Lambert + Cook-Torrance GGX, environnement, soleil, lumières ponctuelles, émissif), deux pipelines (simple face, double face : sans élimination, normale retournée derrière). Textures liées seulement quand elles changent ; données de la frame envoyées une fois.
 - `draw(maillage, matrice monde, couleur, texture)` : raccourci pour une surface simple (matériau par défaut, non métallique, rugosité 0,5) ; le maillage et la texture doivent vivre jusqu'à la fin de la frame.
 - `draw(modèle, matrice monde)` : toutes les pièces d'un `Model`, chacune avec sa transformation et son matériau.
-- Exécution dans la passe « scene », en couleurs linéaires HDR (le constructeur reçoit les formats de couleur et de profondeur de cette passe) : pipeline avec test et écriture de profondeur (`LESS`), faces arrière éliminées, faces avant antihoraires, sans mélange. **Les couleurs données (draws, lumière) sont linéaires** : `srgb_to_linear()` convertit une couleur choisie à l'œil. L'échantillonneur est trilinéaire et anisotrope (×8). `has_work()` dit si la frame a de la 3D. Un draw call par draw ; le tampon n'est relié que quand le maillage change. Chaque draw pousse ses uniforms : vue-projection, matrice monde et sa transposée inverse (vertex, `b0, space1`), couleur et lumière (fragment, `b0, space3`). Les structures C++ ne contiennent que des `mat4` et des `vec4`, comme les `cbuffer` HLSL.
-- Statistiques : `RenderStats::meshes`, `triangles`, et les draw calls (comptés avec ceux des sprites).
+- Exécution dans la passe « scene », en couleurs linéaires HDR (le constructeur reçoit les formats de couleur et de profondeur de cette passe) : pipeline avec test et écriture de profondeur (`LESS`), faces arrière éliminées, faces avant antihoraires, sans mélange. **Les couleurs données (draws, lumière) sont linéaires** : `srgb_to_linear()` convertit une couleur choisie à l'œil. L'échantillonneur est trilinéaire et anisotrope (×8). `has_work()` dit si la frame a de la 3D. Uniforms poussés une fois par passe : la vue-projection (vertex, `b0, space1`) et les données de la frame (fragment, `b0, space3` : soleil, environnement, lumières, ombre). Tout ce qui est propre à un objet (matrices, couleur, facteurs, émissif) passe par les **attributs d'instance** (`MeshInstance`). Les structures C++ ne contiennent que des `mat4` et des `vec4`, comme les `cbuffer` HLSL.
+- Statistiques par passe dans `RenderStats` (voir `renderer.hpp`).
+
+### `src/moteur/include/moteur/billboard_batcher.hpp` et `billboard_batcher.cpp`
+
+**Rôle** : préparer les billboards d'une frame (jalon 3, partie 10), sans GPU, donc testable.
+
+**Contenu** : `BillboardDesc` (texture, centre, taille en mètres, rectangle de texture, couleur linéaire pouvant dépasser 1, `additive`, orientation `Camera` ou `Upright`) ; `BillboardView` (œil, droite, haut, avant de la caméra) ; `BillboardVertex` (36 octets : position, uv, couleur pré-multipliée). `finish(vue)` trie du plus lointain au plus proche (tri stable), calcule les quatre coins (`corners()`), pré-multiplie la couleur (alpha à 0 pour un billboard additif) et découpe en `BillboardRun` par texture, 16 384 billboards au plus par lot.
+
+### `src/moteur/include/moteur/billboard_renderer.hpp` et `billboard_renderer.cpp`
+
+**Rôle** : les sprites dans le monde 3D (`renderer.billboards()`), dessinés dans la passe « scene » après les maillages.
+
+**Contenu** : `set_camera(Camera3D)` à chaque frame (la caméra dessinée, interpolée), `draw(texture, centre, taille, BillboardOptions)` (couleur, `additive`, orientation, rectangle de texture). Pipeline : test de profondeur `LESS_OR_EQUAL` sans écriture, mélange pré-multiplié, sans élimination des faces ; échantillonneur linéaire avec mipmaps. Sommets envoyés avant les passes (tampon agrandi en doublant), un index de quad partagé (16 bits). Statistiques : `RenderStats::billboards`, `billboard_draw_calls`.
+
+### `src/moteur/include/moteur/debug_lines.hpp` et `debug_lines.cpp`
+
+**Rôle** : des lignes pour voir ce que fait le moteur (jalon 3, partie 12), avec `renderer.debug_lines()`.
+
+**Contenu** : `DebugLineBuffer` (CPU, testé) : `line`, `box` (12 arêtes), `frustum` (d'une vue-projection à profondeur `[0, 1]`), `axes`, `circle`, `sphere` ; chaque ligne est testée contre la profondeur ou dessinée par-dessus (`on_top`). `DebugLineRenderer` : deux pipelines de lignes (avec et sans test de profondeur, sans écriture), à la fin de la passe « scene » ; caméra donnée par `set_camera()`, sinon celle des maillages ; `RenderStats::debug_lines`. Les shaders `debug_line.vert/.frag.hlsl` projettent et colorent.
+
+### `shaders/depth_view.frag.hlsl`
+
+**Rôle** : montrer une texture de profondeur (carte d'ombre) en gris, avec le triangle plein écran de `tonemap.vert.hlsl` limité à un rectangle (`DepthView`, interne, dans `tone_mapper.hpp`).
+
+### `shaders/billboard.vert.hlsl` et `shaders/billboard.frag.hlsl`
+
+**Rôle** : le vertex shader applique la vue-projection aux coins déjà placés ; le fragment shader multiplie la texture par la couleur pré-multipliée.
+
+### `src/moteur/include/moteur/mesh_batcher.hpp` et `mesh_batcher.cpp`
+
+**Rôle** : préparer ce qu'une passe 3D dessine (jalon 3, partie 9), sans GPU, donc testable (comme `SpriteBatcher`).
+
+**Contenu**
+
+- `MeshDraw` : un draw enregistré (maillage, matrice monde, matériau, boîte dans le monde).
+- `MeshInstance` (144 octets, envoyé tel quel) : les trois premières lignes de la matrice monde, celles de sa transposée inverse (calculée sur la partie 3×3), la couleur de base, les facteurs (métal, rugosité, normal map, occlusion) et l'émissif. `make_instance()` la remplit.
+- `MeshBatch` : un lot = un draw call instancié : maillage, matériau du premier draw (pour les textures et les faces), première instance, nombre.
+- `MeshBatcher::build(draws, frustum, passe)` : garde les draws dont la boîte touche le frustum (et, pour `Pass::Shadow`, qui projettent une ombre), les regroupe par **(maillage, cinq textures, simple ou double face)** pour la passe principale, par **(maillage, faces)** pour l'ombre, et range les instances lot par lot. Ordre : lots simple face, puis double face (un seul changement de pipeline), sinon **dans l'ordre du premier draw enregistré, visible ou non** ; dans un lot, l'ordre d'enregistrement. L'image ne dépend donc ni des adresses mémoire, ni de ce qui est visible (sinon, là où deux objets se touchent à la même profondeur, des pixels pourraient changer quand la caméra bouge). Recherche du groupe : celui du draw précédent, sinon un parcours tant qu'il y a au plus 16 groupes, sinon une table de hachage.
+- Compteurs : `submitted()`, `visible()`, `triangles()`.
+
+### `src/moteur/include/moteur/aabb.hpp`
+
+**Rôle** : la boîte englobante alignée sur les axes (`Aabb`), commune aux maillages, aux modèles et à la caméra (culling).
+
+**Contenu** : `min`, `max` (vide tant qu'aucun point n'est ajouté), `add`, `center`, `size`, `corner(i)` ; `transform_box(boîte, matrice)` : la boîte autour des huit coins transformés (plus grande que l'objet en cas de rotation, jamais plus petite).
 
 ### `src/moteur/include/moteur/camera3d.hpp` et `camera3d.cpp`
 
@@ -581,7 +685,10 @@ La caméra **ne tourne pas**.
 - `Projection::Orthographic` ou `Projection::Perspective`, et un seul réglage de cadrage : `visible_height`, la hauteur de monde visible **à la cible**. En perspective, la distance de la caméra en découle avec le champ de vision (`field_of_view`, borné à [5, 120]) ; les deux projections cadrent donc la cible de la même façon. En orthographique, la caméra recule de 100 m (seuls les plans proche et lointain en dépendent).
 - `position()`, `forward()`, `distance()`, `view()`, `projection_matrix()`, `view_projection()` ; profondeur `[0, 1]` (fonctions `RH_ZO` de GLM). Le plan proche de la perspective est repoussé à 5 % de la distance, pour la précision de la profondeur.
 - `isometric_pitch()` : l'angle de la vraie isométrie, `atan(1/√2)`, environ 35,26°.
-- **Provisoire** : le rayon depuis la souris, le frustum, l'interpolation et le suivi d'une cible viendront avec la partie 3.
+- Pixels : ceux de la fenêtre, origine en haut à gauche, y vers le bas (convertir la souris avec `Application::to_pixels()`).
+- `screen_ray(pixel)` → `Ray` (origine, direction unitaire ; `hit_height(h)` : le point du plan `y = h`, s'il est devant) ; `ground_point(pixel, h)` : le point du sol sous un pixel ; `world_to_screen(point)` : l'inverse, rien derrière la caméra.
+- `frustum()` → `Frustum` : six plans (gauche, droite, bas, haut, proche, lointain), normales vers l'intérieur ; `Frustum::from_view_projection(m)` pour toute matrice à profondeur `[0, 1]` ; `contains(point)`, `intersects(Aabb)` (jamais de faux négatif).
+- Mouvement lissé, comme `Camera2D` : `begin_update()` au début de chaque pas fixe, `interpolated(alpha)` pour dessiner et piquer. `follow(but, dt, demi_vie)` rapproche la cible de façon exponentielle, indépendante de la fréquence des ticks.
 
 ### `src/moteur/include/moteur/model.hpp` et `model.cpp`
 
@@ -602,17 +709,17 @@ La caméra **ne tourne pas**.
 
 **Contenu du modèle** : un cube de 1 m posé au sol (pour l'échelle), une texture en quatre quadrants sur chaque face (rouge en haut à gauche de l'image, vert en haut à droite, bleu en bas à gauche, blanc en bas à droite : une texture retournée se voit), une flèche rouge vers +X, un repère vert vers +Y et un bleu vers +Z (les couleurs habituelles des axes). La flèche et les repères sont des nœuds **enfants** du cube, placés dans son repère : une hiérarchie ignorée ou mal composée les déplace.
 
-### `tools/models/fetch_test_models.py` et `assets/models/polyhaven/`
+### `tools/models/fetch_test_models.py`, `assets/models/polyhaven/` et `assets/environments/`
 
-**Rôle** : télécharger les modèles 3D de test (Poly Haven, CC0, environ 11 Mo). `python tools/models/fetch_test_models.py` passe par l'API officielle de Poly Haven (avec un User-Agent, qu'elle exige), prend la version glTF 1K de chaque modèle avec les fichiers qu'elle référence (`.bin`, textures JPEG), vérifie leurs tailles et ne retélécharge pas ce qui est déjà là. Le dossier `assets/models/polyhaven/` est **hors de Git** (`.gitignore`). Garder la liste du script et `assets/credits.json` en accord.
+**Rôle** : télécharger les modèles 3D de test (Poly Haven, CC0, environ 11 Mo) et l'environnement de test (`studio_small_09_1k.hdr`, 1,6 Mo, HDR équirectangulaire 1K, CC0 : un studio à l'éclairage neutre, pour comparer les matériaux avec Blender). Le bac à sable charge tous les `.hdr` de `assets/environments/`, qui est aussi **hors de Git**. `python tools/models/fetch_test_models.py` passe par l'API officielle de Poly Haven (avec un User-Agent, qu'elle exige), prend la version glTF 1K de chaque modèle avec les fichiers qu'elle référence (`.bin`, textures JPEG), vérifie leurs tailles et ne retélécharge pas ce qui est déjà là. Le dossier `assets/models/polyhaven/` est **hors de Git** (`.gitignore`). Garder la liste du script et `assets/credits.json` en accord.
 
 ### `assets/credits.json`
 
-**Rôle** : les crédits affichés par la fenêtre « À propos » du bac à sable. Trois listes : `libraries` (nom, version, licence, copyright, site, fichier de licence), `fonts` (même chose) et `models` (nom, auteurs, licence, source, site, fichier du modèle). Les chemins sont relatifs au dossier de l'exécutable. **Chaque bibliothèque ou asset ajouté au projet doit y être ajouté.**
+**Rôle** : les crédits affichés par la fenêtre « À propos » du bac à sable. Quatre listes : `libraries` (nom, version, licence, copyright, site, fichier de licence), `fonts` (même chose), `models` et `environments` (nom, auteurs, licence, source, site, fichier). Une entrée avec `"platform": "windows"` (ou `"macos"`) n'est affichée que sur cet OS. Les chemins sont relatifs au dossier de l'exécutable. **Chaque bibliothèque ou asset ajouté au projet doit y être ajouté.**
 
 ### `shaders/mesh.vert.hlsl` et `shaders/mesh.frag.hlsl`
 
-**Rôle** : les shaders des maillages 3D. Le vertex shader place le sommet et passe la position, la normale et la tangente en espace monde ; le fragment shader fait le **rendu PBR** (voir `mesh_renderer`) : cinq textures de matériau et l'environnement (`t0` à `t5`, `space2`), uniforms du matériau (`b0`) et de la frame (`b1`, `space3`). Leur MSL est exporté dans `shaders/generated/msl/` pour le Mac.
+**Rôle** : les shaders des maillages 3D. Le vertex shader, instancié, reçoit les attributs du sommet (`TEXCOORD0` à `3`) et ceux de l'instance (`TEXCOORD4` à `12` : matrices, couleur, facteurs, émissif) ; il passe la position, la normale et la tangente en espace monde, et le matériau sans interpolation (`nointerpolation`). Le fragment shader fait le **rendu PBR** (voir `mesh_renderer`) : cinq textures de matériau, l'environnement, la carte d'ombre du soleil et l'atlas des ombres ponctuelles (`t0` à `t7`, `space2` ; les deux ombres avec un échantillonneur à comparaison), uniforms de la frame (`b0`, `space3` : entre autres les 48 matrices des faces et, dans `light_color[i].w`, la ligne de l'atlas de chaque lumière, ou −1). Ombres en PCF 3×3 avec décalage le long de la normale. Leur MSL est exporté dans `shaders/generated/msl/` pour le Mac.
 
 ### `src/moteur/include/moteur/tilemap.hpp` et `tilemap.cpp`
 
@@ -810,13 +917,37 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 
 **À savoir** : c'est dans ce fichier que l'implémentation de stb est compilée (`STB_IMAGE_IMPLEMENTATION`). Il ne faut la définir qu'à un seul endroit.
 
+### `apps/bac_a_sable/blender_compare.hpp` et `blender_compare.cpp`
+
+**Rôle** : la scène comparée avec Blender (jalon 3, partie 7), dans le menu (« Comparaison avec Blender ») ou avec `--blender-compare`. Les quatre modèles Poly Haven et deux sphères (plastique blanc mat, or poli) en rang, posés sur `y = 0`, éclairés **par l'environnement de test seul** (ni soleil, ni lumière ponctuelle, ni sol), vus par une caméra fixe (de face, 15° au-dessus de l'horizon, champ de 30°), sur un fond gris neutre. Avec `--capture image.png`, écrit la 10ᵉ image et `image.png.json` : caméra, environnement, tone mapping, place de chaque objet, matériaux des sphères, dans les conventions du moteur.
+
+### `tools/blender/compare_render.py` et `compare_images.py`
+
+**Rôle** : la comparaison avec Blender.
+
+1. `bac_a_sable --blender-compare --pixel-size 1280 720 --aa msaa4 --run-seconds 2 --capture engine.png`
+2. `blender -b --factory-startup --python tools/blender/compare_render.py -- engine.png.json blender.png --gpu` (Blender 4.2 ou plus, pour la vue « Khronos PBR Neutral » ; version de référence : 5.2.2, `C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`, celle du MCP Blender ; Cycles, sur le GPU avec `--gpu`, ou EEVEE avec `--eevee`) : la même scène d'après le JSON (mêmes glTF aux mêmes places, mêmes sphères, environnement seul avec la même intensité, même caméra, même tone mapping), fond transparent. Les positions passent de Y vers le haut à Z vers le haut comme à l'import glTF ; l'environnement n'a pas besoin d'être tourné (même lecture équirectangulaire).
+3. `python tools/blender/compare_images.py engine.png blender.png engine.png.json comparaison` (Pillow) : image côte à côte, différence ×4, et la couleur moyenne de chaque objet dans les deux images.
+
+Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mêmes), le moteur approche l'éclairage d'environnement (harmoniques sphériques, image préfiltrée).
+
+### `apps/bac_a_sable/demo3d.hpp` et `demo3d.cpp`
+
+**Rôle** : la scène de démonstration du jalon 3 (partie 11), dans le menu (« Démo 3D ») ou avec `--demo3d`.
+
+**Contenu** : la carte 100×100 de la démo 2D construite en 3D (sol fusionné par blocs de 10×10, murs de 1,5 m, un brasero-torche par pièce), le décor (rochers, arbres, caisses, tonneaux glTF), les créatures de la démo 2D (demi-tour devant les murs) avec barres de vie, le soleil et les torches avec ombres, la caméra (déplacement, zoom, suivi). Clic droit : choisir une créature ; clic gauche : l'envoyer ; Tab : la suivante ; F : la suivre. Les objets fixes sont préparés une fois (`StaticDraw` : maillage, matrice, matériau, boîte). Réglages et tableau des passes dans le panneau du menu (`draw_controls()`). Options : `--seed`, `--map`, `--creatures`, `--decor`, `--tile-floor`, `--point-shadows`, et celles des captures.
+
+### `apps/bac_a_sable/sandbox_scene.hpp`
+
+**Rôle** : ce que les scènes du menu partagent. `SandboxScene` (un `moteur::Game` avec `draw_controls()` et `stop_requested()`) : le menu tient la scène en cours par cette interface. `Random` : le petit générateur à graine des scènes. `demo_wall(i, j)` : les murs des deux démos (2D et 3D), pour qu'elles aient la même carte.
+
 ### `apps/bac_a_sable/main.cpp`
 
 **Rôle** : programme d'essai qui utilise le moteur.
 
 **Contenu**
 
-- **Scène « Rendu 3D : premiers maillages »** (`--3d`, `--ortho`, `--camera X Z`, `--view-height H`, ou le menu). Elle charge aussi tous les modèles glTF de `assets/models/` et les pose en rang, avec leur nom, leurs triangles et leur temps de chargement au-dessus (ou leur erreur). Contenu d'origine : un sol en damier de 20×20 cases d'1 m, un mur de cubes, un cube qui tourne, une sphère, une boîte à la taille d'un personnage et quatre piliers de 3 m, vus par une `Camera3D`. **P** change de projection, flèches ou ZQSD déplacent la cible, la molette change la hauteur visible. Le texte (en `screen_sprites()`) rappelle la projection, ses réglages et les statistiques 3D. Dans le menu, le panneau du test en cours (`TestScene::draw_controls()`, en ImGui) règle la projection, les angles, la hauteur visible et le champ de vision.
+- **Scène « Rendu 3D : premiers maillages »** (`--3d`, `--ortho`, `--camera X Z`, `--view-height H`, ou le menu). Elle charge aussi tous les modèles glTF de `assets/models/` et les pose en rang, avec leur nom, leurs triangles et leur temps de chargement au-dessus (ou leur erreur). Contenu d'origine : un sol en damier de 20×20 cases d'1 m, un mur de cubes, un cube qui tourne, une sphère, une boîte à la taille d'un personnage et quatre piliers de 3 m, vus par une `Camera3D`. **P** change de projection, flèches ou ZQSD déplacent la cible, la molette change la hauteur visible. La case sous la souris est surlignée ; un clic gauche envoie la boîte « personnage » vers le point cliqué ; **F** fait suivre le personnage par la caméra ; `--mouse X Y` simule la souris et écrit la case survolée à la fermeture. Le texte (en `screen_sprites()`) rappelle la projection, ses réglages et les statistiques 3D. Dans le menu, le panneau du test en cours (`TestScene::draw_controls()`, en ImGui) règle la projection, les angles, la hauteur visible et le champ de vision.
 - Classe `TestScene`, qui implémente `Game` : **une** scène de test, choisie par ses `Options` (celles de la ligne de commande). Elle compte les ticks et les frames. Lancée depuis la ligne de commande (`standalone`), Échap et `--run-seconds` quittent le programme ; lancée depuis le menu, ils demandent seulement l'arrêt du test (`stop_requested()`).
 - **Fenêtre « À propos »** (menu **Aide**, ou bouton de l'accueil) : les bibliothèques, la police et les modèles de test, lus dans `assets/credits.json` (structure `Credits`), avec le texte complet de chaque licence à la demande (lu dans `licenses/` ou `assets/fonts/`, avec retour à la ligne) et la présence de chaque modèle. Le bac à sable lie `nlohmann-json` pour lire ce fichier.
 - Classe `Sandbox`, qui implémente `Game` : le programme lancé **sans argument** (ou avec `--menu`). Barre de menus ImGui (**DEBUG > Tests moteur** en sous-menu, avec « Toutes les scènes... » puis chaque scène ; **DEBUG > Accueil**), écran d'accueil, page de sélection (description, réglages et bouton **Lancer** de chaque scène) et panneau du test en cours (**Arrêter le test**, **Accueil**). Échap remonte d'un cran (test → sélection → accueil). Une scène est créée et détruite dans `update()`, jamais pendant une frame : le chargement attend le GPU, et les textures d'une scène sont utilisées par la frame en cours d'enregistrement. Si une scène ne peut pas démarrer, l'erreur s'affiche sur la page de sélection.
@@ -865,6 +996,9 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 - `test_camera.cpp` : la position au centre de la fenêtre, zoom, sens de l'axe Y, aller-retour monde / écran / monde (avec et sans alignement), alignement sur les pixels (y compris avec une fenêtre de taille impaire), rectangle visible, redimensionnement, interpolation, coins de la fenêtre en espace de découpage, accord entre la matrice et `world_to_screen`, zoom invalide, conversion points / pixels.
 - `test_tilemap.cpp` : numérotation du `Tileset`, calques indépendants, `fill`, refus des cases hors de la carte, `clip` d'une plage à l'intérieur, à cheval ou hors de la carte, plage visible d'une caméra dans un coin, `walkable` sur plusieurs calques.
 - `test_animation.cpp` : clips invalides, durée d'un cycle, image affichée à chaque tick (boucle, une fois, aller-retour), vitesses ×2, ×0,5 et 0, vitesse négative refusée, événements exactement une fois (y compris avec un pas de 20 ticks et une vitesse de ×0,7 sur 80 ticks), clip `Once` après la fin, `set_time`, lecture du JSON et messages d'erreur.
+- `test_mesh_batcher.cpp` : un lot par maillage et textures quelles que soient les couleurs, lots à une face avant ceux à deux faces, objets hors du frustum écartés (boîte tournée comprise), ordre des lots indépendant de ce qui est visible, passe d'ombre limitée aux objets qui en projettent et sans textures, contenu des instances (lignes de la matrice, matériau), nombreux groupes, sous-ensemble des draws.
+- `test_billboard_batcher.cpp` : billboard face à la caméra (en travers de la vue, à la bonne taille), billboard vertical (arêtes verticales, tourne autour de la verticale), tri du plus lointain au plus proche et lots coupés par texture, couleurs pré-multipliées et additif sans alpha, lot jamais au-delà des indices 16 bits.
+- `test_debug_lines.cpp` : les 12 arêtes d'une boîte (chacune sur un axe, longueur totale), les coins d'un frustum, cercles, sphères et axes.
 - `test_iso.cpp` : les coins de tuile sur le réseau 2:1, la hauteur, `from_world` inverse de `to_world`, d'autres tailles de tuile, le milieu et les coins d'une tuile, les coordonnées négatives, la position de la boîte d'image, `tiles_in` (propriété vérifiée par force brute sur 121 × 121 tuiles), la marge, la taille d'une plage d'écran, et les tailles invalides.
 
 **Les valeurs de test sont des puissances de deux** (1/64, 1/4, etc.), exactes en virgule flottante : les résultats ne dépendent pas d'arrondis, donc sont identiques sur les deux OS.

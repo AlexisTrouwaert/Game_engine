@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <glm/glm.hpp>
+
 #include <stdexcept>
 
 #include "moteur/fixed_timestep.hpp"
@@ -70,4 +72,16 @@ TEST_CASE("FixedTimestep rejects invalid parameters") {
     CHECK_THROWS_AS(moteur::FixedTimestep(0.0, kMaxFrame), std::invalid_argument);
     CHECK_THROWS_AS(moteur::FixedTimestep(-kStep, kMaxFrame), std::invalid_argument);
     CHECK_THROWS_AS(moteur::FixedTimestep(kStep, 0.0), std::invalid_argument);
+}
+
+TEST_CASE("interpolate: exact at both ends, and exactly still when nothing moved") {
+    const glm::vec3 a(0.1f, 12.3f, -7.77f);
+    const glm::vec3 b(3.3f, -1.0f, 250.5f);
+    CHECK(moteur::interpolate(a, b, 0.0f) == a);
+    CHECK(moteur::interpolate(2.0f, 6.0f, 0.25f) == 3.0f);
+    // A value that did not change stays bit for bit the same whatever t (glm::mix does not).
+    for (float t = 0.0f; t < 1.0f; t += 0.013f) {
+        CHECK(moteur::interpolate(a, a, t) == a);
+        CHECK(moteur::interpolate(0.3f, 0.3f, t) == 0.3f);
+    }
 }

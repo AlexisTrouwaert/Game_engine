@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "moteur/aabb.hpp"
 #include "moteur/gpu_resource.hpp"
 
 namespace moteur {
@@ -21,17 +22,6 @@ struct Vertex3D {
     // goes: bitangent = cross(normal, tangent.xyz) * w, pointing up in the texture image (the
     // "green up" convention of glTF normal maps).
     glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
-};
-
-// An axis-aligned box. Empty (min > max) until a point is added.
-struct Aabb {
-    glm::vec3 min{1.0f};
-    glm::vec3 max{-1.0f};
-
-    bool empty() const { return max.x < min.x || max.y < min.y || max.z < min.z; }
-    void add(glm::vec3 point);
-    glm::vec3 center() const { return (min + max) * 0.5f; }
-    glm::vec3 size() const { return max - min; }
 };
 
 // A mesh on the CPU: plain data that can be built, tested and inspected without a GPU.

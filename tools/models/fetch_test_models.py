@@ -1,4 +1,5 @@
-"""Downloads the 3D test models into assets/models/polyhaven/ (about 11 MB, not kept in Git).
+"""Downloads the 3D test models into assets/models/polyhaven/ (about 11 MB) and the test
+environment into assets/environments/ (about 1.6 MB), neither kept in Git.
 
     python tools/models/fetch_test_models.py
 
@@ -6,7 +7,10 @@ All come from Poly Haven (https://polyhaven.com), under CC0: public domain, no a
 required. Their authors are credited anyway, in assets/credits.json and in the "À propos" window of
 the sandbox. Keep this list and that file in step.
 
-The 1K glTF version of each model is fetched through the official API (api.polyhaven.com), which
+The environment is an equirectangular HDR image (the sandbox loads every .hdr of
+assets/environments/), used to compare the engine's lighting with Blender's under the same light.
+
+The 1K glTF version of each model, and the 1K .hdr of each environment, is fetched through the official API (api.polyhaven.com), which
 asks clients to identify themselves with a User-Agent. Each file's size is checked against the one
 the API announces. Files already present with the right size are not downloaded again.
 """
@@ -16,6 +20,7 @@ import os
 import urllib.request
 
 MODELS = ["wine_barrel_01", "Lantern_01", "antique_estoc", "boulder_01"]
+ENVIRONMENTS = ["studio_small_09"]
 RESOLUTION = "1k"
 USER_AGENT = {"User-Agent": "moteur-engine-test-assets/1.0"}
 
@@ -25,9 +30,23 @@ def get(url):
         return response.read()
 
 
+def fetch(path, url, size):
+    """Downloads url to path unless it is already there with the right size; returns the bytes written."""
+    if os.path.exists(path) and os.path.getsize(path) == size:
+        return 0
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    data = get(url)
+    if len(data) != size:
+        raise RuntimeError(f"{url}: got {len(data)} bytes, expected {size}")
+    with open(path, "wb") as f:
+        f.write(data)
+    print(f"{len(data):>9}  {path}")
+    return len(data)
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
-    base = os.path.normpath(os.path.join(here, "..", "..", "assets", "models", "polyhaven"))
+    assets = os.path.normpath(os.path.join(here, "..", "..", "assets"))
     total = 0
     for model in MODELS:
         files = json.loads(get(f"https://api.polyhaven.com/files/{model}"))["gltf"][RESOLUTION]["gltf"]
@@ -35,18 +54,11 @@ def main():
         targets = [(os.path.basename(files["url"]), files["url"], files["size"])]
         targets += [(path, info["url"], info["size"]) for path, info in files.get("include", {}).items()]
         for relative, url, size in targets:
-            path = os.path.join(base, model, relative)
-            if os.path.exists(path) and os.path.getsize(path) == size:
-                continue
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            data = get(url)
-            if len(data) != size:
-                raise RuntimeError(f"{url}: got {len(data)} bytes, expected {size}")
-            with open(path, "wb") as f:
-                f.write(data)
-            total += len(data)
-            print(f"{len(data):>9}  {os.path.relpath(path, base)}")
-    print(f"{total} bytes downloaded into {base}")
+            total += fetch(os.path.join(assets, "models", "polyhaven", model, relative), url, size)
+    for environment in ENVIRONMENTS:
+        file = json.loads(get(f"https://api.polyhaven.com/files/{environment}"))["hdri"][RESOLUTION]["hdr"]
+        total += fetch(os.path.join(assets, "environments", os.path.basename(file["url"])), file["url"], file["size"])
+    print(f"{total} bytes downloaded into {assets}")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,33 @@
 
 #include <glm/glm.hpp>
 
+#include <optional>
+
+#include "moteur/aabb.hpp"
+
 namespace moteur {
+
+// A half-line from `origin` along `direction` (unit length).
+struct Ray {
+    glm::vec3 origin{0.0f};
+    glm::vec3 direction{0.0f, 0.0f, -1.0f};
+
+    // Where the ray crosses the horizontal plane y = height, if it does in front of its origin.
+    std::optional<glm::vec3> hit_height(float height = 0.0f) const;
+};
+
+// The six planes around what a camera sees. Each plane is (normal, d), normal pointing inside:
+// a point p is inside when dot(normal, p) + d >= 0 for all six.
+struct Frustum {
+    glm::vec4 planes[6] = {};  // left, right, bottom, top, near, far; all zero: contains everything
+
+    // From any view-projection matrix whose clip depth is in [0, 1].
+    static Frustum from_view_projection(const glm::mat4& view_projection);
+    bool contains(glm::vec3 point) const;
+    // True when the box may be visible: false only when it lies entirely outside one plane, which
+    // never hides a visible box (a few invisible ones near the corners pass: fine for culling).
+    bool intersects(const Aabb& box) const;
+};
 
 enum class Projection {
     Orthographic,  // parallel lines stay parallel: true isometric, sizes do not depend on distance
@@ -20,8 +46,11 @@ enum class Projection {
 // Defaults: the framing chosen for the game (milestone 3, part 4): perspective, 50 degrees below
 // the horizon, 30 degree field of view, looking along the diagonal of the grid.
 //
-// Provisional (milestone 3, part 4): picking (a ray from the mouse), the frustum, interpolation and
-// following a target come with part 3.
+// Pixels are window pixels, origin at the top left, y pointing down (as Renderer::width() counts
+// them; convert mouse positions with Application::to_pixels() first on high-density screens).
+//
+// Smooth motion, like Camera2D: call begin_update() at the start of each fixed update, move the
+// camera, and draw (and pick) with interpolated(alpha).
 class Camera3D {
 public:
     void set_target(glm::vec3 target) { target_ = target; }
@@ -59,12 +88,34 @@ public:
     glm::mat4 projection_matrix() const;
     glm::mat4 view_projection() const { return projection_matrix() * view(); }
 
+    // The ray under a window pixel: what the mouse points at.
+    Ray screen_ray(glm::vec2 pixel) const;
+    // The point of the ground (y = height) under a window pixel, if the pixel sees the ground.
+    std::optional<glm::vec3> ground_point(glm::vec2 pixel, float height = 0.0f) const;
+    // Where a point of the world appears, in window pixels; nothing if it is behind the camera.
+    // (It may be outside the window.)
+    std::optional<glm::vec2> world_to_screen(glm::vec3 world) const;
+    Frustum frustum() const { return Frustum::from_view_projection(view_projection()); }
+
+    // Remembers the current target and framing, to interpolate from them (see interpolated()).
+    void begin_update() {
+        previous_target_ = target_;
+        previous_visible_height_ = visible_height_;
+    }
+    // A copy between the state of the last begin_update() and the current one (alpha in [0, 1]).
+    Camera3D interpolated(double alpha) const;
+    // Moves the target towards `goal`, covering half the remaining distance every `half_life`
+    // seconds: smooth, and the same at every tick rate (an exponential, not a fixed fraction per step).
+    void follow(glm::vec3 goal, float dt, float half_life);
+
     // The pitch at which the three axes look equally long in an orthographic view: the classic
     // "true isometric" angle, atan(1 / sqrt(2)), about 35.26 degrees.
     static float isometric_pitch();
 
 private:
     glm::vec3 target_{0.0f};
+    glm::vec3 previous_target_{0.0f};
+    float previous_visible_height_ = 12.0f;
     float yaw_ = 45.0f;
     float pitch_ = 50.0f;
     Projection projection_ = Projection::Perspective;

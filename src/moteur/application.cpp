@@ -1,5 +1,6 @@
 #include "moteur/application.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
@@ -30,10 +31,21 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
         throw std::runtime_error("SDL_CreateWindow failed: " + error);
     }
 
+    if (config_.pixel_width > 0 && config_.pixel_height > 0) {
+        const float density = SDL_GetWindowPixelDensity(window_);
+        const float scale = density > 0.0f ? density : 1.0f;
+        SDL_SetWindowSize(window_, static_cast<int>(std::lround(static_cast<float>(config_.pixel_width) / scale)),
+                          static_cast<int>(std::lround(static_cast<float>(config_.pixel_height) / scale)));
+        SDL_SyncWindow(window_);
+    }
     int w = 0, h = 0, pixel_w = 0, pixel_h = 0;
     SDL_GetWindowSize(window_, &w, &h);
     SDL_GetWindowSizeInPixels(window_, &pixel_w, &pixel_h);
     SDL_Log("Window: %dx%d points, %dx%d pixels", w, h, pixel_w, pixel_h);
+    if (config_.pixel_width > 0 && (pixel_w != config_.pixel_width || pixel_h != config_.pixel_height)) {
+        SDL_Log("Window: %dx%d pixels asked, %dx%d obtained (screen density %.2f)", config_.pixel_width,
+                config_.pixel_height, pixel_w, pixel_h, static_cast<double>(SDL_GetWindowPixelDensity(window_)));
+    }
 
     try {
         RendererConfig renderer_config;
@@ -43,6 +55,7 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
         renderer_config.debug_ui_font = config_.debug_ui_font;
         renderer_config.debug_ui_font_size = config_.debug_ui_font_size;
         renderer_ = std::make_unique<Renderer>(window_, renderer_config);
+        renderer_->set_gpu_timing(config_.gpu_timing);
     } catch (...) {
         SDL_DestroyWindow(window_);
         SDL_Quit();
@@ -89,6 +102,35 @@ void Application::run(Game& game) {
     double stats_cpu_ms = 0.0;
     int last_sprites = 0;
     int last_draw_calls = 0;
+    // Sums of the 3D counters of the measured frames, per pass.
+    struct MeshTotals {
+        double submitted = 0.0, drawn = 0.0, triangles = 0.0, draw_calls = 0.0;
+        double shadow_submitted = 0.0, shadow_drawn = 0.0, shadow_triangles = 0.0, shadow_draw_calls = 0.0;
+        double point_lights = 0.0, point_updates = 0.0, point_drawn = 0.0, point_triangles = 0.0, point_draw_calls = 0.0;
+        double gpu_ms[kGpuTimeCount] = {};
+        double gpu_frames = 0.0;
+        void add(const RenderStats& stats) {
+            submitted += stats.meshes_submitted;
+            drawn += stats.meshes;
+            triangles += static_cast<double>(stats.triangles);
+            draw_calls += stats.mesh_draw_calls;
+            shadow_submitted += stats.shadow_casters_submitted;
+            shadow_drawn += stats.shadow_casters;
+            shadow_triangles += static_cast<double>(stats.shadow_triangles);
+            shadow_draw_calls += stats.shadow_draw_calls;
+            point_lights += stats.point_shadow_lights;
+            point_updates += stats.point_shadow_updates;
+            point_drawn += stats.point_shadow_casters;
+            point_triangles += static_cast<double>(stats.point_shadow_triangles);
+            point_draw_calls += stats.point_shadow_draw_calls;
+            if (stats.gpu_timed) {
+                for (int i = 0; i < kGpuTimeCount; ++i) {
+                    gpu_ms[i] += stats.gpu_ms[i];
+                }
+                gpu_frames += 1.0;
+            }
+        }
+    } mesh_totals;
 
     std::uint64_t previous = SDL_GetPerformanceCounter();
 
@@ -151,6 +193,7 @@ void Application::run(Game& game) {
                 sprites_total += last_sprites;
                 draw_calls_total += last_draw_calls;
                 bytes_total += static_cast<double>(renderer_->stats().bytes_uploaded);
+                mesh_totals.add(renderer_->stats());
             }
             ++drawn_frames;
         } else {
@@ -181,6 +224,25 @@ void Application::run(Game& game) {
                 record_stats.mean(), submit_stats.mean());
         SDL_Log("perf: per frame  %.0f sprites, %.0f draw calls, %.1f KiB uploaded", sprites_total / measured,
                 draw_calls_total / measured, bytes_total / measured / 1024.0);
+        if (mesh_totals.submitted > 0.0) {
+            SDL_Log("perf: scene    %.0f meshes recorded, %.0f drawn, %.0f triangles, %.0f draw calls",
+                    mesh_totals.submitted / measured, mesh_totals.drawn / measured, mesh_totals.triangles / measured,
+                    mesh_totals.draw_calls / measured);
+            SDL_Log("perf: shadow   %.0f casters recorded, %.0f drawn, %.0f triangles, %.0f draw calls",
+                    mesh_totals.shadow_submitted / measured, mesh_totals.shadow_drawn / measured,
+                    mesh_totals.shadow_triangles / measured, mesh_totals.shadow_draw_calls / measured);
+            SDL_Log("perf: points   %.2f lights shadowed, %.2f redrawn, %.0f meshes drawn, %.0f triangles, %.0f draw calls",
+                    mesh_totals.point_lights / measured, mesh_totals.point_updates / measured,
+                    mesh_totals.point_drawn / measured, mesh_totals.point_triangles / measured,
+                    mesh_totals.point_draw_calls / measured);
+        }
+        if (mesh_totals.gpu_frames > 0.0) {
+            const double n = mesh_totals.gpu_frames;
+            const double* g = mesh_totals.gpu_ms;
+            SDL_Log("perf: gpu ms (approx.)  uploads %.3f  shadow %.3f  point shadows %.3f  scene %.3f  compose %.3f  total %.3f",
+                    g[kGpuUpload] / n, g[kGpuShadow] / n, g[kGpuPointShadows] / n, g[kGpuScene] / n, g[kGpuCompose] / n,
+                    (g[kGpuUpload] + g[kGpuShadow] + g[kGpuPointShadows] + g[kGpuScene] + g[kGpuCompose]) / n);
+        }
     }
 }
 

@@ -13,7 +13,11 @@
 
 namespace moteur {
 
+class BillboardRenderer;
+class DebugLineRenderer;
 class DebugUi;
+class DepthView;
+class Fxaa;
 class MeshRenderer;
 class SpriteRenderer;
 class ToneMapper;
@@ -57,12 +61,60 @@ struct Texture {
 // Counters filled while a frame is executed, valid from end_frame() until the next begin_frame().
 struct RenderStats {
     int sprites = 0;
-    int meshes = 0;                  // 3D meshes drawn
-    std::size_t triangles = 0;       // of those meshes
-    int draw_calls = 0;              // sprites and meshes together
-    int dropped_lights = 0;          // point lights beyond MeshRenderer::kMaxPointLights, ignored
-    std::size_t bytes_uploaded = 0;  // vertex data sent to the GPU this frame
+    int draw_calls = 0;              // every pass together (sprites, meshes, shadows)
+    std::size_t bytes_uploaded = 0;  // vertex and instance data sent to the GPU this frame
+
+    // The "scene" pass: meshes recorded, left after frustum culling (drawn), their triangles and
+    // draw calls (one per batch of instances; also counted in draw_calls).
+    int meshes_submitted = 0;
+    int meshes = 0;
+    std::size_t triangles = 0;
+    int mesh_draw_calls = 0;
+    int dropped_lights = 0;  // point lights beyond MeshRenderer::kMaxPointLights, ignored
+
+    // The "shadow" pass, the same counters, among the meshes that cast shadows.
+    int shadow_casters_submitted = 0;
+    int shadow_casters = 0;
+    std::size_t shadow_triangles = 0;
+    int shadow_draw_calls = 0;
+
+    // Point light shadows: lights with a shadow this frame, those whose six faces were drawn again
+    // (the others kept theirs), and for those faces the meshes drawn, their triangles and the draw
+    // calls (six tile clears per light drawn included).
+    int point_shadow_lights = 0;
+    int point_shadow_updates = 0;
+    int point_shadow_casters = 0;
+    std::size_t point_shadow_triangles = 0;
+    int point_shadow_draw_calls = 0;
+
+    // Sprites in the 3D world (BillboardRenderer), in the "scene" pass.
+    int billboards = 0;
+    int billboard_draw_calls = 0;
+    int debug_lines = 0;  // DebugLineRenderer
+
+    // GPU time of each part of the frame, in milliseconds, when Renderer::set_gpu_timing() is on
+    // (gpu_timed): approximate (see there). In the order of GpuTime.
+    bool gpu_timed = false;
+    float gpu_ms[5] = {};
 };
+
+// The parts of a frame timed by Renderer::set_gpu_timing(), as indices into RenderStats::gpu_ms.
+enum GpuTime { kGpuUpload, kGpuShadow, kGpuPointShadows, kGpuScene, kGpuCompose, kGpuTimeCount };
+
+// A depth texture the Renderer can show over the frame, for debugging.
+enum class DebugTexture { None, SunShadowMap, PointShadowAtlas };
+
+// How the edges of the 3D scene are smoothed (Renderer::set_anti_aliasing()).
+//   None    stair-stepped edges, no cost
+//   Fxaa    a full-screen filter on the tone-mapped image: cheap, works everywhere, a little blurry
+//   Msaa2/4 2 or 4 depth samples per pixel along the triangles' edges, resolved before the tone
+//           mapping: very clean on geometry, cheap on tiled GPUs (Apple), but nothing for textures
+//           or shadows
+enum class AntiAliasing { None, Fxaa, Msaa2, Msaa4 };
+// "none", "fxaa", "msaa2", "msaa4": the names of the command line.
+const char* anti_aliasing_name(AntiAliasing mode);
+// The mode named `name` (as above); false when there is none.
+bool parse_anti_aliasing(const std::string& name, AntiAliasing& mode);
 
 // Owns the GPU device and drives one frame at a time.
 //
@@ -74,11 +126,18 @@ struct RenderStats {
 //
 // The render passes, in order:
 //
-//   "scene"     only when meshes were recorded: the 3D world (meshes()), in linear HDR colors, into
-//               an offscreen float texture with its depth, at the render resolution (render scale)
-//   "compose"   the swapchain: the scene tone mapped to screen colors (or the clear color without
-//               3D), then the world sprites (sprites()), the interface in window pixels
-//               (screen_sprites()), and ImGui on top
+//   "shadow"    only when meshes were recorded and the sun casts shadows: their depth seen from
+//               the sun, into the shadow map (see MeshRenderer)
+//   "point shadows"  only when a point light's shadow must be drawn again: its six faces, into
+//               the point shadow atlas (the other tiles are kept)
+//   "scene"     only when meshes or billboards were recorded: the 3D world (meshes(), then
+//               billboards(), sorted and blended, hidden by the meshes in front), in linear HDR
+//               colors, into an offscreen float texture with its depth, at the render resolution
+//               (multisampled with MSAA, then resolved into a plain texture at the end of the pass)
+//   "tonemap"   with FXAA only: the scene tone mapped into a screen-color texture, for FXAA
+//   "compose"   the swapchain: the scene tone mapped to screen colors (with FXAA, that texture
+//               filtered; the clear color without 3D), then the world sprites (sprites()), the
+//               interface in window pixels (screen_sprites()), and ImGui on top
 //
 // A frame without 3D is drawn exactly as the 2D renderer always drew it.
 // Nothing is sent to the GPU while the game records, so recording is cheap and the engine is free
@@ -116,12 +175,35 @@ public:
     // 3D meshes, recorded between begin_frame() and end_frame(), drawn in the "scene" pass with
     // depth test and write, in linear HDR colors.
     MeshRenderer& meshes();
+    // Sprites in the 3D world, turned towards the camera, drawn after the meshes in the "scene" pass.
+    BillboardRenderer& billboards();
+    // Lines to look at what happens (boxes, frustums, rays), drawn last in the "scene" pass.
+    DebugLineRenderer& debug_lines();
+
+    // Debugging: shows a shadow map in the bottom right corner of the frame, in grays.
+    void set_debug_texture(DebugTexture texture) { debug_texture_ = texture; }
+    DebugTexture debug_texture() const { return debug_texture_; }
+
+    // Measures the GPU time of each part of the frame (RenderStats::gpu_ms). SDL_GPU has no timer
+    // queries: each part (uploads, shadow, point shadows, scene, compose) is then submitted on its
+    // own and waited for, and the time between the submission and the end of the work is taken.
+    // Approximate (it includes the submission), and it stops the CPU and the GPU from working at
+    // the same time: frame rates drop. For measurements only.
+    void set_gpu_timing(bool on) { gpu_timing_ = on; }
+    bool gpu_timing() const { return gpu_timing_; }
 
     // Fraction of the window's pixels the 3D scene is rendered at, in [0.25, 1]; the tone mapping
     // scales it up to the window. Below 1, it trades sharpness for speed (Retina screens, small
     // GPUs). Sprites and the interface always stay at the window's full resolution.
     void set_render_scale(float scale);
     float render_scale() const { return render_scale_; }
+    // Anti-aliasing of the 3D scene, None by default. Can change between frames: the next
+    // begin_frame() recreates what the mode needs (textures, the scene pass's pipelines), a short
+    // pause. An MSAA mode the GPU cannot do falls back to the next one it can (see supports()).
+    void set_anti_aliasing(AntiAliasing mode);
+    AntiAliasing anti_aliasing() const { return anti_aliasing_; }
+    // Whether the GPU can render the scene with `mode` (None and Fxaa always).
+    bool supports(AntiAliasing mode) const;
     // Multiplies the linear scene before tone mapping: 2 is one stop brighter. Clamped to > 0.
     void set_exposure(float exposure);
     float exposure() const { return exposure_; }
@@ -204,20 +286,34 @@ private:
     RenderStats stats_;
     std::string capture_path_;
 
-    // Color and depth of the "scene" pass, at the render resolution, recreated when it changes.
+    // Color and depth of the "scene" pass, at the render resolution, recreated when it or the
+    // anti-aliasing changes (the scene pass's pipelines too, for the number of samples).
     void ensure_scene_targets();
+    // In the "compose" pass: the texture chosen by set_debug_texture(), if any.
+    void render_debug_texture(SDL_GPURenderPass* pass);
     SDL_GPUTextureFormat depth_format_ = SDL_GPU_TEXTUREFORMAT_INVALID;
-    GpuTexture scene_texture_;
-    GpuTexture depth_texture_;
+    GpuTexture scene_texture_;       // what the tone mapping reads (the resolved image with MSAA)
+    GpuTexture scene_msaa_texture_;  // with MSAA only: the multisampled image the scene pass draws
+    GpuTexture depth_texture_;       // multisampled with MSAA
+    GpuTexture ldr_texture_;         // with FXAA only: the tone-mapped scene, which FXAA reads
     std::uint32_t scene_width_ = 0;
     std::uint32_t scene_height_ = 0;
+    AntiAliasing anti_aliasing_ = AntiAliasing::None;
+    AntiAliasing targets_anti_aliasing_ = AntiAliasing::None;  // what the textures were made for
+    SDL_GPUSampleCount scene_samples_ = SDL_GPU_SAMPLECOUNT_1;  // what the pipelines were made for
     float render_scale_ = 1.0f;
     float exposure_ = 1.0f;
 
     std::unique_ptr<MeshRenderer> meshes_;
+    std::unique_ptr<BillboardRenderer> billboards_;
+    std::unique_ptr<DebugLineRenderer> debug_lines_;
+    std::unique_ptr<DepthView> depth_view_;
+    DebugTexture debug_texture_ = DebugTexture::None;
+    bool gpu_timing_ = false;
     std::unique_ptr<SpriteRenderer> sprites_;
     std::unique_ptr<SpriteRenderer> screen_sprites_;
     std::unique_ptr<ToneMapper> tone_mapper_;
+    std::unique_ptr<Fxaa> fxaa_;
     std::unique_ptr<DebugUi> debug_ui_;
 };
 

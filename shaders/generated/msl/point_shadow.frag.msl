@@ -1,0 +1,27 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_Light
+{
+    float4 light;
+};
+
+struct main0_out
+{
+    float gl_FragDepth [[depth(any)]];
+};
+
+struct main0_in
+{
+    float3 in_var_TEXCOORD0 [[user(locn0)]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], constant type_Light& Light [[buffer(0)]])
+{
+    main0_out out = {};
+    out.gl_FragDepth = fast::clamp(length(in.in_var_TEXCOORD0 - Light.light.xyz) * Light.light.w, 0.0, 1.0);
+    return out;
+}
+

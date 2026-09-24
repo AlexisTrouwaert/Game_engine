@@ -9,9 +9,12 @@ add_library(moteur STATIC
     animation.cpp
     application.cpp
     atlas_builder.cpp
+    billboard_batcher.cpp
+    billboard_renderer.cpp
     camera.cpp
     camera3d.cpp
     color.cpp
+    debug_lines.cpp
     debug_ui.cpp
     environment.cpp
     fixed_timestep.cpp
@@ -20,11 +23,13 @@ add_library(moteur STATIC
     image.cpp
     iso.cpp
     mesh.cpp
+    mesh_batcher.cpp
     mesh_renderer.cpp
     model.cpp
     paths.cpp
     renderer.cpp
     screenshot.cpp
+    shadow.cpp
     sprite_batcher.cpp
     sprite_region.cpp
     sprite_renderer.cpp

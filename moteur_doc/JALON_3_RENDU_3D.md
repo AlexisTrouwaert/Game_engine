@@ -38,10 +38,12 @@ Les points marqués *(à vérifier)* sont des informations dont je ne suis pas c
 6. [Textures et couleur](#6-textures-et-couleur)
 7. [Matériaux et éclairage](#7-matériaux-et-éclairage)
 8. [Ombres](#8-ombres)
+8 bis. [Ombres des lumières ponctuelles](#8-bis-ombres-des-lumières-ponctuelles)
 9. [Beaucoup d'objets : instanciation et culling](#9-beaucoup-dobjets--instanciation-et-culling)
 10. [Le 2D par-dessus la 3D](#10-le-2d-par-dessus-la-3d)
 11. [Scène de démonstration 3D](#11-scène-de-démonstration-3d)
 12. [Débogage et performance](#12-débogage-et-performance)
+12 bis. [Anticrénelage configurable](#12-bis-anticrénelage-configurable)
 13. [Critères de fin de jalon](#13-critères-de-fin-de-jalon)
 14. [Risques principaux](#14-risques-principaux)
 15. [Décisions à consigner](#décisions-à-consigner)
@@ -175,7 +177,7 @@ Les copies restent **avant** toutes les passes : SDL_GPU interdit de copier dans
 - [x] Créer la **texture de profondeur**, à la taille du swapchain, recréée au redimensionnement. Choisir son format avec `SDL_GPUTextureSupportsFormat` : SDL ne garantit que `D16_UNORM`, et **soit** `D24_UNORM` **soit** `D32_FLOAT`, jamais les deux.
 - [x] Régler la dette du jalon 2 : la projection du `SpriteRenderer` vaut pour **toute la frame**. Il faut au moins deux vues de sprites : **écran** (interface, en pixels) et **monde** (avec une caméra). Le texte de statistiques de la démo 2D ne doit plus changer de taille avec le zoom.
 - [x] Choisir et écrire les conventions : repère du monde, unités, profondeur du clip, sens des faces avant, culling (voir les questions).
-- [ ] Organiser les shaders 3D selon les conventions de registres de SDL_GPU pour HLSL : dans un vertex shader, textures et échantillonneurs en `space0`, uniforms en `space1` ; dans un fragment shader, `space2` et `space3` (voir la documentation de `SDL_CreateGPUShader`). *Convention consignée ; elle s'appliquera au premier shader 3D (partie 4).*
+- [x] Organiser les shaders 3D selon les conventions de registres de SDL_GPU pour HLSL : dans un vertex shader, textures et échantillonneurs en `space0`, uniforms en `space1` ; dans un fragment shader, `space2` et `space3` (voir la documentation de `SDL_CreateGPUShader`). *Appliquée par les shaders `mesh`, `tonemap` et `shadow`.*
 - [x] Ajouter une scène vide « Rendu 3D » dans le menu du bac à sable, pour itérer.
 
 ### Questions à se poser
@@ -251,12 +253,12 @@ Une caméra qui regarde le monde depuis une orientation fixe, suit une cible, zo
 
 - [x] Créer une classe `Camera3D` : cible, distance, angles (fixes), type de projection, taille de la vue. *Faite en partie 4 pour comparer les projections : cadrage par la hauteur visible à la cible, commun aux deux.*
 - [x] Calculer les matrices vue et projection (profondeur `[0, 1]`, voir la partie 2).
-- [ ] Construire un **rayon** depuis un pixel de l'écran, et l'intersecter avec le plan du sol : la case de la `TileMap` sous la souris.
-- [ ] Projeter un point du monde vers l'écran (pour placer du 2D au-dessus d'un objet, partie 10).
-- [ ] Calculer le **frustum** (les six plans de la vue), pour le culling (partie 9), et la zone du sol visible.
-- [ ] Interpoler la caméra entre deux pas fixes, comme `Camera2D`.
-- [ ] Suivre une cible avec un lissage calculé sur le pas fixe.
-- [ ] Tests unitaires : aller-retour monde, écran, rayon ; le point du sol sous le centre de l'écran est la cible ; coins de la fenêtre ; conversion points / pixels ; frustum contre des boîtes connues.
+- [x] Construire un **rayon** depuis un pixel de l'écran, et l'intersecter avec le plan du sol : la case de la `TileMap` sous la souris.
+- [x] Projeter un point du monde vers l'écran (pour placer du 2D au-dessus d'un objet, partie 10).
+- [x] Calculer le **frustum** (les six plans de la vue), pour le culling (partie 9), et la zone du sol visible. *La zone du sol visible est calculée par `fit_sun_shadow` (partie 8), avec les rayons des coins.*
+- [x] Interpoler la caméra entre deux pas fixes, comme `Camera2D`.
+- [x] Suivre une cible avec un lissage calculé sur le pas fixe.
+- [x] Tests unitaires : aller-retour monde, écran, rayon ; le point du sol sous le centre de l'écran est la cible ; coins de la fenêtre ; conversion points / pixels ; frustum contre des boîtes connues. *La conversion points / pixels reste celle d'`Application::to_pixels()` (jalon 2) : la caméra ne reçoit que des pixels.*
 
 ### Questions à se poser
 
@@ -281,11 +283,31 @@ Une caméra qui regarde le monde depuis une orientation fixe, suit une cible, zo
 - Un rayon presque parallèle au sol : division par un nombre proche de zéro. Impossible avec une caméra plongeante fixe, mais à protéger.
 - Le sens de Y : Y écran vers le bas, Y du clip vers le haut *(SDL_GPU normalise ce sens entre les backends, à vérifier)*.
 
+### Implémentation réalisée (partie 3)
+
+Fichiers : `camera3d.hpp` / `camera3d.cpp` (complétés), `aabb.hpp` (nouveau), tests dans `test_camera3d.cpp`, scène dans `apps/bac_a_sable/main.cpp`.
+
+- **`Aabb`** sort de `mesh.hpp` pour son propre en-tête (`aabb.hpp`), avec `corner(i)` et `transform_box(box, matrice)` : la boîte d'un objet placé dans le monde, dont le culling de la partie 9 aura besoin.
+- **`Ray`** (origine, direction unitaire) et `hit_height(h)` : le point où le rayon traverse le plan horizontal `y = h`, rien s'il est parallèle ou derrière l'origine (le piège du rayon presque parallèle est donc protégé).
+- **`Camera3D::screen_ray(pixel)`** : le pixel (fenêtre, y vers le bas) passe en coordonnées de clip, puis l'inverse de la vue-projection donne deux points, sur les plans proche et lointain ; le rayon va de l'un à l'autre. La même formule marche en perspective (rayons qui s'écartent) et en orthographique (rayons parallèles). **`ground_point(pixel, h)`** en découle.
+- **`world_to_screen(point)`** : l'inverse, rien si le point est derrière la caméra. Les étiquettes des modèles de la scène l'utilisent.
+- **`Frustum`** : les six plans extraits de la vue-projection (méthode de Gribb et Hartmann, adaptée à la profondeur `[0, 1]`), normalisés, normales vers l'intérieur. `contains(point)` et `intersects(boîte)` (test du coin le plus avancé : jamais de faux négatif, quelques faux positifs près des coins, sans conséquence pour le culling).
+- **Interpolation** comme `Camera2D` : `begin_update()` au début de chaque pas fixe mémorise la cible et le cadrage, `interpolated(alpha)` rend une copie entre les deux. **La scène dessine et pique avec la même caméra interpolée** (y compris pour le clic), si bien que la case surlignée est toujours celle dessinée sous le curseur, même quand la caméra glisse.
+- **`follow(but, dt, demi_vie)`** : la cible couvre la moitié de la distance restante toutes les `demi_vie` secondes (`exp2(-dt / demi_vie)`). Contrairement à une fraction fixe par pas, le résultat ne dépend pas de la fréquence des ticks.
+- **Scène** : la case sous la souris est surlignée (dans les limites du sol) et affichée dans le texte ; un **clic gauche** envoie le « personnage » (la boîte jaune) vers le point cliqué, en ligne droite à 4 m/s, avec un repère vert à l'arrivée ; **F** (ou la case « Suivre le personnage ») fait suivre le personnage par la caméra (demi-vie 0,25 s). Les clics sur le panneau ImGui ne traversent pas vers la scène. `--mouse X Y` place une souris simulée et écrit la case survolée à la fermeture (`hovered tile: i j`, ou `none` hors du sol), comme la scène isométrique.
+
+**Vérifications faites (Windows)**
+
+- 7 nouveaux cas de tests : aller-retour pixel → sol → pixel aux quatre coins et au centre, dans les deux projections et à plusieurs hauteurs visibles (écart inférieur à 0,01 pixel) ; le haut de l'écran voit plus loin que le bas ; point derrière la caméra ; `hit_height` (parallèle, derrière, au-dessus) ; frustum contre des boîtes dedans, dehors, à cheval, le sol visible et une boîte vide ; interpolation à mi-chemin ; suivi identique à 30 et 240 ticks par seconde. 174 tests au vert.
+- Captures avec `--mouse` : le curseur tombe dans la case surlignée, en perspective comme en orthographique, au centre et près des bords ; `none` quand la souris vise hors du sol.
+- Pilotage réel de la fenêtre : clic, marche jusqu'au repère, suivi de la caméra puis nouveau clic pendant le suivi.
+- Build Debug (validation GPU) : aucun message. Les six scènes 2D gardent exactement les mêmes captures.
+
 ### Validation
 
-- [ ] La case sous la souris est correcte aux quatre coins de la fenêtre, à plusieurs niveaux de zoom (test unitaire et scène).
-- [ ] Un point du sol projeté à l'écran puis relancé en rayon retombe sur lui-même (écart inférieur à 0,001).
-- [ ] Même résultat sur les deux OS, écran Retina compris.
+- [x] La case sous la souris est correcte aux quatre coins de la fenêtre, à plusieurs niveaux de zoom (test unitaire et scène).
+- [x] Un point du sol projeté à l'écran puis relancé en rayon retombe sur lui-même (écart inférieur à 0,001). *Vérifié dans le sens pixel → sol → pixel : écart inférieur à 0,01 pixel, soit bien moins d'un millimètre au sol.*
+- [ ] Même résultat sur les deux OS, écran Retina compris. *Windows vérifié.*
 
 ---
 
@@ -470,7 +492,7 @@ SDL_GPU propose les formats `R8G8B8A8_UNORM_SRGB` et `B8G8R8A8_UNORM_SRGB`, gara
 
 - **Toute la frame en linéaire, ou seulement la 3D ?** Avec un rendu PBR réaliste, la réponse recommandée est la **cible intermédiaire en flottant** (`R16G16B16A16_FLOAT`) pour la 3D, convertie vers le swapchain par un *tone mapping* (ACES, AgX ou Khronos PBR Neutral), puis le 2D par-dessus comme aujourd'hui. Les lumières PBR dépassent facilement 1,0 : sans HDR, elles saturent. Le 2D garde son aspect actuel.
 - **Quel tone mapping ?** *Khronos PBR Neutral* garde les couleurs des matériaux fidèles (utile pour comparer à Blender) ; ACES et AgX donnent un rendu plus « cinéma ». Blender utilise AgX par défaut *(à vérifier selon la version)*.
-- **Compression GPU des textures ?** Toujours repoussée depuis le jalon 2 : BC7 (Windows) et ASTC (Mac) diffèrent. En PBR réaliste, un matériau compte 3 à 5 textures (couleur, normales, rugosité / métal, occlusion, émissif) : sans compression, une texture 2048×2048 pèse 16 Mo avec ses mipmaps, et la mémoire d'un M3 de base (8 à 16 Go partagés avec le système) part vite. `ktx` (4.4.2 dans vcpkg) permet un format unique transcodé au chargement. **À ne plus repousser au-delà de ce jalon** si les scènes de test chargent de vrais matériaux.
+- **Compression GPU des textures ?** Toujours repoussée depuis le jalon 2 : BC7 (Windows) et ASTC (Mac) diffèrent. En PBR réaliste, un matériau compte 3 à 5 textures (couleur, normales, rugosité / métal, occlusion, émissif) : sans compression, une texture 2048×2048 pèse 16 Mo avec ses mipmaps, et la mémoire d'un M3 de base (8 à 16 Go partagés avec le système) part vite. `ktx` (4.4.2 dans vcpkg) permet un format unique transcodé au chargement. **À ne plus repousser au-delà de ce jalon** si les scènes de test chargent de vrais matériaux. *Tranché le 2026-09-24 (voir les décisions) : KTX2, en UASTC ou en BC7 / BC5 déjà transcodés ; implémentation au jalon 4, avec le gestionnaire d'assets. Les 12 textures de test (67 Mo sur le GPU) n'en ont pas besoin pour finir ce jalon.*
 
 ### Pièges connus
 
@@ -523,7 +545,7 @@ Des modèles éclairés : une lumière directionnelle (soleil, lune), une lumiè
 - [x] Valider le shader contre les modèles de référence de Khronos (par exemple la grille de sphères métal / rugosité). *Grille équivalente générée dans la scène (7×7 sphères), sans téléchargement.*
 - [x] Lumière directionnelle et ambiante (ou **hémisphérique** : une couleur de ciel, une couleur de sol). *Soleil + environnement (l'ambiante est remplacée par l'IBL).*
 - [x] Lumières ponctuelles : une liste dans un tampon, portée et atténuation. *Jusqu'à 32, dans le tampon d'uniforms de la frame ; atténuation de KHR_lights_punctual.*
-- [ ] Trier les objets par pipeline puis par matériau, comme le batch 2D trie par texture. *Pas encore : les liaisons ne sont refaites que quand elles changent, le tri viendra avec l'instanciation (partie 9).*
+- [x] Trier les objets par pipeline puis par matériau, comme le batch 2D trie par texture. *Fait en partie 9 : le `MeshBatcher` regroupe par faces (le pipeline), maillage et textures ; les couleurs, dans les instances, ne coupent pas les lots.*
 - [x] Réglages en direct dans ImGui : direction, couleurs, intensités.
 
 ### Questions à se poser
@@ -565,7 +587,24 @@ Fichiers : `material.hpp`, `environment.hpp` / `environment.cpp`, `mesh_renderer
 
 - [ ] Une sphère éclairée montre un dégradé et un reflet aux endroits attendus, identiques sur les deux OS. *Windows vérifié.*
 - [x] La grille de sphères métal / rugosité de Khronos ressemble à son rendu de référence. *Grille équivalente générée dans la scène.*
-- [ ] Les modèles de test ressemblent à leur aperçu dans Blender, sous le même environnement HDR. *Nécessite un HDRI (téléchargement à valider) et Blender.*
+- [x] Les modèles de test ressemblent à leur aperçu dans Blender, sous le même environnement HDR. *Fait le 2026-09-24 (voir « Comparaison avec Blender » ci-dessous).*
+
+**Comparaison avec Blender** (2026-09-24, Windows)
+
+HDRI « Studio Small 09 » (Poly Haven, CC0, 1K), téléchargé par `fetch_test_models.py`. Le moteur : `--blender-compare --pixel-size 1280 720 --aa msaa4` (capture et description JSON). Blender 5.2.2 (celle du MCP Blender ; la 4.5.3 donne exactement les mêmes chiffres) : `tools/blender/compare_render.py --gpu` (Cycles sur OptiX, 256 échantillons, débruitage, vue « Khronos PBR Neutral », environ 5 s). Comparaison : `tools/blender/compare_images.py`.
+
+| Objet | Moteur (sRGB moyen) | Blender | Écart |
+|---|---|---|---|
+| Tonneau | 81, 58, 36 | 80, 59, 38 | ≤ 2 |
+| Rocher | 95, 72, 49 | 84, 62, 41 | +11, +10, +8 |
+| Lanterne | 64, 51, 37 | 45, 33, 22 | +19, +18, +15 |
+| Épée | 71, 67, 59 | 74, 68, 59 | ≤ 3 |
+| Sphère blanche mate | 203, 199, 199 | 200, 196, 195 | ≤ 4 |
+| Sphère en or poli | 170, 148, 96 | 174, 151, 99 | ≤ 4 |
+
+- **Même image** : cadrage, taille et place de chaque objet se superposent au pixel près ; les couleurs des matériaux concordent (écart moyen de 4 sur 255 au plus, hors objets creux).
+- **Orientation de l'environnement** : les reflets des deux boîtes à lumière du studio tombent aux mêmes endroits sur la sphère en or : les deux programmes lisent l'image équirectangulaire de la même façon, sans rotation (ce que les conventions laissaient prévoir).
+- **Écarts expliqués** : le rocher et la lanterne sont plus clairs dans le moteur, parce que Blender trace la lumière et ombre leurs creux (cavités du rocher, intérieur de la lanterne) ; le moteur n'a que les cartes d'occlusion des modèles. Sur la sphère en or, les reflets du moteur sont un peu plus diffus sur leurs bords (image préfiltrée, approximation de Karis). Rien à corriger : une occlusion ambiante à l'écran (SSAO) est notée pour plus tard (post-traitement, voir la roadmap).
 - [x] 16 lumières ponctuelles animées tournent à la cadence de l'écran.
 
 ---
@@ -587,12 +626,12 @@ SDL_GPU le permet directement : un échantillonneur avec comparaison (`enable_co
 
 ### Tâches
 
-- [ ] Créer la passe d'ombre : texture de profondeur, pipeline profondeur seule.
-- [ ] Calculer la matrice de la lumière : une boîte orthographique qui englobe la zone visible au sol et la hauteur des objets.
-- [ ] Échantillonner avec comparaison, et adoucir les bords par un filtrage (*PCF*, 3×3 ou disque de Poisson).
-- [ ] **Stabiliser** : aligner la boîte de la lumière sur la grille des texels, sinon les bords d'ombre scintillent quand la caméra bouge.
-- [ ] Régler les **biais** (constant et selon la pente) contre l'« acné » ; les exposer dans ImGui.
-- [ ] Permettre de désactiver les ombres, pour mesurer leur coût.
+- [x] Créer la passe d'ombre : texture de profondeur, pipeline profondeur seule.
+- [x] Calculer la matrice de la lumière : une boîte orthographique qui englobe la zone visible au sol et la hauteur des objets.
+- [x] Échantillonner avec comparaison, et adoucir les bords par un filtrage (*PCF*, 3×3 ou disque de Poisson). *3×3 comparaisons, chacune filtrée 2×2 par le matériel.*
+- [x] **Stabiliser** : aligner la boîte de la lumière sur la grille des texels, sinon les bords d'ombre scintillent quand la caméra bouge.
+- [x] Régler les **biais** (constant et selon la pente) contre l'« acné » ; les exposer dans ImGui. *Biais de pente fixe dans le pipeline d'ombre ; décalage le long de la normale et biais de profondeur réglables.*
+- [x] Permettre de désactiver les ombres, pour mesurer leur coût.
 
 ### Questions à se poser
 
@@ -609,12 +648,96 @@ SDL_GPU le permet directement : un échantillonneur avec comparaison (`enable_co
 - Une convention de coordonnées de texture différente entre Direct3D 12 et Metal lors de l'échantillonnage : ombre décalée sur un seul OS *(SDL_GPU devrait normaliser, à vérifier)*.
 - Oublier que le culling de la passe d'ombre utilise le volume **de la lumière**, pas celui de la caméra : un objet hors écran peut projeter une ombre à l'écran.
 
+### Implémentation réalisée (partie 8)
+
+Fichiers : `shadow.hpp` / `shadow.cpp` (cadrage, logique pure), `mesh_renderer` (passe d'ombre), `renderer.cpp` (passe « shadow »), `shaders/shadow.vert.hlsl` et `shadow.frag.hlsl`, `mesh.frag.hlsl` (lecture de l'ombre), `material.hpp` (`casts_shadow`), tests dans `test_shadow.cpp`.
+
+- **Passe « shadow »**, avant la passe « scene », seulement s'il y a de la 3D, que les ombres sont activées et que le soleil éclaire : la profondeur de chaque maillage vue du soleil, dans une texture carrée (2048 par défaut ; `D32_FLOAT` si le GPU peut y dessiner **et** la lire, sinon `D16_UNORM`, seul garanti pour la lecture). Pipelines profondeur seule, simple ou double face, avec un biais de pente fixe. Les matériaux marqués `casts_shadow = false` (les flammes des torches) n'y sont pas dessinés.
+- **Cadrage** (`fit_sun_shadow()`, logique pure) : les rayons des quatre coins de l'écran sont coupés par le sol et par une hauteur maximale (6 m), les points obtenus sont englobés dans une **sphère** au rayon arrondi au mètre (la carte ne change de taille qu'avec le zoom), dont le centre est **aligné sur la grille des texels** vue du soleil (la carte glisse par texels entiers : pas de scintillement). La boîte de la lumière recule de 40 m vers le soleil pour garder les objets hors champ qui projettent une ombre dans la vue.
+- **Lecture** (`mesh.frag.hlsl`) : la position est décalée le long de la normale géométrique (en texels, davantage aux angles rasants), projetée dans la carte, puis comparée en 3×3 lectures filtrées par le matériel (comparaison avec filtrage linéaire : chaque lecture mélange déjà 2×2 résultats). L'ombre ne touche que la lumière du soleil ; l'environnement et les torches n'en ont pas.
+- **Réglages** (`ShadowOptions`, panneau de la scène 3D) : activation, résolution (1024, 2048, 4096), décalage normal, biais de profondeur. `--sun ORIENTATION HAUTEUR` place le soleil pour les captures.
+
+**Vérifications faites (Windows)**
+
+- 4 cas de tests unitaires (167 au total) : tout le sol visible (et un objet à 3 m au-dessus) tombe dans la carte avec une profondeur valide ; ce qui est plus près du soleil a une profondeur plus faible, et un point et son ombre le long du rayon tombent sur le même texel ; la carte garde sa taille quand la caméra se déplace et grandit quand elle dézoome ; **déplacer la caméra fait glisser la carte d'un nombre entier de texels** (la partie fractionnaire de la position d'un point fixe ne change pas). Tous passés du premier coup.
+- Rendu, soleil face à la caméra : les ombres des objets posés partent exactement de leur base (pas de décollement), celle du cube suspendu à 1 m est détachée de lui, le sol n'a ni acné ni moiré.
+- Mesure (Release, sans VSync, scène complète) : 0,56 ms de CPU par frame au lieu de 0,39 (477 draw calls de plus pour la passe d'ombre : les objets y sont tous redessinés, sans élimination, en attendant la partie 9), environ 1 680 images par seconde.
+- Build Debug (validation GPU) : aucun message. Les six scènes 2D gardent les mêmes captures.
+
 ### Validation
 
-- [ ] L'ombre d'un poteau tombe au bon endroit sur le sol (position vérifiée par calcul).
-- [ ] Les bords d'ombre restent stables quand la caméra se déplace.
-- [ ] Aucune acné visible aux angles de lumière prévus.
-- [ ] Le coût est mesuré (temps CPU, nombre de draws de la passe d'ombre).
+- [x] L'ombre d'un poteau tombe au bon endroit sur le sol (position vérifiée par calcul). *Test unitaire : un point et le point situé 2 m plus haut le long du rayon du soleil tombent sur le même texel ; au rendu, les ombres partent de la base des objets.*
+- [x] Les bords d'ombre restent stables quand la caméra se déplace. *Glissement par texels entiers, vérifié par test unitaire ; à juger aussi à l'œil.*
+- [x] Aucune acné visible aux angles de lumière prévus.
+- [x] Le coût est mesuré (temps CPU, nombre de draws de la passe d'ombre).
+
+---
+
+## 8 bis. Ombres des lumières ponctuelles
+
+### But
+
+Des ombres projetées par les torches, les lanternes et les sorts, activables source par source. Dans un donjon sans soleil, ce sont elles qui donnent l'ambiance.
+
+### Pourquoi après la partie 9
+
+Une lumière ponctuelle éclaire dans toutes les directions : son ombre demande **six rendus** (une carte cubique), contre un pour le soleil. Sans élimination, chaque rendu redessine tous les objets de la scène : 16 torches ombrées feraient environ 16 × 6 × 477 ≈ 46 000 draw calls par frame dans la scène de test. Avec le culling de la partie 9, une torche de 6 m de portée ne redessine que les 10 à 30 objets de sa sphère.
+
+### Tâches
+
+- [x] Ajouter un flag `casts_shadows` à `PointLight` : une ligne pour activer ou couper le comportement sur n'importe quelle source.
+- [x] Un **budget** par frame (par exemple 4 lumières ombrées) : le moteur choisit les plus importantes (proches de la caméra, intenses) ; les autres éclairent sans ombre. *Critère retenu : visibles, les plus proches du centre de la vue au sol.*
+- [x] Un **atlas d'ombres** : une seule texture de profondeur découpée en cases (par exemple 512 px par face), plutôt qu'une texture par lumière.
+- [x] Éliminer, pour chaque face, les objets hors de la sphère de la lumière (partie 9).
+- [x] Un **cache** pour les lumières fixes : leur ombre ne se recalcule que si un objet bouge dans leur rayon. Seules les lumières mobiles (lanterne du joueur, sorts) coûtent à chaque frame. *Automatique : rien à déclarer côté jeu.*
+- [x] Lecture dans le shader : comparaison et filtrage, comme pour le soleil.
+
+### Questions à se poser
+
+- **Carte cubique ou six cases d'un atlas 2D ?** Le cube se lit plus simplement ; l'atlas permet des tailles différentes selon l'importance de la lumière.
+- **Quelle résolution par face ?** 256 à 512 suffit souvent pour une torche ; la lanterne du joueur, toujours à l'écran, peut mériter plus.
+- **Comment choisir les lumières du budget sans « saut »** quand une lumière entre ou sort de la sélection (un fondu de l'ombre) ? *Pas encore traité : l'ombre apparaît ou disparaît d'un coup. À revoir avec la scène de démonstration (partie 11), si le saut se voit en jeu.*
+
+### Implémentation réalisée (partie 8 bis)
+
+Fichiers : `shadow.hpp` / `shadow.cpp` (faces, sélection, emplacements), `aabb.hpp` (`intersects_sphere`), `mesh_batcher` (variante sur une sous-liste), `mesh_renderer`, `renderer.cpp` (passe « point shadows »), `application.cpp` (`--report`), shaders `point_shadow.vert`, `point_shadow.frag`, `shadow_clear.vert` (nouveaux) et `mesh.frag` (MSL exporté), tests dans `test_shadow.cpp` et `test_mesh_batcher.cpp`, scène dans `apps/bac_a_sable/main.cpp`.
+
+- **Le flag** : `PointLight::casts_shadows` (faux par défaut). Réglages dans `ShadowOptions` : `point_budget` (4, au plus 8), `point_resolution` (512 texels par face), `point_normal_offset` (1,5 texel), `point_depth_bias` (2 cm).
+- **Sélection** (`select_point_shadows`) : parmi les lumières qui le demandent, celles dont la sphère touche la vue, **les plus proches du centre de la vue au sol**, dans la limite du budget ; à égalité, la première ajoutée. Les autres éclairent sans ombre.
+- **Atlas** : une texture de profondeur (même format que la carte du soleil), six cases par ligne (les faces +X, −X, +Y, −Y, +Z, −Z) et une ligne par lumière du budget : 3 072 × 2 048 texels pour 4 lumières à 512. Chaque face est un peu plus large que 90° (2 texels de marge de chaque côté), pour que le filtrage 3×3 ne lise jamais la case voisine ; le shader borne aussi la lecture à sa case.
+- **Distance plutôt que profondeur** : la passe écrit `distance / portée` comme profondeur (`SV_Depth`). Le biais est alors une longueur (2 cm), valable près comme loin de la lumière ; le décalage le long de la normale est de 1,5 texel, dont la taille grandit avec la distance.
+- **Culling** : pour chaque lumière, les objets qui projettent une ombre et dont la boîte touche sa sphère ; puis, pour chaque face, ceux qui sont dans son frustum (`MeshBatcher` sur cette sous-liste). Un objet ne va donc que dans les faces qui le voient.
+- **Cache** (`PointShadowSlots`) : chaque lumière sélectionnée a une **signature**, un hachage de sa position, de sa portée, de la résolution et, draw par draw, du maillage, de la matrice monde et des faces de chaque objet dans sa sphère. Si une ligne de l'atlas contient déjà cette signature, rien n'est redessiné. Sinon la lumière prend une ligne libre (de préférence une ligne jamais remplie, pour que les ombres gardées survivent plus longtemps) et ses six cases sont effacées puis redessinées. Rien à déclarer côté jeu : une torche fixe près d'un objet qui bouge se recalcule, une torche dans une pièce immobile jamais.
+- **Passe « point shadows »**, entre celle du soleil et la scène, seulement quand une lumière doit être redessinée. L'atlas est **chargé** (et non effacé) pour garder les autres cases ; une case s'efface en dessinant un triangle à la profondeur maximale dans son viewport (`shadow_clear.vert.hlsl`), car une passe ne peut effacer que toute sa cible.
+- **Lecture** (`mesh.frag.hlsl`) : la face se choisit par la plus grande composante de la direction depuis la lumière (comme `point_shadow_face()`), la matrice de la face donne la position dans la case, puis 3×3 comparaisons filtrées. Seulement pour les lumières ombrées et à portée.
+- **Statistiques** : lumières ombrées, lumières redessinées, maillages, triangles et draw calls de la passe (dans le texte de la scène, le tableau du panneau et `--report`).
+- **Scène** : les 16 torches demandent une ombre. Panneau : « Ombres des torches », budget, résolution par face, décalage et biais, « Torches mobiles ». Ligne de commande : `--point-shadows N` (budget), `--fixed-torches`, `--night` (ni soleil ni ciel, pour voir les torches seules).
+
+**Mesures (Windows, RTX 4070 Ti SUPER, Release, sans vsync, scène 3D complète)**
+
+| Cas | Lumières ombrées / redessinées par frame | CPU par frame | FPS |
+|---|---|---|---|
+| Sans ombre de torche | 0 / 0 | 0,51 ms | ~1 840 |
+| 4 torches mobiles | 4 / 0,13 | 0,54 ms | ~1 750 |
+| 4 torches fixes | 4 / 0,07 | 0,57 ms | ~1 670 |
+| 8 torches mobiles | 8 / 0,31 | 0,63 ms | ~1 520 |
+| 10 000 objets, 4 torches mobiles | 4 / 0,37 | 1,52 ms | ~650 |
+
+Les torches mobiles ne changent qu'à chaque tick (60 par seconde) : entre deux ticks, leurs ombres sont réutilisées, d'où moins d'un recalcul par frame à ~1 750 FPS. Les torches « fixes » se recalculent encore quand le cube qui tourne ou le personnage est dans leur rayon. Le coût CPU vient surtout de la signature (un test de sphère par objet et par lumière, à chaque frame), 0,3 ms à 10 000 objets.
+
+**Vérifications faites (Windows)**
+
+- 5 nouveaux cas de tests : chaque direction tombe dans sa face, marge comprise (2 000 directions) ; sélection (visibles, ordre, budget, sphère qui déborde dans la vue) ; emplacements (gardés, redessinés, ligne libre, retour d'une ancienne lumière, remise à zéro) ; boîte contre sphère ; `MeshBatcher` sur une sous-liste. 187 tests au vert.
+- **Cache** : torches fixes et scène figée (`--fixed-torches --freeze-after 5`) : **0 recalcul** par frame mesurée.
+- **Couper les ombres ne change rien d'autre** : avec le budget à 0, l'image est identique au pixel près à celle d'avant cette partie (hors la ligne de texte ajoutée).
+- Rendu : ombres nettes, sans acné ni couture visible entre les faces, de loin comme de près (`--night`).
+- Build Debug (validation GPU) : aucun message, avec 8 torches ombrées et 2 000 objets. Les six scènes 2D gardent exactement les mêmes captures.
+
+### Validation
+
+- [ ] 4 torches ombrées tiennent l'objectif de performance sur un M3. *Windows : +0,04 ms de CPU et environ 5 % de FPS en moins.*
+- [x] Une torche fixe ne recalcule pas son ombre tant que rien ne bouge dans son rayon (compteur).
+- [x] Désactiver `casts_shadows` sur une source supprime son ombre sans autre effet.
 
 ---
 
@@ -626,12 +749,12 @@ Dessiner des milliers d'objets (sol, murs, décor, créatures) avec peu de draw 
 
 ### Tâches
 
-- [ ] Créer une file de dessin 3D : le jeu enregistre (maillage, matériau, transformation), le moteur trie et regroupe à la fin de la frame, comme pour les sprites.
-- [ ] **Instanciation** : un draw call par couple (maillage, matériau), avec les transformations dans un tampon (attributs par instance, `SDL_GPU_VERTEXINPUTRATE_INSTANCE`, ou tampon de stockage lu avec l'indice d'instance).
-- [ ] **Frustum culling** sur le CPU, avec les boîtes englobantes transformées dans le monde.
-- [ ] Statistiques par passe (principale, ombre) : objets soumis, visibles, dessinés ; draw calls ; triangles. Dans ImGui et dans `--report`.
-- [ ] Test de charge 3D : N objets, comme `--sprites N`, avec mesures.
-- [ ] Tests unitaires : frustum contre des boîtes (dedans, dehors, à cheval), regroupement.
+- [x] Créer une file de dessin 3D : le jeu enregistre (maillage, matériau, transformation), le moteur trie et regroupe à la fin de la frame, comme pour les sprites.
+- [x] **Instanciation** : un draw call par couple (maillage, matériau), avec les transformations dans un tampon (attributs par instance, `SDL_GPU_VERTEXINPUTRATE_INSTANCE`, ou tampon de stockage lu avec l'indice d'instance). *Mieux : un draw call par (maillage, textures), les couleurs et facteurs du matériau voyageant avec chaque instance.*
+- [x] **Frustum culling** sur le CPU, avec les boîtes englobantes transformées dans le monde.
+- [x] Statistiques par passe (principale, ombre) : objets soumis, visibles, dessinés ; draw calls ; triangles. Dans ImGui et dans `--report`. *« Visibles » et « dessinés » sont le même nombre : tout ce qui passe le culling est dessiné.*
+- [x] Test de charge 3D : N objets, comme `--sprites N`, avec mesures.
+- [x] Tests unitaires : frustum contre des boîtes (dedans, dehors, à cheval), regroupement.
 
 ### Questions à se poser
 
@@ -646,12 +769,45 @@ Dessiner des milliers d'objets (sol, murs, décor, créatures) avec peu de draw 
 - Tri par profondeur ou par matériau : pour les opaques, d'avant en arrière limite le recouvrement, par matériau limite les changements d'état. Les deux se contredisent : mesurer.
 - Des boîtes englobantes non transformées (rotation, échelle) : objets éliminés à tort sur les bords.
 - Agrandir le tampon d'instances pendant une passe : les copies y sont interdites (même règle qu'au jalon 2).
+- *(rencontré)* Des entrées de shader aux emplacements non contigus (`TEXCOORD0, 4, 5, 6`) : la compilation HLSL → SPIR-V → DXIL les renumérote `0, 1, 2, 3`, et D3D12 refuse le pipeline (« paramètre incorrect », sans autre détail). Les emplacements d'un shader doivent se suivre à partir de 0.
+- *(rencontré)* Ordonner les lots selon le premier objet **visible** : quand la caméra bouge, l'ordre des lots change, et là où deux objets se touchent à exactement la même profondeur, le pixel change d'objet (clignotement). L'ordre suit donc le premier objet **enregistré**, visible ou non.
+
+### Implémentation réalisée (partie 9)
+
+Fichiers : `mesh_batcher.hpp` / `mesh_batcher.cpp` (nouveaux), `mesh_renderer.hpp` / `mesh_renderer.cpp`, `renderer.hpp` / `renderer.cpp` (`RenderStats`, appel de `prepare()`), `application.cpp` (`--report`), shaders `mesh.vert`, `mesh.frag`, `shadow.vert` (MSL réexporté), tests dans `test_mesh_batcher.cpp`, scène dans `apps/bac_a_sable/main.cpp`.
+
+- **Le matériau voyage avec l'instance.** Chaque instance envoie 144 octets (`MeshInstance`) : trois lignes de la matrice monde, trois de sa transposée inverse, la couleur de base, les facteurs (métal, rugosité, normal map, occlusion) et l'émissif. Un lot ne dépend donc que du **maillage, des cinq textures et des faces** (simple ou double) : le damier de 400 cases en deux couleurs, la grille de 49 sphères aux rugosités différentes ou les 16 flammes de couleurs variées font chacun **un** draw call. Le fragment shader reçoit ces valeurs sans interpolation.
+- **Attributs d'instance** (`SDL_GPU_VERTEXINPUTRATE_INSTANCE`, emplacements 4 à 12) plutôt qu'un tampon de stockage : format fixe, marche partout, rien à changer aux registres. Chaque lot relie **sa tranche** du tampon d'instances (décalage de la liaison) : l'indice d'instance part de 0 dans le shader sur tous les backends, alors que `first_instance` n'y est pas ajouté partout.
+- **`MeshBatcher`** (sans GPU, testé) : culling de chaque draw par sa boîte dans le monde contre le frustum de la passe, regroupement, instances rangées lot par lot. Deux instances par frame : la passe « scene » (frustum de la caméra, clé complète) et la passe « shadow » (frustum de la boîte couverte par la carte d'ombre, draws `casts_shadow` seulement, clé réduite au maillage et aux faces). Les instances des deux passes partent dans **un seul envoi**, avant les passes de rendu.
+- **La boîte dans le monde** est calculée à l'enregistrement (`transform_box`, 8 coins). Pour le décor immobile, `draw(maillage, monde, matériau, boîte)` évite de la recalculer à chaque frame ; les objets du test de charge l'utilisent (seuls ceux qui tournent la recalculent).
+- **Ordre** : lots simple face puis double face (un changement de pipeline), sinon dans l'ordre du premier draw enregistré ; dans un lot, l'ordre d'enregistrement. Pas de tri sur les adresses : même image à chaque lancement. Pas de tri d'avant en arrière pour l'instant : à mesurer sur Mac (voir les décisions).
+- **Recherche du groupe** d'un draw : celui du draw précédent, sinon un parcours tant qu'il y a au plus 16 groupes, sinon une table de hachage. La table seule coûtait 2 ms de plus à 50 000 objets.
+- **Statistiques par passe** dans `RenderStats` : soumis, dessinés, triangles, draw calls, pour la scène et pour l'ombre. Affichées dans le texte de la scène, dans un tableau du panneau ImGui, et par `--report` (moyennes par frame).
+- **Culling débrayable** (`MeshRenderer::set_culling`, case « Frustum culling » du panneau, `--no-culling`) pour les comparaisons.
+- **Test de charge** : `--meshes N` (ou le curseur « Objets de charge », jusqu'à 50 000) ajoute N petits cubes et sphères (sphère basse résolution, 132 triangles) à 2,5 par m², donc à peu près autant de visibles quel que soit N ; couleurs, métal et rugosité variés ; un sur quatre tourne. Identiques à chaque lancement.
+
+**Mesures (Windows, RTX 4070 Ti SUPER, Release, sans vsync, scène 3D complète : modèles, 16 torches, ombres)**
+
+| Objets ajoutés | Scène : soumis / dessinés / draw calls | Ombre : soumis / dessinés / draw calls | CPU par frame | FPS |
+|---|---|---|---|---|
+| 0 | 493 / 404 / 7 | 477 / 477 / 15 | 0,49 ms | ~1 870 |
+| 10 000 | 10 494 / 1 376 / 8 | 10 478 / 3 646 / 16 | 1,22 ms | ~800 |
+| 50 000 | 50 494 / 1 387 / 8 | 50 478 / 3 624 / 16 | 4,4 ms | ~225 |
+
+Avant cette partie, la scène seule faisait **971 draw calls** (dont 477 d'ombre) ; elle en fait **22**. Sans culling, à 10 000 objets : 10 494 maillages et 969 000 triangles dessinés au lieu de 1 376 et 247 000, 1,40 ms de CPU au lieu de 1,22.
+
+**Vérifications faites (Windows)**
+
+- 8 cas de tests unitaires : un lot par (maillage, textures) quelle que soit la couleur, ordre et contiguïté des instances ; simple face avant double face ; culling (dedans, dehors, à cheval, rien de visible) ; objet tourné dont seule la boîte tournée entre dans la vue ; ordre des lots indépendant de la visibilité ; passe d'ombre (projeteurs seulement, textures ignorées) ; données d'instance (lignes de la matrice, normale perpendiculaire sous une échelle non uniforme) ; plus de 16 groupes (table de hachage). 182 tests au vert.
+- **Le culling ne change pas l'image** : captures avec et sans culling identiques au pixel près, en perspective et en orthographique, à 10 000 objets (seules diffèrent les étiquettes qui affichent le temps de chargement des modèles, qui varie d'un lancement à l'autre).
+- La scène d'origine donne la même image qu'avant l'instanciation. *(Une capture intermédiaire différait de 135 pixels, d'au plus 3/255 ; après la partie 8 bis, l'image est de nouveau identique au pixel près à celle de la partie 3.)*
+- Build Debug (validation GPU) : aucun message. Les six scènes 2D gardent exactement les mêmes captures.
 
 ### Validation
 
-- [ ] L'objectif de performance est atteint en Release sur les deux OS (par exemple 10 000 objets, dont 2 000 visibles).
-- [ ] Le nombre de draw calls est égal au nombre de groupes (maillage, matériau).
-- [ ] Le nombre d'objets dessinés suit ce qui est visible (compteur).
+- [ ] L'objectif de performance est atteint en Release sur les deux OS (par exemple 10 000 objets, dont 2 000 visibles). *Windows : 10 000 objets, 1 400 visibles (3 600 dans l'ombre), 1,2 ms de CPU, ~800 FPS.*
+- [x] Le nombre de draw calls est égal au nombre de groupes (maillage, matériau). *Égal au nombre de groupes (maillage, textures, faces) visibles.*
+- [x] Le nombre d'objets dessinés suit ce qui est visible (compteur). *À 10 000 comme à 50 000 objets, environ 1 380 dessinés.*
 
 ---
 
@@ -663,28 +819,67 @@ Réutiliser le moteur 2D du jalon 2 pour l'interface et les effets dans un monde
 
 ### Tâches
 
-- [ ] Dessiner les sprites en espace écran après la 3D, sans profondeur (vues de sprites de la partie 2).
-- [ ] Placer un élément 2D au-dessus d'un objet 3D (barre de vie, nom, dégâts flottants) avec la projection monde vers écran (partie 3).
-- [ ] Dessiner des sprites **dans** le monde (*billboards*, toujours face à la caméra) avec un test de profondeur contre la 3D : un effet derrière un mur est caché.
-- [ ] Afficher du texte (`Font`) au-dessus des objets.
-- [ ] Garder ImGui au-dessus de tout.
+- [x] Dessiner les sprites en espace écran après la 3D, sans profondeur (vues de sprites de la partie 2). *Passe « compose » (partie 6).*
+- [x] Placer un élément 2D au-dessus d'un objet 3D (barre de vie, nom, dégâts flottants) avec la projection monde vers écran (partie 3).
+- [x] Dessiner des sprites **dans** le monde (*billboards*, toujours face à la caméra) avec un test de profondeur contre la 3D : un effet derrière un mur est caché.
+- [x] Afficher du texte (`Font`) au-dessus des objets. *Les étiquettes des modèles de la scène 3D (avec `Camera3D::world_to_screen`, partie 3).*
+- [x] Garder ImGui au-dessus de tout.
 
 ### Questions à se poser
 
-- **Les billboards passent-ils par le `SpriteBatcher`** (en lui ajoutant une position 3D et un test de profondeur) **ou par un système séparé** ?
-- **Une barre de vie a-t-elle une taille constante à l'écran** (2D pur) **ou dans le monde** (elle rapetisse au dézoom) ?
-- **Quelle échelle pour l'interface** selon la densité de pixels et la taille de la fenêtre ?
+- **Les billboards passent-ils par le `SpriteBatcher`** (en lui ajoutant une position 3D et un test de profondeur) **ou par un système séparé** ? *Séparé : ils vivent dans la passe « scene » (HDR, profondeur de la 3D), triés par distance et non par profondeur de sprite.*
+- **Une barre de vie a-t-elle une taille constante à l'écran** (2D pur) **ou dans le monde** (elle rapetisse au dézoom) ? *Constante à l'écran, comme dans la plupart des ARPG : lisible à tout zoom.*
+- **Quelle échelle pour l'interface** selon la densité de pixels et la taille de la fenêtre ? *Pour l'instant, la densité de pixels de l'écran (1 sur un écran courant, 2 sur Retina). Une échelle choisie par le joueur viendra avec l'interface du jeu.*
 
 ### Pièges connus
 
 - Calculer la position écran avec la caméra non interpolée : la barre de vie « tremble » par rapport au modèle.
 - Un objet derrière la caméra ou hors de l'écran : sa projection donne des coordonnées absurdes (composante `w` négative).
 - Des billboards transparents non triés : artefacts de mélange.
+- *(rencontré)* Des éléments d'interface de textures différentes à la même profondeur de sprite (cadre, remplissage, nom, répétés par créature) : le lot change de texture à chaque élément. Une profondeur par sorte d'élément les regroupe.
+- *(rencontré)* Une créature dessinée à une position interpolée change à chaque frame : les torches dont elle traverse le rayon redessinent leur ombre à chaque frame (voir les mesures). C'est voulu, l'ombre doit suivre la créature, mais c'est un coût.
+
+### Implémentation réalisée (partie 10)
+
+Fichiers : `billboard_batcher.hpp` / `billboard_batcher.cpp`, `billboard_renderer.hpp` / `billboard_renderer.cpp` (nouveaux), `renderer.hpp` / `renderer.cpp` (`billboards()`, statistiques), shaders `billboard.vert` et `billboard.frag` (MSL exporté), tests dans `test_billboard_batcher.cpp`, scène dans `apps/bac_a_sable/main.cpp`.
+
+**Billboards (`renderer.billboards()`)**
+
+- **Système séparé du `SpriteBatcher`**, dessiné dans la passe « scene » juste après les maillages : même cible HDR linéaire, même profondeur. **Test de profondeur** contre les maillages (un billboard derrière un mur est caché), **sans écriture** (les billboards ne se cachent pas entre eux : ils sont transparents et triés).
+- **Tri** du plus lointain au plus proche le long de la vue (à égalité, l'ordre d'enregistrement : même image à chaque lancement), puis un draw call par suite de billboards de même texture. L'ordre compte plus que le nombre de draw calls : mêler deux textures coupe les lots (12 draw calls pour les 34 billboards de la scène). Un atlas commun aux effets les regroupera (les particules, jalon « Monde et déplacement »).
+- **Deux orientations** : `Camera` (face à la caméra, pour les étincelles, les halos, la fumée) et `Upright` (vertical, ne tourne qu'autour de l'axe vertical : un personnage ou un arbre sur une carte). Les coins sont calculés sur le CPU (`BillboardBatcher`, testé) ; le shader n'applique que la projection.
+- **Couleurs HDR** : la couleur peut dépasser 1 (un halo brille une fois converti par le tone mapping). **Mélange additif** au choix (`additive`) : le batcher met l'alpha du sommet à 0, et le mélange pré-multiplié (« source + fond × (1 − alpha) ») ne fait plus qu'ajouter. Un seul pipeline pour les deux.
+- Textures : convention des sprites (alpha pré-multiplié), en sRGB pour les couleurs, avec mipmaps.
+
+**Interface au-dessus des objets (dans la scène)**
+
+- Cinq **créatures** (des boîtes) tournent en rond et reçoivent un coup toutes les demi-secondes (générateur à graine : même partie à chaque lancement). Chacune a une **barre de vie** et un **nom** au-dessus de la tête ; chaque coup affiche ses **dégâts**, qui montent et s'effacent en 1,2 s.
+- En 2D écran (`screen_sprites()` et `Font`), placés par `Camera3D::world_to_screen`, **avec la caméra et les positions interpolées** utilisées pour dessiner les maillages : la barre ne tremble pas par rapport au modèle. Le personnage et les créatures sont maintenant interpolés entre deux ticks, comme la caméra. Rien n'est dessiné pour un point derrière la caméra ou hors de l'écran.
+- **Taille constante à l'écran**, multipliée par la densité de pixels ; coins arrondis au pixel pour des bords nets. Jamais cachées par le décor.
+- Profondeurs de sprite distinctes pour les cadres, les remplissages, les noms et les dégâts : chaque sorte forme un lot.
+- **Billboards de la scène** : un halo additif autour de chaque torche, douze étincelles autour du cube qui tourne, et six cartes `Upright`, quatre juste derrière le mur et deux devant. `--billboards N` ajoute N halos au-dessus du sol pour la charge.
+
+**Mesures (Windows, RTX 4070 Ti SUPER, Release, sans vsync, scène 3D complète)**
+
+| Billboards ajoutés | Billboards / draw calls | CPU par frame | FPS |
+|---|---|---|---|
+| 0 (34 dans la scène) | 34 / 12 | 0,65 ms | ~1 480 |
+| 10 000 | 10 034 / 14 | 1,53 ms | ~640 |
+| 50 000 | 50 034 / 16 | 6,6 ms | ~150 |
+
+Le coût CPU vient du tri et de la construction des sommets (4 par billboard, 36 octets chacun). Assez pour des effets ; des dizaines de milliers de particules demanderaient de construire les coins sur le GPU (à voir avec les particules). Avec les créatures, les 4 torches ombrées redessinent leur ombre à chaque frame (771 maillages, 79 draw calls dans la passe des torches) : les créatures bougent dans leur rayon.
+
+**Vérifications faites (Windows)**
+
+- 5 cas de tests : billboard face à la caméra (plan perpendiculaire à la vue, taille, sens, centre) ; billboard vertical (bords verticaux, face à la caméra vue de dessus) ; tri et coupure des lots par texture ; couleurs pré-multipliées, additif sans alpha, coordonnées de texture ; lots de 16 384 au plus. 192 tests au vert.
+- **Un billboard derrière un mur est caché par le mur** : le bas des cartes placées derrière le mur est coupé net par son arête, les cartes devant passent par-dessus.
+- **Les barres restent collées** : captures de la fenêtre pendant que la caméra suit le personnage en marche, chaque barre au-dessus de sa créature.
+- Build Debug (validation GPU) : aucun message. Les six scènes 2D gardent exactement les mêmes captures.
 
 ### Validation
 
-- [ ] Les barres de vie restent collées aux créatures pendant les déplacements de caméra.
-- [ ] Un billboard derrière un mur est caché par le mur.
+- [x] Les barres de vie restent collées aux créatures pendant les déplacements de caméra.
+- [x] Un billboard derrière un mur est caché par le mur.
 
 ---
 
@@ -707,16 +902,55 @@ Prouver le jalon, comme la partie 9 du jalon 2, mais en 3D.
 
 ### Tâches
 
-- [ ] Ajouter la scène à **DEBUG > Tests moteur**, avec ses réglages sur la page de sélection.
-- [ ] Garder des options en ligne de commande pour les mesures et les captures (`--demo3d`, `--seed`, `--freeze-after`, `--capture`, `--report`).
-- [ ] Ajouter une option qui **fixe la taille de rendu en pixels**, pour comparer les captures Windows et Mac au pixel près (ce qui règle aussi la dette de la démo 2D).
-- [ ] Mesurer et noter les chiffres.
+- [x] Ajouter la scène à **DEBUG > Tests moteur**, avec ses réglages sur la page de sélection.
+- [x] Garder des options en ligne de commande pour les mesures et les captures (`--demo3d`, `--seed`, `--freeze-after`, `--capture`, `--report`).
+- [x] Ajouter une option qui **fixe la taille de rendu en pixels**, pour comparer les captures Windows et Mac au pixel près (ce qui règle aussi la dette de la démo 2D). *`--pixel-size L H`.*
+- [x] Mesurer et noter les chiffres.
+
+### Pièges rencontrés
+
+- **Interpoler avec `glm::mix`** : `mix(a, b, t)` calcule `a·(1 − t) + b·t`, qui ne rend pas exactement `a` quand `a == b`. Une scène figée bougeait donc de quelques 10⁻⁷ d'une frame à l'autre selon `t` (le moment réel de la frame) : quelques centaines de pixels changeaient sur les bords d'ombre, et deux captures de la même graine différaient. Le moteur interpole maintenant avec `interpolate(a, b, t) = a + (b − a)·t` (`fixed_timestep.hpp`), exact quand rien ne bouge ; les deux caméras et les scènes l'utilisent. Les captures 2D n'ont pas changé.
+- **Le sol projetait une ombre** : 1 500 des 2 260 objets de la passe d'ombre étaient des cases de sol, qui ne peuvent rien ombrer. Le sol reçoit les ombres mais n'en projette plus (`casts_shadow = false`).
+
+### Implémentation réalisée (partie 11)
+
+Fichiers : `apps/bac_a_sable/demo3d.hpp` / `demo3d.cpp` (nouveaux), `sandbox_scene.hpp` (nouveau : interface commune des scènes du menu, générateur aléatoire, murs de la démo), `main.cpp` (menu, ligne de commande), `fixed_timestep.hpp` (`interpolate`), `camera.cpp` et `camera3d.cpp`, `application.hpp` / `application.cpp` (`pixel_width`, `pixel_height`), test dans `test_fixed_timestep.cpp`.
+
+- **Une scène à part** (`Demo3D`), et non une option de plus de la scène de test : le menu manipule maintenant une interface commune (`SandboxScene` : `draw_controls()`, `stop_requested()`), que `TestScene` et `Demo3D` implémentent.
+- **La carte de la démo 2D** : 100×100 cases, murs en treillis avec des portes (`demo_wall`, la même fonction pour les deux démos), dans une `TileMap` (`walkable`, `opaque`). Murs de 1,5 m. Un **brasero** au centre de chaque pièce (100), dont la flamme est une torche.
+- **Décor** : 3 000 objets par défaut, sur des cases libres, les mêmes pour une graine : rochers (sphères à facettes), arbres (tronc et houppier), caisses, et tonneaux glTF de Poly Haven s'ils ont été téléchargés (des caisses sinon). Chaque objet fixe est un draw avec sa **boîte calculée une fois** (`draw(..., boîte)`, partie 9) : 6 374 draws fixes.
+- **Sol** : un maillage par bloc de 10×10 cases et par couleur du damier (200 maillages), par défaut ; `--tile-floor` (ou la case du menu) revient à une instance par case, pour comparer.
+- **Créatures** : 300 par défaut (corps et tête), placées et déplacées par la logique de la démo 2D (huit directions, allure propre, demi-tour devant un mur), interpolées entre deux ticks. **Barre de vie** au-dessus de chacune (partie 10).
+- **Commandes** : flèches ou ZQSD, molette, P ; **clic droit** choisit la créature la plus proche du point du sol visé (à 1,5 m au plus : un picking d'objet simple, par distance au sol), **clic gauche** l'y envoie en ligne droite (elle s'arrête devant un mur : pas encore de pathfinding), **Tab** passe à la suivante, **F** la fait suivre par la caméra. La case survolée est surlignée.
+- **Lumière** : soleil avec ombres ; les 24 torches les plus proches de la caméra sont envoyées au moteur (qui en prend 32 au plus), dont 4 ombrées (budget de la partie 8 bis) ; toutes les flammes sont dessinées, avec leur halo (billboards).
+- **Panneau ImGui** : suivi, soleil (intensité, direction, ombres), nombre de torches éclairantes, ombres des torches et budget, résolution de rendu, culling, barres de vie, et le tableau par passe (soumis, dessinés, triangles, draw calls). Le FPS est dans l'en-tête du panneau.
+- **Ligne de commande** : `--demo3d`, `--seed`, `--map N`, `--creatures N`, `--decor N`, `--tile-floor`, `--point-shadows N`, `--freeze-after`, `--capture`, `--report`, `--mouse X Y` (case survolée écrite à la fermeture), `--no-input`, `--run-seconds`.
+- **Taille de rendu fixe** : `--pixel-size L H` (`ApplicationConfig::pixel_width`, `pixel_height`) dimensionne la fenêtre pour qu'elle ait exactement L×H pixels, quelle que soit la densité de l'écran : 640×360 points sur un Retina ×2 pour 1 280×720 pixels. Exact pour une densité entière ; sinon, l'écart est écrit au démarrage.
+
+**Mesures (Windows, RTX 4070 Ti SUPER, Release, sans vsync, graine 42, `--report`)**
+
+| Cas | Scène : soumis / dessinés / draw calls | Ombre : soumis / dessinés | Torches : redessinées / draw calls | CPU par frame | FPS |
+|---|---|---|---|---|---|
+| Défaut (sol par blocs) | 7 113 / 298 / 31 | 6 812 / 913 | 4 / 140 | 1,16 ms | ~845 |
+| Sol en une instance par case | 16 913 / 713 / 8 | 6 812 / 913 | 4 / 140 | 1,53 ms | ~640 |
+| Sans ombres de torches | 7 113 / 298 / 31 | 6 812 / 913 | 0 / 0 | 0,93 ms | ~1 035 |
+| 1 000 créatures, 10 000 objets de décor | 19 302 / 770 / 31 | 19 001 / 2 525 | 4 / 161 | 2,44 ms | ~405 |
+
+Avec vsync, la scène tient la cadence de l'écran (165 FPS ici) dans tous les cas. Le sol par blocs l'emporte : moins de draws à enregistrer et à trier (0,37 ms de CPU en moins) et 30 % de FPS en plus, contre plus de draw calls (un par bloc visible) ; d'où la décision révisée (voir le tableau des décisions). Les torches se redessinent à chaque frame, les créatures bougeant dans leur rayon.
+
+**Vérifications faites (Windows)**
+
+- Un nouveau cas de test (`interpolate` : exacte aux deux bouts, et strictement immobile quand rien ne bouge). 193 tests au vert.
+- **Deux lancements avec la même graine donnent la même capture** : `--demo3d --seed 42 --freeze-after 60 --no-input --capture` → `5fef643792bf`, identique sur quatre lancements, avec et sans vsync. Une autre graine donne une autre image.
+- `--pixel-size 960 540` donne bien une capture de 960×540.
+- Dans le menu : la démo se lance depuis sa page, avec ses réglages ; sélection, envoi et suivi pilotés à la souris et au clavier.
+- Build Debug (validation GPU) : aucun message, sol par blocs et sol par case. Les six scènes 2D gardent exactement les mêmes captures.
 
 ### Validation
 
-- [ ] La scène tourne à la cadence de l'écran sur les deux OS avec l'objectif de performance.
-- [ ] Deux lancements avec la même graine donnent la même capture.
-- [ ] Les captures Windows et Mac sont comparées à taille égale (identiques, ou différences expliquées).
+- [ ] La scène tourne à la cadence de l'écran sur les deux OS avec l'objectif de performance. *Windows : oui (165 Hz) ; 2,4 ms de CPU avec 1 000 créatures et 10 000 objets.*
+- [x] Deux lancements avec la même graine donnent la même capture.
+- [ ] Les captures Windows et Mac sont comparées à taille égale (identiques, ou différences expliquées). *Possible maintenant avec `--pixel-size 1280 720` ; à faire sur Mac.*
 
 ---
 
@@ -730,24 +964,112 @@ Prouver le jalon, comme la partie 9 du jalon 2, mais en 3D.
 | Débogueur Metal (Xcode) | Mac | Même chose sous Metal, plus les compteurs du GPU |
 | Mode debug SDL_GPU | Les deux | Validation des appels |
 | ImGui | Les deux | Réglages et statistiques en direct |
-| Vues de debug (à écrire) | Les deux | Fil de fer, normales en couleur, profondeur, carte d'ombre à l'écran, boîtes englobantes |
+| Vues de debug (partie 12) | Les deux | Fil de fer, normales, couleur de base, distance, cartes d'ombre à l'écran, lignes (boîtes, zone d'ombre, portée des lumières, axes, rayon de la souris), temps GPU par passe |
 
 ### Tâches
 
-- [ ] Écrire un petit renderer de **lignes de debug** : boîtes englobantes, frustum, rayon de la souris, axes du repère. Utile dès la partie 3.
-- [ ] Ajouter des modes de vue : fil de fer (`SDL_GPU_FILLMODE_LINE`), normales, profondeur, carte d'ombre.
-- [ ] Nommer les passes et les ressources, pour les retrouver dans les captures (comme au jalon 2).
-- [ ] Étendre `--report` avec les statistiques par passe.
+- [x] Écrire un petit renderer de **lignes de debug** : boîtes englobantes, frustum, rayon de la souris, axes du repère. Utile dès la partie 3.
+- [x] Ajouter des modes de vue : fil de fer (`SDL_GPU_FILLMODE_LINE`), normales, profondeur, carte d'ombre. *Plus la couleur de base, et l'atlas des ombres des torches.*
+- [x] Nommer les passes et les ressources, pour les retrouver dans les captures (comme au jalon 2). *Groupes visibles sous D3D12 depuis l'ajout de `winpixevent` (après la partie 12 bis). Historique : Pipelines, textures et échantillonneurs sont nommés et apparaissent dans RenderDoc. Les groupes de debug (« shadow », « point shadows », « scene », « compose ») sont appelés, mais **sous D3D12, SDL ne les transmet que si `WinPixEventRuntime.dll` est à côté de l'exécutable** : sans elle, aucun marqueur dans la capture (vérifié, voir plus bas). Sous Metal, ils passent directement.*
+- [x] Étendre `--report` avec les statistiques par passe. *Compteurs faits en partie 9 ; temps GPU approximatifs par passe avec `--gpu-timing` (partie 12).*
 
 ### Questions à se poser
 
-- **Comment mesurer le temps GPU ?** SDL_GPU n'offre **pas de requêtes de temps** (seulement des *fences*, `SDL_QueryGPUFence`). On mesure le temps CPU et le temps total de la frame ; le détail du GPU passe par RenderDoc ou Xcode. Un profileur comme **Tracy** (0.13.1 dans vcpkg) aide côté CPU.
-- **Quel budget par passe ?** Le fixer après les premières mesures de la scène de démonstration.
+- **Comment mesurer le temps GPU ?** SDL_GPU n'offre **pas de requêtes de temps** (seulement des *fences*, `SDL_QueryGPUFence`). On mesure le temps CPU et le temps total de la frame ; le détail du GPU passe par RenderDoc ou Xcode. Un profileur comme **Tracy** (0.13.1 dans vcpkg) aide côté CPU. *Retenu : un mode de mesure qui soumet chaque passe à part et attend sa fin (voir plus bas), approximatif mais portable, sans outil externe.*
+- **Quel budget par passe ?** Le fixer après les premières mesures de la scène de démonstration. *Mesuré sur Windows (voir plus bas) ; à fixer avec les mesures sur Mac M3, la machine visée.*
+
+### Implémentation réalisée (partie 12)
+
+Fichiers : `debug_lines.hpp` / `debug_lines.cpp` (nouveaux), `tone_mapper.hpp` / `tone_mapper.cpp` (`DepthView`, tone mapping débrayable), `mesh_renderer` (vues, lignes de debug), `mesh_batcher.hpp` (`visible_draws()`), `renderer` (lignes, texture affichée, temps GPU), `application` (`gpu_timing`, `--report`), shaders `debug_line.vert/.frag`, `depth_view.frag` (nouveaux), `mesh.frag`, `tonemap.frag` (MSL exporté), tests dans `test_debug_lines.cpp`, `main.cpp` (panneau « Débogage », options).
+
+- **Lignes de debug** (`renderer.debug_lines()`) : `DebugLineBuffer` (CPU, testé) construit segments, boîtes (12 arêtes), frustums (les 8 coins d'une vue-projection), axes (X rouge, Y vert, Z bleu), cercles et sphères ; chaque ligne est cachée par les maillages ou dessinée par-dessus tout. Le `DebugLineRenderer` les dessine à la fin de la passe « scene » (lignes d'un pixel : SDL_GPU n'a pas d'épaisseur de ligne), avec la caméra donnée ou, à défaut, celle des maillages.
+- **Lignes ajoutées par le moteur** (`MeshRenderer::set_debug(MeshDebug)`) : la boîte de chaque maillage dessiné après culling (vert), la zone couverte par la carte d'ombre du soleil (jaune), la portée de chaque lumière ponctuelle (orange ; rouge si elle a une ombre).
+- **Vues** (`MeshRenderer::set_view(MeshView)`) : éclairée, fil de fer (pipelines en `FILLMODE_LINE`), normales (normale d'ombrage, normal map comprise), couleur de base, distance à la caméra (blanc devant, noir à 60 m). Hors fil de fer, la composition saute le tone mapping pour montrer les valeurs telles quelles.
+- **Cartes d'ombre à l'écran** (`Renderer::set_debug_texture`) : la carte du soleil (carré) ou l'atlas des torches (ses proportions, 6 faces par ligne), en bas à droite, en gris (proche de la lumière clair, rien noir ; racine carrée pour étaler les gris).
+- **Temps GPU par passe** (`Renderer::set_gpu_timing`, `--gpu-timing`) : chaque partie de la frame (envois, ombre, ombres des torches, scène, composition) est soumise dans son propre command buffer, et on mesure le temps entre la soumission et la fin du travail (fence). Approximatif (la soumission est comptée) et **ralentissant** (le CPU attend le GPU à chaque passe) : pour mesurer seulement. Moyennes dans `--report`, dernière frame dans le panneau.
+- **Panneau « Débogage »** du menu, commun à toutes les scènes : vue, texture affichée, boîtes, zone d'ombre, portée des lumières, axes du repère, temps GPU. Dans la scène « Rendu 3D », « Rayon de la souris » (les 6 derniers mètres du rayon et des axes au point touché : vu depuis la caméra, le rayon se réduit à un point, il se voit quand on tourne la caméra ensuite).
+- **Ligne de commande** : `--view wireframe|normals|albedo|distance`, `--debug-texture sun|points`, `--show-bounds`, `--show-lights`, `--show-shadow-frustum`, `--show-ray` (scène « Rendu 3D »), `--gpu-timing`.
+
+**Temps GPU mesurés (Windows, RTX 4070 Ti SUPER, `--gpu-timing --no-vsync --report`, en ms)**
+
+| Scène | Envois | Ombre | Torches | Scène | Composition | Total |
+|---|---|---|---|---|---|---|
+| Rendu 3D | 0,10 | 0,11 | 0,19 | 0,26 | 0,20 | 0,85 |
+| Démo 3D | 0,11 | 0,16 | 0,16 | 0,44 | 0,21 | 1,07 |
+| Démo 3D, 1 000 créatures, 10 000 objets | 0,17 | 0,33 | 0,31 | 0,67 | 0,24 | 1,73 |
+
+Chaque mesure contient environ 0,1 ms de soumission : seules les différences et les ordres de grandeur comptent. Sur cette carte, tout tient très au large ; ce tableau servira surtout sur Mac.
+
+**RenderDoc** (`renderdoccmd capture`, F12, puis `renderdoccmd convert` en XML) : la capture de la démo contient bien les ressources nommées et les 170 appels de dessin, mais **aucun marqueur de groupe** : sous D3D12, SDL passe par `WinPixEventRuntime.dll` (bibliothèque de Microsoft, MIT) et ne fait rien sans elle. Solution : le port vcpkg `winpixevent` (paquet NuGet `WinPixEventRuntime` 1.0.240308001, 173 Ko), la DLL copiée à côté de l'exécutable. *Fait (après la partie 12 bis) : dépendance Windows seulement dans `vcpkg.json`, DLL (57 Ko) copiée par `apps/bac_a_sable/CMakeLists.txt`, licence MIT dans « À propos » (entrée `"platform": "windows"` de `credits.json`, masquée sur Mac). Une capture de la démo 3D en FXAA montre les cinq groupes : `shadow`, `point shadows`, `scene`, `tonemap`, `compose` (sprites et ImGui dedans).*
+
+**Vérifications faites (Windows)**
+
+- 3 cas de tests : arêtes d'une boîte (12, chacune sur un axe, longueur totale), coins d'un frustum, cercles, sphères, axes. 196 tests au vert.
+- Captures de chaque vue (fil de fer, normales : sol vert, soit la normale vers le haut ; couleur de base ; distance), des lignes et des deux cartes d'ombre.
+- En vue éclairée, la démo 3D donne exactement la même capture qu'avant (`5fef643792bf`) ; les six scènes 2D aussi.
+- Build Debug (validation GPU) : aucun message, dans chaque vue, avec les lignes, les cartes d'ombre et le mode de mesure GPU.
 
 ### Validation
 
-- [ ] Une capture RenderDoc montre les passes attendues (ombre, 3D, 2D, ImGui), sous leurs noms.
-- [ ] Les vues de debug fonctionnent sur les deux OS.
+- [x] Une capture RenderDoc montre les passes attendues (ombre, 3D, 2D, ImGui), sous leurs noms. *Avec `WinPixEventRuntime.dll` (voir plus haut) ; le 2D et ImGui sont dans le groupe `compose`.*
+- [ ] Les vues de debug fonctionnent sur les deux OS. *Windows vérifié. Sur Mac, vérifier en particulier la carte d'ombre à l'écran (le shader lit la texture de profondeur en `texture2d<float>`).*
+
+---
+
+## 12 bis. Anticrénelage configurable
+
+### But
+
+Comme dans la plupart des jeux, laisser le joueur choisir l'anticrénelage dans les options graphiques, selon sa machine : les bords des objets 3D sont aujourd'hui en escalier.
+
+### Les méthodes
+
+| Méthode | Principe | Coût | Remarques |
+|---|---|---|---|
+| Aucun | — | 0 | Pour les petites machines |
+| FXAA (ou SMAA) | Post-traitement : adoucit les contrastes de l'image finale | Très faible | FXAA un peu flou, SMAA plus net ; marche partout |
+| MSAA 2× / 4× | Plusieurs échantillons de profondeur par pixel sur les bords des triangles | Moyen | Très propre sur la géométrie ; peu cher sur les GPU en tuiles (Apple), plus ailleurs ; n'aide pas les textures ni les ombres |
+| TAA | Accumule les images successives, la caméra légèrement décalée à chaque frame | Faible | Le meilleur contre le scintillement ; demande des vecteurs de mouvement (animation, jalon 5), un peu de flou sur ce qui bouge |
+| DLSS, FSR, MetalFX | Mise à l'échelle intelligente | Variable | Liés aux constructeurs : plus tard |
+
+### Tâches
+
+- [x] Un réglage du `Renderer` : `AntiAliasing { None, Fxaa, Msaa2, Msaa4 }`, changeable en cours de jeu.
+- [x] MSAA : cible de la passe « scene » et sa profondeur multi-échantillonnées, résolues avant la composition (`SDL_GPU_STOREOP_RESOLVE`) ; pipelines de la passe créés pour le nombre d'échantillons.
+- [x] FXAA : un passage plein écran dans la composition, après le tone mapping (il travaille sur des couleurs d'écran).
+- [x] Dans le panneau et en ligne de commande (`--aa none|fxaa|msaa2|msaa4`) ; coût mesuré avec `--gpu-timing`.
+- [x] TAA : noté pour après l'animation (vecteurs de mouvement). *Voir le tableau des décisions.*
+
+### Implémentation réalisée (partie 12 bis)
+
+Fichiers : `renderer` (`AntiAliasing`, cibles et passes), `mesh_renderer`, `billboard_renderer`, `debug_lines` (pipelines de la passe « scene » refaits pour le nombre d'échantillons), `tone_mapper.hpp` / `tone_mapper.cpp` (`Fxaa`), shader `fxaa.frag.hlsl` (nouveau, MSL exporté), tests dans `test_anti_aliasing.cpp` (nouveau), `sandbox_scene.hpp` (`anti_aliasing_combo`), `main.cpp` et `demo3d.cpp` (panneaux « Rendu », `--aa`).
+
+- **Réglage** (`Renderer::set_anti_aliasing`, `anti_aliasing()`, `supports()`) : aucun par défaut. Le changement prend effet au `begin_frame()` suivant, qui refait les textures de la scène et, si le nombre d'échantillons change, les pipelines de la passe « scene » (maillages, billboards, lignes de debug) : une courte pause, pas d'image fausse. Un MSAA que le GPU ne sait pas faire (`SDL_GPUTextureSupportsSampleCount`, pour la couleur HDR et la profondeur) retombe sur le suivant (4× → 2× → aucun), avec un message.
+- **MSAA** : la passe « scene » dessine dans une texture couleur multi-échantillonnée (jamais lue) et une profondeur multi-échantillonnée ; en fin de passe, `SDL_GPU_STOREOP_RESOLVE` moyenne les échantillons dans la texture ordinaire que lit le tone mapping. Rien d'autre ne change : les ombres, les billboards et la composition sont les mêmes.
+- **FXAA** (`fxaa.frag.hlsl`, d'après la variante « qualité » de FXAA 3.11 de Timothy Lottes, réécrite) : une passe « tonemap » écrit la scène en couleurs d'écran dans une texture au format du swapchain, à la résolution de rendu ; la composition la couvre ensuite de FXAA au lieu du tone mapping direct. Le filtre laisse les zones sans contraste, trouve la direction du bord, le suit dans les deux sens (12 pas, de 1 à 8 texels) pour savoir où le pixel est dans la marche d'escalier, et décale une seule lecture filtrée vers l'autre côté ; un terme sous-pixel adoucit aussi les détails d'un pixel.
+- **Panneaux « Rendu »** (scènes « Rendu 3D » et « Démo 3D ») : liste « Anticrénelage », les modes impossibles grisés. Réglage du joueur : les scènes ne le remettent pas à zéro.
+- **Ligne de commande** : `--aa none|fxaa|msaa2|msaa4` (un nom inconnu arrête le programme avec un message).
+
+**Coût mesuré (Windows, RTX 4070 Ti SUPER, démo 3D 1280×720, `--gpu-timing --no-vsync --report`, en ms)**
+
+| Réglage | Scène | Composition | Total GPU |
+|---|---|---|---|
+| Aucun | 0,80 | 0,33 | 2,04 |
+| FXAA | 0,91 | 0,60 | 2,45 |
+| MSAA 2× | 0,97 | 0,43 | 2,30 |
+| MSAA 4× | 1,06 | 0,43 | 2,40 |
+
+La composition du FXAA compte deux soumissions (la passe « tonemap » à part) : environ 0,1 ms de la différence vient de la mesure elle-même. Tous les réglages tiennent très au large sur cette carte ; le tableau à refaire sur Mac, où le MSAA devrait coûter moins (GPU en tuiles).
+
+**Vérifications faites (Windows)**
+
+- 2 cas de tests (noms de la ligne de commande dans les deux sens, nom inconnu refusé). 198 tests au vert.
+- `--demo3d --seed 42 --freeze-after 60 --no-input --run-seconds 3 --aa <mode> --capture` : sans anticrénelage, exactement la capture d'avant (`5fef643792bf`) ; FXAA `30a63c8b3c40`, MSAA 2× `fa0f6e2e7436`, MSAA 4× `a12751de5633`. Agrandis, les bords des murs, des caisses et des pierres passent de l'escalier (aucun) à adoucis (FXAA, un peu flou), lisses (MSAA 2×), très lisses (MSAA 4×).
+
+### Validation
+
+- [x] Les bords des murs et des objets de la démo 3D sont lisses en MSAA et en FXAA (captures comparées).
+- [ ] Le coût de chaque réglage est mesuré (Windows, puis Mac). *Windows fait (tableau ci-dessus) ; Mac à faire.*
 
 ---
 
@@ -755,18 +1077,20 @@ Prouver le jalon, comme la partie 9 du jalon 2, mais en 3D.
 
 Le jalon est terminé quand **tout** ce qui suit est vrai :
 
-- [ ] La frame enchaîne ses passes (ombre, 3D, 2D, ImGui), avec une profondeur au bon format, et les conventions sont consignées.
-- [ ] La **caméra isométrique 3D** gère déplacement, zoom, suivi et case sous la souris, correcte partout (Retina compris).
-- [ ] Des **modèles glTF** de test s'affichent correctement, et une erreur de chargement nomme le fichier.
-- [ ] La **couleur** est calculée en linéaire, les textures ont des mipmaps, sans moiré.
-- [ ] L'**éclairage** (directionnel et ponctuel) et les **ombres** sont stables et réglables.
-- [ ] L'**instanciation** et le **culling** tiennent l'objectif de performance.
-- [ ] Le **2D** (interface, barres de vie, billboards) s'affiche correctement par-dessus la 3D.
-- [ ] La **scène de démonstration 3D** tourne sur les deux OS, et ses captures sont comparées à taille égale.
-- [ ] Aucun avertissement de compilation, aucun message de la couche de validation du GPU.
-- [ ] La logique pure (caméra, frustum, primitives, lecture glTF) a ses tests unitaires.
-- [ ] Les décisions de la section [Décisions à consigner](#décisions-à-consigner) sont remplies.
-- [ ] La documentation des nouveaux fichiers est ajoutée à [FICHIERS_DU_PROJET.md](FICHIERS_DU_PROJET.md).
+*Bilan du 2026-09-24 : tout est vérifié sous Windows, la comparaison avec Blender comprise. Ce qui reste demande le Mac (voir [TEST_MAC.md](TEST_MAC.md#jalon-3--rendu-3d), où les vérifications du jalon sont regroupées).*
+
+- [ ] La frame enchaîne ses passes (ombre, 3D, 2D, ImGui), avec une profondeur au bon format, et les conventions sont consignées. *Windows : les cinq groupes dans RenderDoc, `D32_FLOAT`. Mac : format de profondeur à relever.*
+- [ ] La **caméra isométrique 3D** gère déplacement, zoom, suivi et case sous la souris, correcte partout (Retina compris). *Windows : tests unitaires et scènes. Mac : Retina.*
+- [ ] Des **modèles glTF** de test s'affichent correctement, et une erreur de chargement nomme le fichier. *Windows : les quatre modèles Poly Haven et le modèle de référence ; test « parse_gltf reports problems with the file name » ; comparés à Blender sous le même HDRI (partie 7 : mêmes couleurs, écarts expliqués). Mac : affichage.*
+- [ ] La **couleur** est calculée en linéaire, les textures ont des mipmaps, sans moiré. *Windows : tests des conversions, aucun moiré au dézoom. Mac : dégradé de gris comparé.*
+- [ ] L'**éclairage** (directionnel et ponctuel) et les **ombres** sont stables et réglables. *Windows : soleil, 32 lumières, ombres du soleil et des torches, réglages dans le panneau. Mac : sphère éclairée, coût des torches ombrées sur un M3.*
+- [ ] L'**instanciation** et le **culling** tiennent l'objectif de performance. *Windows : 10 000 objets en 1,2 ms de CPU. Mac : sur un M3.*
+- [x] Le **2D** (interface, barres de vie, billboards) s'affiche correctement par-dessus la 3D. *Captures Windows ; rien de propre à un OS (même passe « compose » que le 2D, déjà validée sur Mac au jalon 2), à revoir au passage sur Mac avec le reste.*
+- [ ] La **scène de démonstration 3D** tourne sur les deux OS, et ses captures sont comparées à taille égale. *Windows : 165 Hz, capture `5fef643792bf`. Mac : cadence et capture avec `--pixel-size 1280 720`.*
+- [ ] Aucun avertissement de compilation, aucun message de la couche de validation du GPU. *Windows : rebuild complet Release et Debug sans avertissement ; en Debug, les six scènes 2D, la scène « Rendu 3D » (nuit, 8 torches ombrées, billboards, fil de fer, lignes, atlas à l'écran, MSAA 4× à 50 %) et la démo 3D (FXAA, MSAA 2×, 1 000 créatures et 10 000 objets) sans aucun message `D3D12 ERROR` / `WARNING`. Mac : build et validation Metal.*
+- [x] La logique pure (caméra, frustum, primitives, lecture glTF) a ses tests unitaires. *198 cas, dont `test_camera3d`, `test_mesh`, `test_model`, `test_mesh_batcher`, `test_shadow`, `test_environment`, `test_color`, `test_billboard_batcher`, `test_debug_lines`, `test_anti_aliasing` ; verts en Release et en Debug.*
+- [x] Les décisions de la section [Décisions à consigner](#décisions-à-consigner) sont remplies. *Toutes, la compression des textures comprise ; lignes dépassées remises à jour (échelle, passes, format de sommet, tampons). Restent **provisoires**, et dites comme telles : les volumes de l'objectif, le picking des objets, le stockage des modèles (Git LFS).*
+- [x] La documentation des nouveaux fichiers est ajoutée à [FICHIERS_DU_PROJET.md](FICHIERS_DU_PROJET.md). *Vérifié fichier par fichier (`src/`, `shaders/`, `tests/`, `apps/`) ; trois fichiers de tests manquants ajoutés.*
 
 ---
 
@@ -780,7 +1104,7 @@ Le jalon est terminé quand **tout** ce qui suit est vrai :
 | Explosion des variantes de shaders | Build lent, MSL à exporter à chaque fois | Peu de shaders, des paramètres |
 | Oubli de l'export MSL | Le Mac rend une version périmée, sans erreur | L'exporter à chaque changement de shader ; idéalement, un contrôle au build |
 | Coût des pixels sur Retina, avec un éclairage PBR payé par pixel, sur un M3 de base | Moins de 60 FPS sur la machine minimale | Résolution de rendu réglable dès la partie 2 ; mesures avec de la marge ; test sur un M3 réel dès que possible |
-| Mémoire des textures PBR (3 à 5 textures par matériau) | Mémoire saturée sur un M3 de 8 Go | Compression GPU au plus tard à la fin de ce jalon (partie 6) |
+| Mémoire des textures PBR (3 à 5 textures par matériau) | Mémoire saturée sur un M3 de 8 Go | Compression GPU décidée (KTX2, BC7 / BC5, voir les décisions), implémentée au jalon 4 avec le gestionnaire d'assets |
 | Pas de mesure du temps GPU dans SDL_GPU | Goulots d'étranglement invisibles | Captures RenderDoc et Xcode régulières |
 | Dérive du périmètre (PBR complet, post-traitement, illumination globale) | Jalon sans fin | Noter, repousser au jalon de consolidation ou plus tard |
 | L'animation squelettique glisse dans ce jalon | Jalon trop gros | Jalon dédié ; ici, prévoir seulement les attributs de sommet |
@@ -796,26 +1120,26 @@ Le jalon est terminé quand **tout** ce qui suit est vrai :
 |---|---|---|
 | Objectif de performance 3D et machine minimale visée | **Mac M3** au minimum (M4 préférable), **60 FPS** minimum. Volumes **provisoires** : 300 personnages animés, 3 000 objets visibles, ~1 M de triangles | Tranché le 2026-09-23 ; volumes à réviser après les mesures de la partie 9 |
 | Style visuel 3D (*low poly*, stylisé, réaliste) | **Réaliste, PBR** (métal / rugosité, IBL, HDR) | Tranché le 2026-09-23 |
-| Échelle (unités, taille d'une case de la `TileMap`) | 1 unité = 1 m ; une case = 1 m (**recommandé**, à confirmer en partie 2) | Convention glTF et Blender ; un personnage tient dans une case |
+| Échelle (unités, taille d'une case de la `TileMap`) | 1 unité = 1 m ; une case = 1 m. *Appliqué partout depuis la partie 2 (scènes 3D, démo 3D) ; à rouvrir seulement si le gameplay le demande* | Convention glTF et Blender ; un personnage tient dans une case |
 | Source des modèles de test et licences | **Poly Haven** (CC0) : Wine Barrel 01, Lantern 01, Antique Estoc, Boulder 01, en 1K ; modèles Blender importés plus tard. Auteurs crédités dans « À propos » | Entièrement libre, à jour, PBR complet ; citation non obligatoire mais faite |
 | Repère du monde (main, axe vertical) et correspondance grille / monde | Main droite, **Y vers le haut**, 1 unité = 1 m (celui de glTF). La case (i, j) couvre `[i, i+1] × [j, j+1]` sur le sol `y = 0` | Aucune conversion au chargement des modèles ; Blender convertit à l'export |
-| Format de profondeur, profondeur inversée ou non | `D32_FLOAT`, sinon `D24_UNORM`, sinon `D16_UNORM`, choisi au démarrage ; profondeur `[0, 1]` (fonctions `*_ZO` de GLM) ; **pas** de profondeur inversée pour l'instant | SDL ne garantit pas D24 et D32 à la fois ; l'inversion se décidera avec la projection (partie 3) |
-| Structure des passes de la frame | « scene » (3D en HDR linéaire, profondeur, résolution de rendu ; seulement s'il y a de la 3D) puis « compose » (swapchain : 3D convertie, sprites du monde, interface, ImGui) ; passe d'ombre à ajouter avant (partie 8) | Peu de passes (GPU en tuiles) ; le 2D reste identique ; l'interface ne dépend jamais de la caméra. Remplace les passes « scene » + « overlay » de la partie 2 |
-| Anticrénelage (MSAA, post-traitement, aucun) | | |
+| Format de profondeur, profondeur inversée ou non | `D32_FLOAT`, sinon `D24_UNORM`, sinon `D16_UNORM`, choisi au démarrage ; profondeur `[0, 1]` (fonctions `*_ZO` de GLM) ; **pas** de profondeur inversée pour l'instant | SDL ne garantit pas D24 et D32 à la fois ; tranchée avec la projection : non inversée (voir la ligne « Projection ») |
+| Structure des passes de la frame | « shadow » (soleil) et « point shadows » (torches, seulement quand une ombre change), puis « scene » (3D en HDR linéaire, profondeur, résolution de rendu, MSAA éventuel ; seulement s'il y a de la 3D), « tonemap » (seulement avec FXAA), puis « compose » (swapchain : 3D convertie, sprites du monde, interface, ImGui). *Complété aux parties 8, 8 bis et 12 bis* | Peu de passes (GPU en tuiles) ; le 2D reste identique ; l'interface ne dépend jamais de la caméra. Remplace les passes « scene » + « overlay » de la partie 2 |
+| Anticrénelage (MSAA, post-traitement, aucun) | **Configurable par le joueur** : aucun, FXAA, MSAA 2×, MSAA 4× (partie 12 bis) ; TAA après l'animation | Comme dans la plupart des jeux : chaque méthode a son coût et son rendu, la machine du joueur décide. Le MSAA est peu cher sur les GPU Apple visés |
 | Résolution de rendu de la 3D | Réglable de 25 % à 100 % de la fenêtre (`set_render_scale`), agrandie par filtrage linéaire ; interface toujours à la résolution native | Coût du PBR par pixel sur un M3 de base |
 | Projection de la caméra (orthographique ou perspective) et angles | **Perspective**, inclinaison **50°**, champ de vision **30°**, orientation 45° (le long de la diagonale de la grille) ; profondeur non inversée (plan proche à 5 % de la distance, `D32_FLOAT` : précision suffisante) | Choisi le 2026-09-23 après comparaison des deux projections dans la scène 3D ; proche de Path of Exile et Diablo, plus adapté au PBR réaliste |
-| Picking (sol, objets : rayon ou tampon d'identifiants) | | |
-| Format de sommet et taille des indices | `Vertex3D` : position, normale, coordonnées de texture (32 octets) ; tangentes à ajouter en partie 7 ; indices **32 bits** | Les modèles glTF dépassent vite 65 536 sommets ; une seule taille d'indices simplifie tout |
-| Tampons (par maillage ou partagé) et transmission des transformations | Un tampon de sommets et un d'indices par maillage ; matrices poussées en uniforms à chaque draw (**provisoire**) | Le plus simple ; à revoir avec l'instanciation (partie 9) |
+| Picking (sol, objets : rayon ou tampon d'identifiants) | **Sol** : rayon depuis la souris contre le plan `y = 0`, avec la caméra interpolée de la frame dessinée. **Objets** : *provisoire* (démo 3D), la créature la plus proche du point du sol visé ; rayon contre les boîtes ou tampon d'identifiants à trancher avec les vrais modèles | Exact et gratuit tant que le monde est plat ; le relief (escaliers, collines) demandera la géométrie ou une carte de hauteurs |
+| Format de sommet et taille des indices | `Vertex3D` : position, normale, coordonnées de texture, tangente (48 octets, tangentes MikkTSpace depuis la partie 7) ; indices **32 bits** | Les modèles glTF dépassent vite 65 536 sommets ; une seule taille d'indices simplifie tout |
+| Tampons (par maillage ou partagé) et transmission des transformations | Un tampon de sommets et un d'indices par maillage ; transformations et facteurs du matériau en **attributs d'instance**, dans un tampon commun rempli à chaque frame. *Revu en partie 9 (d'abord des uniforms à chaque draw)* | Le plus simple pour les maillages ; les instances regroupent les draws (voir la ligne « Instanciation ») |
 | Bibliothèque glTF | `cgltf` 1.15 (MIT) | Un seul en-tête C, simple, répandue ; `fastgltf` reste possible si le temps de chargement l'exige |
 | glTF à l'exécution ou conversion hors ligne | À l'exécution | Rien de plus à écrire ; un outil hors ligne viendra si les chargements deviennent lents |
 | Hiérarchie des nœuds (gardée ou fusionnée) | Aplatie en pièces portant leur matrice monde | Suffit pour des modèles statiques ; la hiérarchie reviendra avec les squelettes (jalon 5) |
 | Stockage des modèles (Git LFS ou non) | **Provisoire** : modèles de test hors de Git, retéléchargés par un script ; seul le modèle de référence (8 Ko) est versionné. Git LFS à décider avec les premiers vrais assets du jeu | Pas de poids inutile dans le dépôt en attendant |
 | Espace de couleur (linéaire, HDR, tone mapping) et sort du 2D | 3D en linéaire dans une cible `R16G16B16A16_FLOAT` ; exposition, tone mapping **Khronos PBR Neutral** et encodage sRGB dans le shader ; swapchain UNORM ; 2D inchangé par-dessus ; textures de couleur en `_SRGB` avec mipmaps | Conséquence du PBR ; PBR Neutral garde les couleurs des matériaux fidèles à Blender ; le 2D garde exactement son aspect |
-| Compression des textures | | |
+| Compression des textures | **KTX2**, lu par `libktx` (vcpkg `ktx`, Apache 2.0), avec deux contenus possibles : **UASTC** (Basis Universal), transcodé au chargement en **BC7** (couleurs, sRGB ; rugosité / métal / occlusion) ou **BC5** (normales, deux canaux) ; ou **BC7 / BC5 déjà transcodés**, envoyés tels quels. Assets de développement en UASTC ; le packaging du jeu les transcode une fois pour toutes. Pas d'ASTC (seulement si iOS un jour : UASTC s'y transcode aussi). **Implémentation au jalon 4** (gestionnaire d'assets). *Tranché le 2026-09-24* | Les GPU Windows **et** les Mac Apple Silicon (M3 compris, Metal depuis macOS 11) lisent le BC7 : un seul format GPU pour les deux OS, 4 fois moins de mémoire (texture 1K : 5,6 Mo → 1,4 Mo avec mipmaps). UASTC : un seul fichier source, outils sur Windows et Mac, standard glTF (`KHR_texture_basisu`) ; le transcodage d'avance supprime son coût au chargement dans le jeu livré. Un encodeur BC7 meilleur (DirectXTex, Windows seulement) reste branchable plus tard sans rien changer au moteur. À vérifier sur le Mac : `SDL_GPUTextureSupportsFormat` pour BC7 et BC5 |
 | Modèle d'éclairage (PBR ou stylisé) | PBR métal / rugosité de glTF (GGX, Smith corrélé, Schlick) ; IBL : diffus en harmoniques sphériques, spéculaire préfiltré sur le CPU au chargement (6 niveaux), terme split-sum analytique (Karis) ; environnement équirectangulaire | Conséquence du style réaliste ; tout le préfiltrage est du C++ testé, sans shader de calcul |
 | Nombre de lumières ponctuelles simultanées | 32 par frame, boucle simple dans le shader (données dans le tampon d'uniforms de la frame) | Suffisant pour les tests ; un découpage de l'écran (*forward+*) viendra si les sorts l'exigent |
-| Ombres (résolution, cascades, filtrage) | | |
-| Instanciation (attributs ou tampon de stockage) et culling | | |
-| Sol : instances par case ou maillage fusionné | | |
-| Billboards : batch 2D ou système séparé | | |
+| Ombres (résolution, cascades, filtrage) | Soleil seul ; une carte de 2048 (réglable 1024 à 4096) cadrée sur le sol visible, sphère au rayon arrondi au mètre, alignée sur les texels ; `D32_FLOAT` sinon `D16` ; PCF 3×3 avec comparaison filtrée ; biais de pente + décalage le long de la normale ; pas de cascades. **Lumières ponctuelles** (partie 8 bis) : `casts_shadows` par lumière, budget de 4 par frame (les plus proches du centre de la vue), atlas de 6 cases de 512 par lumière, distance à la lumière écrite comme profondeur, cache automatique par signature | La caméra fixe borne la zone visible : une carte suffit. Pour les torches, le budget et le cache gardent le coût faible ; la distance donne un biais simple, en mètres |
+| Instanciation (attributs ou tampon de stockage) et culling | **Attributs d'instance** (144 octets : matrices et facteurs du matériau), un lot par (maillage, textures, faces), la tranche du tampon reliée par lot ; **frustum culling CPU** par boîte dans le monde, pour la passe principale et pour l'ombre ; instances reconstruites à chaque frame (pas de tampon fixe pour le décor) ; pas de tri d'avant en arrière | Portable, sans tampon de stockage ; les couleurs ne coupent pas les lots. 10 000 objets coûtent 1,2 ms de CPU : un tampon fixe pour le décor ou le tri par profondeur attendront une mesure qui les demande (sur Mac notamment) |
+| Sol : instances par case ou maillage fusionné | **Fusionné par blocs de 10×10 cases** (un maillage par bloc et par matériau) pour le sol fixe ; une instance par objet pour le reste. *Révisé en partie 11 (d'abord « une instance par case »)* | Mesuré sur la carte de 100×100 : 0,37 ms de CPU en moins et 30 % de FPS en plus ; le culling par bloc suffit. Pour 400 cases, la différence ne se voyait pas |
+| Billboards : batch 2D ou système séparé | **Système séparé** (`BillboardRenderer`) dans la passe « scene », après les maillages : test de profondeur sans écriture, tri du plus lointain au plus proche, coins calculés sur le CPU, orientations `Camera` et `Upright`, couleurs HDR, additif possible. Barres de vie et noms : 2D écran, **taille constante**, avec la caméra et les positions interpolées | Les billboards doivent être cachés par la 3D et profiter du HDR : ils ne peuvent pas vivre dans la passe « compose ». L'interface, elle, reste lisible à tout zoom |
