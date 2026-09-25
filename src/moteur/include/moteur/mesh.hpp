@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -57,6 +58,7 @@ struct Mesh {
     GpuBuffer indices;       // 32-bit
     std::uint32_t index_count = 0;
     Aabb bounds;
+    std::size_t gpu_bytes = 0;  // vertices and indices
 
     // Uploads `data` and waits for the GPU (loading time, not inside a frame). `name` labels the
     // buffers for graphics debuggers. Throws std::invalid_argument for an empty mesh, and

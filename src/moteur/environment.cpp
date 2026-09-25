@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <stdexcept>
 
+#include "moteur/paths.hpp"
 #include "moteur/renderer.hpp"
 
 namespace moteur {
@@ -106,15 +107,15 @@ EnvironmentImage make_sky(int width, int height, const SkySettings& settings) {
 }
 
 EnvironmentImage load_environment(const std::string& path) {
-    std::size_t size = 0;
-    void* file = SDL_LoadFile(path.c_str(), &size);
-    if (file == nullptr) {
-        throw std::runtime_error("Environment '" + path + "': cannot read the file: " + SDL_GetError());
+    FileData file;
+    try {
+        file = read_file(path);
+    } catch (const std::runtime_error& e) {
+        throw std::runtime_error("Environment '" + path + "': " + e.what());
     }
     int width = 0, height = 0, channels = 0;
-    float* pixels = stbi_loadf_from_memory(static_cast<const stbi_uc*>(file), static_cast<int>(size), &width, &height,
-                                           &channels, 3);
-    SDL_free(file);
+    float* pixels = stbi_loadf_from_memory(static_cast<const stbi_uc*>(file.data()), static_cast<int>(file.size()),
+                                           &width, &height, &channels, 3);
     if (pixels == nullptr) {
         throw std::runtime_error("Environment '" + path + "': cannot decode it: " + stbi_failure_reason());
     }
@@ -255,6 +256,9 @@ Environment Environment::create(Renderer& renderer, const EnvironmentImage& sour
     environment.specular = renderer.create_texture_levels(SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, levels[0].width,
                                                           levels[0].height, data, name != nullptr ? name : "environment");
     environment.specular_levels = kLevels;
+    for (const EnvironmentImage& level : levels) {
+        environment.gpu_bytes += static_cast<std::size_t>(level.width) * static_cast<std::size_t>(level.height) * 8;
+    }
     return environment;
 }
 

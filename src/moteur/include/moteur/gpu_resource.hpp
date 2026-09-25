@@ -2,9 +2,15 @@
 
 #include <SDL3/SDL.h>
 
+#include <atomic>
 #include <utility>
 
 namespace moteur {
+
+// GPU objects of type T alive now, created through a GpuResource (leak checks: see
+// gpu_resource_counts()).
+template <typename T>
+inline std::atomic<long> gpu_live_count{0};
 
 // Owns one GPU object and releases it when it goes out of scope. Move-only, so a resource can
 // never be released twice.
@@ -16,7 +22,11 @@ template <typename T, typename Release>
 class GpuResource {
 public:
     GpuResource() = default;
-    GpuResource(SDL_GPUDevice* device, T* handle) : device_(device), handle_(handle) {}
+    GpuResource(SDL_GPUDevice* device, T* handle) : device_(device), handle_(handle) {
+        if (handle_ != nullptr) {
+            ++gpu_live_count<T>;
+        }
+    }
     ~GpuResource() { reset(); }
 
     GpuResource(const GpuResource&) = delete;
@@ -41,6 +51,7 @@ public:
         if (handle_ != nullptr) {
             Release{}(device_, handle_);
             handle_ = nullptr;
+            --gpu_live_count<T>;
         }
     }
 
@@ -97,6 +108,31 @@ public:
 private:
     SDL_PropertiesID id_ = 0;
 };
+
+// The GPU objects alive now, by kind: those held by GpuResource objects, which is all the long-lived
+// ones. Stable counts across scene changes mean nothing leaks.
+struct GpuResourceCounts {
+    long buffers = 0;
+    long textures = 0;
+    long samplers = 0;
+    long transfer_buffers = 0;
+    long shaders = 0;
+    long pipelines = 0;
+
+    long total() const { return buffers + textures + samplers + transfer_buffers + shaders + pipelines; }
+    bool operator==(const GpuResourceCounts&) const = default;
+};
+
+inline GpuResourceCounts gpu_resource_counts() {
+    GpuResourceCounts counts;
+    counts.buffers = gpu_live_count<SDL_GPUBuffer>;
+    counts.textures = gpu_live_count<SDL_GPUTexture>;
+    counts.samplers = gpu_live_count<SDL_GPUSampler>;
+    counts.transfer_buffers = gpu_live_count<SDL_GPUTransferBuffer>;
+    counts.shaders = gpu_live_count<SDL_GPUShader>;
+    counts.pipelines = gpu_live_count<SDL_GPUGraphicsPipeline>;
+    return counts;
+}
 
 using GpuBuffer = GpuResource<SDL_GPUBuffer, ReleaseBuffer>;
 using GpuTexture = GpuResource<SDL_GPUTexture, ReleaseTexture>;

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "profile": "clic",
+  "profiles": {
+    "clic": {
+      "label": "Déplacement au clic",
+      "buttons": {
+        "move_to": ["mouse:left"],
+        "skill_1": ["key:Q", "pad:a"],
+        "skill_2": ["key:W", "pad:b"],
+        "skill_3": ["key:E", "pad:x"],
+        "skill_4": ["key:R", "pad:y"],
+        "skill_5": ["key:T", "pad:rightshoulder"],
+        "skill_6": ["mouse:right", "pad:righttrigger+"],
+        "zoom_in": ["wheel:up", "pad:dpup"],
+        "zoom_out": ["wheel:down", "pad:dpdown"],
+        "select": ["mouse:middle"],
+        "next": ["key:Tab", "pad:leftshoulder"],
+        "follow": ["key:Space", "pad:rightstick"],
+        "projection": ["key:P"],
+        "pause": ["key:Escape", "pad:start"],
+        "menu_up": ["key:Up", "pad:dpup", "pad:lefty-"],
+        "menu_down": ["key:Down", "pad:dpdown", "pad:lefty+"],
+        "menu_confirm": ["key:Return", "key:Keypad Enter", "pad:a"]
+      },
+      "axes": {
+        "move": {"stick": "left"},
+        "camera": {"up": ["key:Up"], "down": ["key:Down"], "left": ["key:Left"], "right": ["key:Right"], "stick": "right"}
+      }
+    },
+    "zqsd": {
+      "label": "Déplacement au clavier (ZQSD)",
+      "buttons": {
+        "skill_1": ["key:Q", "pad:a"],
+        "skill_2": ["key:E", "pad:b"],
+        "skill_3": ["key:R", "pad:x"],
+        "skill_4": ["key:F", "pad:y"],
+        "skill_5": ["mouse:right", "pad:rightshoulder"],
+        "zoom_in": ["wheel:up", "pad:dpup"],
+        "zoom_out": ["wheel:down", "pad:dpdown"],
+        "select": ["mouse:middle"],
+        "next": ["key:Tab", "pad:leftshoulder"],
+        "follow": ["key:Space", "pad:rightstick"],
+        "projection": ["key:P"],
+        "pause": ["key:Escape", "pad:start"],
+        "menu_up": ["key:Up", "pad:dpup", "pad:lefty-"],
+        "menu_down": ["key:Down", "pad:dpdown", "pad:lefty+"],
+        "menu_confirm": ["key:Return", "key:Keypad Enter", "pad:a"]
+      },
+      "axes": {
+        "move": {"up": ["key:W"], "down": ["key:S"], "left": ["key:A"], "right": ["key:D"], "stick": "left"},
+        "camera": {"up": ["key:Up"], "down": ["key:Down"], "left": ["key:Left"], "right": ["key:Right"], "stick": "right"}
+      }
+    }
+  }
+}

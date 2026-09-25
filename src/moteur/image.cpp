@@ -4,6 +4,8 @@
 
 #include <stdexcept>
 
+#include "moteur/paths.hpp"
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG  // many glTF models store their textures as JPEG
@@ -13,20 +15,13 @@
 namespace moteur {
 
 Image load_image(const std::string& path) {
-    // SDL_LoadFile handles UTF-8 paths on Windows, which stbi_load (fopen) does not.
-    std::size_t file_size = 0;
-    void* file = SDL_LoadFile(path.c_str(), &file_size);
-    if (file == nullptr) {
-        throw std::runtime_error("Cannot read image '" + path + "': " + SDL_GetError());
-    }
+    FileData file;
     try {
-        Image image = decode_image(file, file_size, path);
-        SDL_free(file);
-        return image;
-    } catch (...) {
-        SDL_free(file);
-        throw;
+        file = read_file(path);  // not stbi_load: its fopen does not handle UTF-8 paths on Windows
+    } catch (const std::runtime_error& e) {
+        throw std::runtime_error("Cannot read image '" + path + "': " + e.what());
     }
+    return decode_image(file.data(), file.size(), path);
 }
 
 Image decode_image(const void* data, std::size_t size, const std::string& name) {

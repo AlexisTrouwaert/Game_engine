@@ -169,6 +169,7 @@ Mesh Mesh::create(Renderer& renderer, const MeshData& data, const char* name) {
                                           data.indices.size() * sizeof(std::uint32_t), (base + ".indices").c_str());
     mesh.index_count = static_cast<std::uint32_t>(data.indices.size());
     mesh.bounds = data.bounds();
+    mesh.gpu_bytes = data.vertices.size() * sizeof(Vertex3D) + data.indices.size() * sizeof(std::uint32_t);
     return mesh;
 }
 

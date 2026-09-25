@@ -51,6 +51,7 @@ public:
     Font& operator=(const Font&) = delete;
 
     float line_height() const { return line_height_; }
+    std::size_t gpu_bytes() const;  // of the glyph pages
     float ascent() const { return ascent_; }
 
     // The size of the box the text would occupy, in pixels. Uses the exact same layout as draw(),

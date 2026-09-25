@@ -45,7 +45,7 @@ public:
 private:
     struct Placed {
         std::string path;  // relative to assets/
-        moteur::Model model;
+        moteur::Asset<moteur::Model> model;
         glm::vec3 offset;  // where its origin is put
     };
 
@@ -61,7 +61,7 @@ private:
     std::vector<Placed> models_;
     std::vector<Sphere> spheres_;
     moteur::Mesh sphere_mesh_;
-    std::optional<moteur::Environment> environment_;
+    moteur::Asset<moteur::Environment> environment_;
     std::string environment_path_;  // relative to assets/, empty without the test environment
     moteur::Camera3D camera_;
     float environment_intensity_ = 1.0f;

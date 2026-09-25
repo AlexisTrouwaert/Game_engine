@@ -40,26 +40,26 @@ BlenderCompare::BlenderCompare(moteur::Application& app, const Options& options,
     : app_(app), options_(options), standalone_(standalone) {
     moteur::Renderer& renderer = app.renderer();
     sphere_mesh_ = moteur::Mesh::create(renderer, moteur::make_sphere(1.0f, 64, 32), "compare.sphere");
-    try {
-        environment_ = moteur::Environment::create(renderer, moteur::load_environment(moteur::asset_path(kEnvironment)),
-                                                   "compare.environment");
+    // Missing test files are left out (a placeholder would spoil the comparison).
+    if (app.assets().exists(kEnvironment)) {
+        environment_ = app.assets().environment(kEnvironment);
         environment_path_ = kEnvironment;
-    } catch (const std::exception& e) {
-        SDL_Log("Blender comparison: %s (python tools/models/fetch_test_models.py downloads it)", e.what());
+    } else {
+        SDL_Log("Blender comparison: no '%s' (python tools/models/fetch_test_models.py downloads it)", kEnvironment);
     }
 
     // The row: each object standing on y = 0, centred in depth, kGap apart.
     float cursor = 0.0f;
     for (const char* path : kModels) {
-        try {
-            moteur::Model model = moteur::Model::load(renderer, moteur::asset_path(path));
-            const moteur::Aabb bounds = model.bounds;
-            const glm::vec3 offset(cursor - bounds.min.x, -bounds.min.y, -bounds.center().z);
-            cursor += bounds.size().x + kGap;
-            models_.push_back({path, std::move(model), offset});
-        } catch (const std::exception& e) {
-            SDL_Log("Blender comparison: %s", e.what());
+        if (!app.assets().exists(path)) {
+            SDL_Log("Blender comparison: no '%s'", path);
+            continue;
         }
+        const moteur::Asset<moteur::Model> model = app.assets().model(path);
+        const moteur::Aabb bounds = model->bounds;
+        const glm::vec3 offset(cursor - bounds.min.x, -bounds.min.y, -bounds.center().z);
+        cursor += bounds.size().x + kGap;
+        models_.push_back({path, model, offset});
     }
     // Two spheres whose look is known: a matte white plastic and a polished gold (the glTF sample
     // values: base color of gold in linear terms).
@@ -74,7 +74,7 @@ BlenderCompare::BlenderCompare(moteur::Application& app, const Options& options,
     float height = 2.0f * radius;
     for (Placed& placed : models_) {
         placed.offset.x -= half;
-        height = std::max(height, placed.model.bounds.size().y);
+        height = std::max(height, placed.model->bounds.size().y);
     }
     for (Sphere& sphere : spheres_) {
         sphere.center.x -= half;
@@ -112,7 +112,7 @@ void BlenderCompare::render(moteur::Renderer& renderer, double /*alpha*/) {
     meshes.set_sun({0.0f, 1.0f, 0.0f}, glm::vec3(1.0f), 0.0f);  // the environment's light only
     meshes.set_environment(environment_ ? &*environment_ : nullptr, environment_intensity_);
     for (const Placed& placed : models_) {
-        meshes.draw(placed.model, glm::translate(glm::mat4(1.0f), placed.offset));
+        meshes.draw(*placed.model, glm::translate(glm::mat4(1.0f), placed.offset));
     }
     for (const Sphere& sphere : spheres_) {
         moteur::Material material;

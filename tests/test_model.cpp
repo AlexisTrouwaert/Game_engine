@@ -4,11 +4,13 @@
 
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "moteur/model.hpp"
+#include "moteur/renderer.hpp"
 
 namespace {
 
@@ -118,6 +120,27 @@ TEST_CASE("parse_gltf reads a material with its base color texture") {
     CHECK(model.parts[0].material == 0);
 }
 
+TEST_CASE("parse_gltf can leave the images of their own files to the caller") {
+    // The file does not exist: undecoded, it is never opened.
+    const std::string top = R"(,
+        "images": [{"uri": "textures/wood%20planks.png"}],
+        "textures": [{"source": 0}],
+        "materials": [{"name": "wood", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}])";
+    moteur::GltfOptions options;
+    options.decode_external_images = false;
+    const std::string json = triangle_gltf("", "", "[0]", R"(, "material": 0)", top);
+    const moteur::ModelData model = moteur::parse_gltf(json.data(), json.size(), "test.gltf", "", options);
+    REQUIRE(model.images.size() == 1);
+    CHECK(model.images[0].file == "textures/wood planks.png");  // URI decoded
+    CHECK(model.images[0].srgb);
+    CHECK(model.images[0].image.pixels.empty());
+    CHECK(model.files.empty());  // the buffer is a data URI, and the image was not read
+
+    // Decoded, the same model fails on the missing file, and names it.
+    CHECK_THROWS_WITH_AS(moteur::parse_gltf(json.data(), json.size(), "test.gltf"),
+                         doctest::Contains("wood planks.png"), std::runtime_error);
+}
+
 TEST_CASE("parse_gltf reads indices, normals and texture coordinates of any type") {
     // A quad: 16-bit indices, given normals, texture coordinates as normalized 16-bit integers.
     const std::vector<float> positions = {0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0};
@@ -192,4 +215,65 @@ TEST_CASE("parse_gltf reports problems with the file name") {
         "extensionsRequired": ["KHR_draco_mesh_compression"])"))
               .find("KHR_draco_mesh_compression") != std::string::npos);
     CHECK_THROWS_AS(moteur::load_gltf("does/not/exist.glb"), std::runtime_error);
+}
+
+namespace {
+
+// A model as Model::create would build it, without a GPU: `owned` textures made by the model
+// (embedded images), then `shared` ones (from a cache), each material pointing to one of them.
+moteur::Model fake_model(std::uint32_t index_count, int width, const std::vector<std::shared_ptr<moteur::Texture>>& shared) {
+    moteur::Model model;
+    auto owned = std::make_shared<moteur::Texture>();
+    owned->width = width;
+    model.textures.push_back(owned);
+    model.textures.insert(model.textures.end(), shared.begin(), shared.end());
+    moteur::Material material;
+    material.base_color_texture = owned.get();
+    material.normal_texture = shared.empty() ? nullptr : shared[0].get();
+    material.roughness = static_cast<float>(width) / 100.0f;
+    model.materials.push_back(material);
+    moteur::Model::Part part;
+    part.mesh.index_count = index_count;
+    part.material = 0;
+    model.parts.push_back(std::move(part));
+    model.triangle_count = index_count / 3;
+    return model;
+}
+
+}  // namespace
+
+TEST_CASE("Model::replace_in_place keeps every object users point to") {
+    const std::vector<std::shared_ptr<moteur::Texture>> shared = {std::make_shared<moteur::Texture>()};
+    moteur::Model model = fake_model(3, 10, shared);
+    const moteur::Mesh* mesh = &model.parts[0].mesh;
+    const moteur::Texture* owned = model.textures[0].get();
+
+    model.replace_in_place(fake_model(6, 20, shared));
+
+    CHECK(&model.parts[0].mesh == mesh);
+    CHECK(model.parts[0].mesh.index_count == 6);
+    CHECK(model.textures[0].get() == owned);
+    CHECK(owned->width == 20);                                // new pixels, same texture
+    CHECK(model.materials[0].base_color_texture == owned);    // not the fresh model's texture
+    CHECK(model.materials[0].normal_texture == shared[0].get());
+    CHECK(model.materials[0].roughness == doctest::Approx(0.2f));
+    CHECK(model.triangle_count == 2);
+}
+
+TEST_CASE("Model::replace_in_place refuses another structure and changes nothing") {
+    const std::vector<std::shared_ptr<moteur::Texture>> shared = {std::make_shared<moteur::Texture>()};
+    moteur::Model model = fake_model(3, 10, shared);
+
+    moteur::Model more_parts = fake_model(6, 20, shared);
+    more_parts.parts.emplace_back();
+    CHECK_THROWS_WITH_AS(model.replace_in_place(std::move(more_parts)), doctest::Contains("structure"), std::runtime_error);
+
+    // Another cached texture: the old one may be freed while a scene still points to it.
+    const std::vector<std::shared_ptr<moteur::Texture>> other = {std::make_shared<moteur::Texture>()};
+    CHECK_THROWS_WITH_AS(model.replace_in_place(fake_model(6, 20, other)), doctest::Contains("texture"), std::runtime_error);
+
+    CHECK(model.parts.size() == 1);
+    CHECK(model.parts[0].mesh.index_count == 3);
+    CHECK(model.textures[0]->width == 10);
+    CHECK((model.textures[1] == shared[0]));
 }

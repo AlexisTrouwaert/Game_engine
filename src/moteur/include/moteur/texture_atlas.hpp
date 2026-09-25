@@ -37,6 +37,7 @@ public:
     // All sprite names, sorted.
     std::vector<std::string> names() const;
     std::size_t page_count() const { return pages_.size(); }
+    std::size_t gpu_bytes() const;
 
 private:
     TextureAtlas() = default;

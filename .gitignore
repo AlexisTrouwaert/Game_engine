@@ -19,3 +19,5 @@ Thumbs.db
 assets/models/polyhaven/
 # Test environment (HDRI) downloaded by the same script (CC0, about 1.6 MB)
 assets/environments/
+# Test sounds and musics downloaded by tools/audio/fetch_test_sounds.py (CC0, about 11 MB)
+assets/audio/

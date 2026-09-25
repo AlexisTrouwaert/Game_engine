@@ -26,7 +26,7 @@
       "license_file": "licenses/glm.txt"
     },
     {
-      "name": "stb (stb_image, stb_image_write, stb_truetype, stb_rect_pack)",
+      "name": "stb (stb_image, stb_image_write, stb_truetype, stb_rect_pack, stb_vorbis)",
       "version": "2024-07-29",
       "license": "MIT ou domaine public",
       "copyright": "Copyright (c) 2017 Sean Barrett",
@@ -65,6 +65,38 @@
       "copyright": "Copyright (C) 2011 by Morten S. Mikkelsen",
       "url": "https://github.com/mmikk/MikkTSpace",
       "license_file": "licenses/mikktspace.txt"
+    },
+    {
+      "name": "EnTT",
+      "version": "3.16.0",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2017-2025 Michele Caini",
+      "url": "https://github.com/skypjack/entt",
+      "license_file": "licenses/entt.txt"
+    },
+    {
+      "name": "efsw",
+      "version": "1.7.2",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2020 Martín Lucas Golini",
+      "url": "https://github.com/SpartanJ/efsw",
+      "license_file": "licenses/efsw.txt"
+    },
+    {
+      "name": "KTX-Software (libktx, Basis Universal)",
+      "version": "4.4.2",
+      "license": "Apache 2.0",
+      "copyright": "Copyright 2013-2020 Mark Callow and the KTX-Software contributors (includes the Basis Universal transcoder, Apache 2.0)",
+      "url": "https://github.com/KhronosGroup/KTX-Software",
+      "license_file": "licenses/ktx.txt"
+    },
+    {
+      "name": "miniaudio",
+      "version": "0.11.25",
+      "license": "Domaine public (Unlicense) ou MIT-0",
+      "copyright": "Copyright 2025 David Reid",
+      "url": "https://miniaud.io",
+      "license_file": "licenses/miniaudio.txt"
     }
   ],
   "fonts": [
@@ -118,6 +150,56 @@
       "source": "Poly Haven",
       "url": "https://polyhaven.com/a/boulder_01",
       "file": "assets/models/polyhaven/boulder_01/boulder_01_1k.gltf"
+    }
+  ],
+  "sounds": [
+    {
+      "name": "Impact Sounds (pas sur la pierre, impacts métalliques)",
+      "authors": "Kenney",
+      "license": "CC0",
+      "source": "Kenney",
+      "url": "https://kenney.nl/assets/impact-sounds",
+      "file": "assets/audio/kenney_impact/footstep_concrete_000.ogg"
+    },
+    {
+      "name": "Interface Sounds (clics)",
+      "authors": "Kenney",
+      "license": "CC0",
+      "source": "Kenney",
+      "url": "https://kenney.nl/assets/interface-sounds",
+      "file": "assets/audio/kenney_interface/click_001.ogg"
+    },
+    {
+      "name": "The Field Of Dreams (musique de l'écran titre)",
+      "authors": "pauliuw",
+      "license": "CC0",
+      "source": "OpenGameArt",
+      "url": "https://opengameart.org/content/the-field-of-dreams",
+      "file": "assets/audio/music/the_field_of_dreams.mp3"
+    },
+    {
+      "name": "Town Theme RPG (musique du jeu)",
+      "authors": "cynicmusic (cynicmusic.com, pixelsphere.org)",
+      "license": "CC0",
+      "source": "OpenGameArt",
+      "url": "https://opengameart.org/content/town-theme-rpg",
+      "file": "assets/audio/music/town_theme.mp3"
+    },
+    {
+      "name": "Forgoten tomb ambience (ambiance)",
+      "authors": "kindland",
+      "license": "CC0",
+      "source": "OpenGameArt",
+      "url": "https://opengameart.org/content/forgoten-tomb-ambience",
+      "file": "assets/audio/ambience/forgotten_tombs.mp3"
+    },
+    {
+      "name": "Fire Crackling (feu des torches)",
+      "authors": "AntumDeluge",
+      "license": "CC0",
+      "source": "OpenGameArt",
+      "url": "https://opengameart.org/content/fire-crackling",
+      "file": "assets/audio/effects/fire_1.wav"
     }
   ]
 }

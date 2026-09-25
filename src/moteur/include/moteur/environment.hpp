@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,7 @@ struct Environment {
     GpuTexture specular;       // RGBA16F, equirectangular, one mip per roughness step
     int specular_levels = 0;
     IrradianceSH irradiance;
+    std::size_t gpu_bytes = 0;
 
     static constexpr int kBaseWidth = 256;  // of the sharpest specular level
     static constexpr int kLevels = 6;       // 256 x 128 down to 8 x 4

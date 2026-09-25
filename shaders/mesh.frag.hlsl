@@ -187,7 +187,11 @@ float4 main(Input input) : SV_Target0 {
         t = -t;
         b = -b;
     }
-    float3 mapped = normal_texture.Sample(normal_sampler, input.uv).xyz * 2.0 - 1.0;
+    // Only x and y are read: a two-channel map (BC5) has no z, and z follows from x and y for a
+    // unit normal. Then glTF's scale, on x and y only.
+    float3 mapped;
+    mapped.xy = normal_texture.Sample(normal_sampler, input.uv).xy * 2.0 - 1.0;
+    mapped.z = sqrt(saturate(1.0 - dot(mapped.xy, mapped.xy)));
     mapped.xy *= input.factors.z;
     n = normalize(t * mapped.x + b * mapped.y + n * mapped.z);
 

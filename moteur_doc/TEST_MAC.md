@@ -305,7 +305,84 @@ bac_a_sable --demo3d --seed 42 --freeze-after 60 --no-input --run-seconds 3 --pi
 - [ ] Deux lancements donnent le même fichier.
 - [ ] Comparer à la capture Windows (`5fef643792bf`, 1280×720) : identique, ou différences expliquées (arrondis des GPU, filtrage). *`--run-seconds` est indispensable : `--freeze-after` fige la scène sans quitter.*
 
+## Jalon 4 : Systèmes de base
+
+Construit et vérifié sous Windows. À faire sur le Mac au fil des parties.
+
+**Partie 2 : gestionnaire d'assets**
+
+- [ ] Tests unitaires : **232** cas, en Debug et en Release (dont `check_asset_case`, qui crée des fichiers dans le dossier temporaire, et `test_ktx_texture`, qui encode des KTX2 avec libktx).
+- [ ] EnTT et efsw se compilent (vcpkg), sans avertissement ; « À propos » les liste.
+- [ ] Démo 3D : capture comparée à celle de Windows (`--demo3d --seed 42 --freeze-after 60 --no-input --run-seconds 3 --pixel-size 1280 720 --capture`). *Depuis la partie 3, la référence Windows est `d41d301beead` (textures KTX2) ; `--no-ktx2` donne `6fb7a00fa461` (JPEG). L'ancienne `5fef643792bf` du jalon 3 ne vaut plus : le shader recalcule z des normales.*
+- [ ] Rechargement à chaud (FSEvents) : la démo 3D lancée depuis le build, remplacer `assets/models/polyhaven/wine_barrel_01/textures/wine_barrel_01_diff_1k.jpg` **dans les sources** par une autre image : le log dit `Assets: texture '...' reloaded` et les tonneaux changent sans relancer. Remettre l'image d'origine.
+- [ ] Casse : APFS ne distingue pas la casse par défaut, comme Windows. Le test « check_asset_case refuses a wrong case » doit passer (il vérifie justement qu'une casse fausse est refusée malgré le système de fichiers).
+- [ ] Fenêtre DEBUG > Assets : les compteurs bougent en changeant de test, « Libérer les assets inutilisés » fait baisser la mémoire.
+
+**Partie 3 : textures KTX2**
+
+- [ ] vcpkg construit `ktx` avec l'outil `ktx` (fonctionnalité `tools`) sur arm64-osx.
+- [ ] `python3 tools/models/fetch_test_models.py` convertit les textures (12 `.ktx2` sous `assets/models/polyhaven/`), ou `python3 tools/textures/convert_gltf_textures.py` après un build. Les `.ktx2` produits sur Mac et sur Windows devraient être identiques (même version de l'outil) : comparer leurs hachages.
+- [ ] La ligne `GPU:` dit `bc7=yes, bc5=yes` (hypothèse de la décision du jalon 3).
+- [ ] `--demo3d --report` : `Assets: texture 3 in memory, 4.00 MB on the GPU` ; avec `--no-bc` : 16,00 Mo.
+- [ ] Scène « Rendu 3D » et `--blender-compare` : modèles identiques à l'œil avec et sans `--no-ktx2` ; aucune erreur Metal en Debug (niveaux BC de 2×2 et 1×1 compris).
+- [ ] Le MSL de `mesh.frag` a été réexporté sous Windows (z des normales recalculé) : vérifier que `shaders/generated/msl/mesh.frag.msl` est à jour après le pull.
+
+**Partie 4 : entrées**
+
+- [ ] Capture de la démo 3D : `--no-input` donnait `250dd83ef6bc` sous Windows ; `--replay-input tests/data/demo3d_replay.json` (chemin depuis la racine du dépôt) donnait `858706ad9b36`. *Remplacés par ceux de la partie 5 ci-dessous.* Comparer avec `--pixel-size 1280 720`.
+- [ ] Clavier du Mac (AZERTY ou QWERTY) : la ligne d'aide nomme les compétences comme sur les touches (A Z E R T sur un AZERTY, Q W E R T sur un QWERTY), et elles marchent.
+- [ ] Profil « zqsd » (panneau « Commandes ») : Z Q S D déplacent la créature ; le choix survit à un redémarrage (fichier dans `~/Library/Application Support/moteur/bac_a_sable/`).
+- [ ] Trackpad : la molette (défilement à deux doigts) zoome, sans à-coups excessifs ; le clic droit (deux doigts) lance la compétence.
+- [ ] Manette (même modèle que sous Windows si possible) : branchée pendant la démo, reconnue (log `Input: gamepad ... connected`), stick gauche, boutons, débranchée sans plantage.
+
+**Partie 5 : ECS (EnTT)**
+
+- [ ] Tests unitaires : **242** cas, en Debug et en Release (`test_world` : registre sans GPU).
+- [ ] Capture de la démo 3D : `--no-input` donnait `331290226414` sous Windows, `--replay-input tests/data/demo3d_replay.json` donnait `debc4a3b811c` (*remplacés par ceux de la partie 6 ci-dessous*) (même commande que la partie 4, avec `--pixel-size 1280 720`). Même hachage attendu sur le Mac : l'ordre de parcours d'EnTT ne dépend que de l'ordre des créations.
+- [ ] Temps de collecte (`world collection` en fin de ligne de commande) avec `--creatures 1000 --decor 10000 --run-seconds 8` : Windows 0,67 ms (Release) ; le noter ici.
+
+**Partie 6 : scènes et états de jeu**
+
+- [ ] Tests unitaires : **255** cas, en Debug et en Release (`test_state_stack`).
+- [ ] Capture de la démo 3D : `--no-input` donne `fdc076d9c3ae`, `--replay-input tests/data/demo3d_replay.json` donne `952477744ffb` sous Windows (même commande, avec `--pixel-size 1280 720`). Seule la ligne de statistiques a changé : la capture attend que ses chiffres viennent d'une image gelée, et le survol gelé suit le pointeur du dernier tick. Lancer chaque commande trois fois : même hachage.
+- [ ] `--states-cycles 100` : « assets and GPU objects stable », « 0 pauses where the world moved », et la mémoire du processus sans tendance (dernière ligne : écart entre les minimums du début et de la fin ; Windows : 192 à 197 Mo). Le noter ici. En Debug, `--states-cycles 5` sans message de la couche de validation Metal.
+- [ ] Menu DEBUG > Tests moteur > « États de jeu » : Jouer, Échap met en pause (le monde reste visible, figé, assombri), Échap reprend, « Retour au titre », « Quitter le test ». Avec une manette : Start met en pause et reprend.
+
+**Partie 7 : audio**
+
+Avant : `python3 tools/audio/fetch_test_sounds.py` (sons de test, hors de Git).
+
+- [ ] Tests unitaires : **268** cas, en Debug et en Release (`test_audio` mixe sans périphérique : il ne dépend pas de la carte son).
+- [ ] miniaudio se compile et se lie (CoreAudio, AudioToolbox, CoreFoundation), sans avertissement du projet ; « À propos » liste miniaudio et la section « Sons et musiques de test ».
+- [ ] Le log de démarrage dit `Audio: <sortie>, <Hz>, <canaux>, <ms> of buffer` : relever le tampon (Windows : 30 ms).
+- [ ] `--audio-burst --run-seconds 3` : au plus 21 voix, `output peak 0.9` (Windows : mélange 2,1 à 2,6, limiteur ×0,35 à 0,42).
+- [ ] Menu « Audio », à l'oreille : le feu tourne de gauche à droite, plus faible au loin, sans craquement ; les pas ; les clics ; les musiques du titre et du jeu en fondu enchaîné ; l'ambiance ; les volumes et pauses par groupe.
+- [ ] « États de jeu » : musique du titre, puis du jeu ; la pause la baisse ; « Retour au titre » la remplace en fondu.
+- [ ] Casque (ou AirPods) branché puis débranché pendant la scène « Audio » : pas de plantage, le son passe sur les haut-parleurs (log `Audio: now playing on ...` ou `started again`).
+- [ ] La fenêtre perd le focus : le son se coupe, et revient au retour.
+
+**Partie 8 : outils de debug (ImGui)**
+
+- [ ] Tests unitaires : **272** cas, en Debug et en Release (`test_debug_tools`).
+- [ ] `--menu-test 6` (démo 3D) : DEBUG > Inspecteur d'entités montre la créature 0 et ses composants (Transform, Marcheur, Santé...), encadrée en jaune dans le monde ; clic du milieu sur une autre créature : l'inspecteur la suit ; changer sa position la déplace, et le panneau dit « Modifié à la main ».
+- [ ] Les fenêtres Assets, Entrées, Audio, États de jeu (`--menu-test 8` pour les états) s'ouvrent et se ferment ; au relancement, les mêmes sont ouvertes, aux mêmes places (`imgui.ini` dans `~/Library/Application Support/moteur/bac_a_sable/`).
+- [ ] Assets : « Recharger » sur une texture de tonneau écrit `reloaded` dans le log, sans erreur Metal en Debug.
+- [ ] Captures de la démo 3D inchangées (`fdc076d9c3ae`, `952477744ffb`), avec le profil de touches par défaut : un profil « zqsd » enregistré change la ligne d'aide, donc la capture.
+
+**Partie 9 : tranche jouable**
+
+- [ ] Capture de référence : `--states --replay-input tests/data/slice_replay.json --freeze-after 340 --run-seconds 9 --pixel-size 1280 720 --capture slice.png` donne `dbf96994a52d` sous Windows (profil de touches par défaut) ; deux lancements, même hachage.
+- [ ] Jouer la tranche du titre au retour au titre : menus aux flèches et Entrée, puis à la manette (croix, A) ; le héros au clic, au trackpad, à ZQSD et au stick ; clic sur une créature proche ou A : « Touché ! » et un impact ; pas, ambiance, musiques ; Échap ou Start : pause (musique plus basse, pas et ambiance arrêtés), « Reprendre », « Retour au titre ».
+- [ ] `Slice: loaded in ... ms` dans le log (Windows : 440 à 520 ms en Release) et `--report` sans vsync (Windows : 1,22 ms de CPU par frame pour la tranche rejouée, 1,36 ms pour la démo 3D) : les noter ici.
+- [ ] `--states-cycles 100` : stable, comme en partie 6 (la tranche charge maintenant des sons en plus).
+- [ ] En Debug, la tranche rejouée sans message de la couche de validation Metal.
+
 ## Après le Mac : les tests qui restent à faire
+
+- [x] **Casque débranché sous Windows** (jalon 4, partie 7) *(fait le 2026-09-25 : pas de plantage)* : débrancher et rebrancher le casque pendant la scène « Audio » ; pas de plantage, le son suit (log `Audio: now playing on ...` ou `sound device started again`).
+- [x] **Écoute** de la scène « Audio » et de la tranche jouable (jalon 4, parties 7 et 9) : placement gauche / droite et distance, fondus, pause *(fait sous Windows le 2026-09-25)*.
+- [ ] **La tranche jouable à la manette** (jalon 4, partie 9), du titre au retour au titre : menus à la croix et A, déplacement au stick, A pour frapper, Start pour la pause. *Au clavier-souris : fait le 2026-09-25.*
+- [x] **L'inspecteur à la main** (jalon 4, partie 8) : clic du milieu sur une créature de la démo 3D, puis changer sa position *(fait le 2026-09-25)*.
 
 Ces points ne sont **pas vérifiés non plus sous Windows**. Ils ne dépendent pas du Mac.
 

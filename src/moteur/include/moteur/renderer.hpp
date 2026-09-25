@@ -49,6 +49,17 @@ struct TextureSettings {
     bool mipmaps = false;
     // true: the color is multiplied by the alpha first (what the sprite pipeline blends with).
     bool premultiply = true;
+    // true: a tangent-space normal map. Only its x and y are needed (the shader rebuilds z), so a
+    // compressed one (KTX2) becomes two-channel BC5.
+    bool normal_map = false;
+};
+
+struct CompressedImage;  // see ktx_texture.hpp
+
+// The block-compressed formats the GPU can sample (KTX2 textures are transcoded to them).
+struct CompressedFormats {
+    bool bc7 = false;  // colors and data, 1 byte per pixel
+    bool bc5 = false;  // two channels (normal maps), 1 byte per pixel
 };
 
 // A GPU texture and its size in pixels.
@@ -56,6 +67,7 @@ struct Texture {
     GpuTexture gpu;
     int width = 0;
     int height = 0;
+    std::size_t gpu_bytes = 0;  // every mipmap level included
 };
 
 // Counters filled while a frame is executed, valid from end_frame() until the next begin_frame().
@@ -249,6 +261,14 @@ public:
     // interface: no mipmaps, plain UNORM (no sRGB conversion), alpha premultiplied into the color.
     Texture create_texture(const Image& image, const char* debug_name = nullptr);
     Texture create_texture(const Image& image, const TextureSettings& settings, const char* debug_name = nullptr);
+    // A texture whose levels (mipmaps) are all given, in its GPU format (block-compressed or not).
+    Texture create_texture(const CompressedImage& image, const char* debug_name = nullptr);
+    // What the GPU can sample, unless block compression was turned off (then nothing: KTX2 textures
+    // become RGBA8, to compare the two).
+    CompressedFormats compressed_formats() const {
+        return block_compression_ ? compressed_formats_ : CompressedFormats{};
+    }
+    void set_block_compression(bool enabled) { block_compression_ = enabled; }
 
     // A texture whose mipmap levels were computed on the CPU (for example the prefiltered
     // environment): `levels[k]` holds level k, tightly packed rows, in `format`, of size
@@ -309,6 +329,8 @@ private:
     std::unique_ptr<DebugLineRenderer> debug_lines_;
     std::unique_ptr<DepthView> depth_view_;
     DebugTexture debug_texture_ = DebugTexture::None;
+    CompressedFormats compressed_formats_;
+    bool block_compression_ = true;
     bool gpu_timing_ = false;
     std::unique_ptr<SpriteRenderer> sprites_;
     std::unique_ptr<SpriteRenderer> screen_sprites_;

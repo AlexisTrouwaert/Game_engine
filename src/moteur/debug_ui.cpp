@@ -5,6 +5,7 @@
 #include <imgui_impl_sdlgpu3.h>
 
 #include <stdexcept>
+#include <utility>
 
 namespace moteur {
 
@@ -13,7 +14,7 @@ DebugUi::DebugUi(SDL_Window* window, SDL_GPUDevice* device, SDL_GPUTextureFormat
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;  // no imgui.ini next to the executable: the layout is set by the code
+    io.IniFilename = nullptr;  // never next to the executable: see set_settings_file()
     ImGui::StyleColorsDark();
 
     if (!font_path.empty()) {
@@ -64,6 +65,11 @@ bool DebugUi::captures(const SDL_Event& event) const {
         default:
             return false;
     }
+}
+
+void DebugUi::set_settings_file(std::string path) {
+    settings_file_ = std::move(path);
+    ImGui::GetIO().IniFilename = settings_file_.empty() ? nullptr : settings_file_.c_str();
 }
 
 void DebugUi::new_frame() {

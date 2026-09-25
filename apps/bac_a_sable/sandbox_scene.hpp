@@ -14,6 +14,8 @@ public:
     // ImGui widgets of the running test, drawn inside the menu's "Test en cours" panel.
     virtual void draw_controls() {}
     virtual bool stop_requested() const = 0;
+    // true: Escape belongs to the scene now (a pause key), and the menu does not stop the test on it.
+    virtual bool uses_escape() const { return false; }
 };
 
 // The anti-aliasing choice of the "Rendu" panels (milestone 3, part 12 bis): a player setting, kept

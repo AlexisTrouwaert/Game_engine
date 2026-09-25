@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -43,6 +44,8 @@
 #include "blender_compare.hpp"
 #include "demo3d.hpp"
 #include "sandbox_scene.hpp"
+#include "states_demo.hpp"
+#include "audio_test.hpp"
 
 namespace {
 
@@ -86,6 +89,7 @@ struct Credits {
     std::vector<Entry> fonts;
     std::vector<Entry> models;
     std::vector<Entry> environments;
+    std::vector<Entry> sounds;
     std::string error;  // why the file could not be read, if it could not
 
 #if defined(SDL_PLATFORM_WINDOWS)
@@ -125,6 +129,7 @@ struct Credits {
             credits.fonts = read(doc.value("fonts", nlohmann::json::array()));
             credits.models = read(doc.value("models", nlohmann::json::array()));
             credits.environments = read(doc.value("environments", nlohmann::json::array()));
+            credits.sounds = read(doc.value("sounds", nlohmann::json::array()));
         } catch (const std::exception& e) {
             credits.error = "Crédits illisibles (" + path + ") : " + e.what();
         }
@@ -135,8 +140,8 @@ struct Credits {
 // A glTF model of assets/models/, shown by the 3D scene, or why it could not be loaded.
 struct ShownModel {
     std::string file;
-    std::optional<moteur::Model> model;
-    std::string error;
+    moteur::Asset<moteur::Model> model;
+    std::string error;  // why the model is the placeholder
     double load_ms = 0.0;
 };
 
@@ -203,14 +208,14 @@ public:
     // --run-seconds quit it. Otherwise they only ask the menu to stop the test (stop_requested()).
     TestScene(moteur::Application& app, const Options& options, bool standalone)
         : app_(app),
-          texture_(app.renderer().create_texture(moteur::load_image(moteur::asset_path("sprite.png")))),
+          texture_(app.assets().texture("sprite.png")),
           options_(options),
           standalone_(standalone),
           iso_(kTileWidth, kTileHeight) {
         app.renderer().sprites().set_batching(options.batching);
 
         if (options.render3d) {
-            font_ = moteur::Font::load(app.renderer(), moteur::asset_path("fonts/Inter-Regular.ttf"), kFontPixelHeight);
+            font_ = app.assets().font("fonts/Inter-Regular.ttf", kFontPixelHeight);
             cube_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_cube(), "cube");
             tile_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_plane(), "tile");
             sphere_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_sphere(0.5f, 32, 16), "sphere");
@@ -247,8 +252,8 @@ public:
             if (options.fake_mouse) {
                 mouse_ = options.fake_mouse_position;
             }
-            load_models(app.renderer());
-            load_environments(app.renderer());
+            load_models(app.assets());
+            load_environments(app);
             create_billboard_textures(app.renderer());
             spawn_creatures();
             build_stress_billboards(options.stress_billboards);
@@ -256,7 +261,7 @@ public:
         }
 
         if (options.text) {
-            font_ = moteur::Font::load(app.renderer(), moteur::asset_path("fonts/Inter-Regular.ttf"), kFontPixelHeight);
+            font_ = app.assets().font("fonts/Inter-Regular.ttf", kFontPixelHeight);
             // Printed so an external check can compare against the actual pixels on screen.
             const glm::vec2 sentence_size = font_->measure("Où étaient les œufs d'été ? « Ici. »");
             std::cout << "measured sentence: " << sentence_size.x << " " << sentence_size.y << '\n';
@@ -273,14 +278,14 @@ public:
         }
 
         if (options.atlas) {
-            test_atlas_ = moteur::TextureAtlas::load(app.renderer(), moteur::asset_path("test.json"));
+            test_atlas_ = app.assets().atlas("test.json");
             return;
         }
 
         if (options.iso) {
             // The ground tiles and the highlight all come from one atlas: they share a texture,
             // so they can be drawn together whatever their order.
-            world_atlas_ = moteur::TextureAtlas::load(app.renderer(), moteur::asset_path("world.json"));
+            world_atlas_ = app.assets().atlas("world.json");
             tile_a_ = &world_atlas_->region("tile_a");
             tile_b_ = &world_atlas_->region("tile_b");
             highlight_ = &world_atlas_->region("tile_highlight");
@@ -298,15 +303,15 @@ public:
         if (options.demo) {
             // Same tile atlas as --iso, plus the walking character (from the sprite-atlas test set)
             // as a stand-in for real creature art, and text for the stats overlay.
-            world_atlas_ = moteur::TextureAtlas::load(app.renderer(), moteur::asset_path("world.json"));
+            world_atlas_ = app.assets().atlas("world.json");
             tile_a_ = &world_atlas_->region("tile_a");
             tile_b_ = &world_atlas_->region("tile_b");
             highlight_ = &world_atlas_->region("tile_highlight");
-            test_atlas_ = moteur::TextureAtlas::load(app.renderer(), moteur::asset_path("test.json"));
-            animations_ = moteur::AnimationLibrary::load(moteur::asset_path("animations.json"));
+            test_atlas_ = app.assets().atlas("test.json");
+            animations_ = app.assets().animations("animations.json");
             animations_->check_regions(*test_atlas_);
             const moteur::AnimationClip& walk = animations_->clip("walk");
-            font_ = moteur::Font::load(app.renderer(), moteur::asset_path("fonts/Inter-Regular.ttf"), kFontPixelHeight);
+            font_ = app.assets().font("fonts/Inter-Regular.ttf", kFontPixelHeight);
 
             // The map: a ground layer of two alternating kinds, and a layer of walls that the
             // creatures cannot cross. Walls have no art yet: the game draws them as tinted boxes.
@@ -544,12 +549,12 @@ public:
 
         // The main sprite, interpolated between two fixed steps.
         const auto draw_main_sprite = [&] {
-            const glm::vec2 size(static_cast<float>(texture_.width) * kSpriteScale,
-                                 static_cast<float>(texture_.height) * kSpriteScale);
+            const glm::vec2 size(static_cast<float>(texture_->width) * kSpriteScale,
+                                 static_cast<float>(texture_->height) * kSpriteScale);
             const glm::vec2 offset = moteur::interpolate(previous_offset_, offset_, static_cast<float>(alpha));
             moteur::SpriteOptions options;
             options.depth = options_.depth ? 2.0f : 0.0f;  // in front of everything
-            sprites.draw(texture_, view_size_ * 0.5f - size * 0.5f + offset, size, options);
+            sprites.draw(*texture_, view_size_ * 0.5f - size * 0.5f + offset, size, options);
         };
 
         // With --depth the main sprite is recorded FIRST but has the largest depth, so it only
@@ -564,7 +569,7 @@ public:
             moteur::SpriteOptions options;
             options.tint = mover.tint;
             options.depth = options_.depth ? mover.position.y / view_size_.y : 0.0f;
-            sprites.draw(texture_, mover.position, glm::vec2(kMoverSize), options);
+            sprites.draw(*texture_, mover.position, glm::vec2(kMoverSize), options);
         }
 
         if (!options_.depth) {
@@ -671,7 +676,7 @@ private:
         // A small sprite on the origin of the world, to see where it is on screen.
         moteur::SpriteOptions marker;
         marker.depth = 1.0f;
-        sprites.draw(texture_, glm::vec2(-16.0f), glm::vec2(32.0f), marker);
+        sprites.draw(*texture_, glm::vec2(-16.0f), glm::vec2(32.0f), marker);
 
         // The tile under the mouse.
         has_hovered_tile_ = false;
@@ -845,7 +850,7 @@ private:
         moteur::TextureSettings colors;
         colors.srgb = true;
         colors.mipmaps = true;
-        card_texture_ = renderer.create_texture(moteur::load_image(moteur::asset_path("sprite.png")), colors, "card");
+        card_texture_ = app_.assets().texture("sprite.png", colors);
         moteur::Image white;
         white.width = 1;
         white.height = 1;
@@ -870,10 +875,10 @@ private:
         card.facing = moteur::BillboardFacing::Upright;
         for (int k = 0; k < 4; ++k) {
             const float x = -5.5f + 2.0f * static_cast<float>(k);
-            billboards.draw(card_texture_, {x, 0.75f, -4.6f}, {1.5f, 1.5f}, card);  // behind the wall
+            billboards.draw(*card_texture_, {x, 0.75f, -4.6f}, {1.5f, 1.5f}, card);  // behind the wall
         }
         for (const float x : {-4.5f, 1.5f}) {
-            billboards.draw(card_texture_, {x, 0.75f, -2.4f}, {1.5f, 1.5f}, card);  // in front of it
+            billboards.draw(*card_texture_, {x, 0.75f, -2.4f}, {1.5f, 1.5f}, card);  // in front of it
         }
         moteur::BillboardOptions spark;
         spark.additive = true;
@@ -982,7 +987,7 @@ private:
         meshes.set_sun({std::cos(sun_elevation) * std::cos(sun_yaw), std::sin(sun_elevation),
                         std::cos(sun_elevation) * std::sin(sun_yaw)},
                        glm::vec3(screen_color(1.0f, 0.93f, 0.8f)), sun_intensity_);
-        meshes.set_environment(&environments_[static_cast<std::size_t>(environment_index_)].environment,
+        meshes.set_environment(&*environments_[static_cast<std::size_t>(environment_index_)].environment,
                                environment_intensity_);
         static const glm::vec3 kTorchColors[4] = {{1.0f, 0.45f, 0.12f}, {1.0f, 0.6f, 0.2f}, {0.3f, 0.5f, 1.0f},
                                                   {0.4f, 1.0f, 0.5f}};
@@ -1095,9 +1100,10 @@ private:
                     caption += details;
                 }
                 label.color = {0.95f, 0.95f, 0.8f, 1.0f};
-            } else {
-                caption += "\n" + shown.error;
-                label.color = {1.0f, 0.5f, 0.45f, 1.0f};
+                if (!shown.error.empty()) {  // the placeholder stands in for it
+                    caption += "\n" + shown.error;
+                    label.color = {1.0f, 0.5f, 0.45f, 1.0f};
+                }
             }
             // Above the model, in window pixels: project a point of the world onto the screen.
             if (const auto pixel = camera.world_to_screen(slot + glm::vec3(0.0f, top + 0.3f, 0.0f))) {
@@ -1167,8 +1173,8 @@ private:
 
     // Every .glb and .gltf file of assets/models/, sorted by name. A model that cannot be loaded is
     // shown as an error message in its slot rather than stopping the scene.
-    void load_models(moteur::Renderer& renderer) {
-        const std::string directory = moteur::asset_path("models");
+    void load_models(moteur::Assets& assets) {
+        const std::string directory = assets.file_path("models");
         int count = 0;
         char** files = SDL_GlobDirectory(directory.c_str(), nullptr, 0, &count);
         std::vector<std::string> names;
@@ -1184,29 +1190,26 @@ private:
             ShownModel shown;
             shown.file = name;
             const Uint64 start = SDL_GetPerformanceCounter();
-            try {
-                shown.model = moteur::Model::load(renderer, directory + "/" + name);
-                shown.load_ms = static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 /
-                                static_cast<double>(SDL_GetPerformanceFrequency());
-                SDL_Log("Model '%s': %zu parts, %zu triangles, %zu textures, loaded in %.1f ms", name.c_str(),
-                        shown.model->parts.size(), shown.model->triangle_count, shown.model->textures.size(),
-                        shown.load_ms);
-            } catch (const std::exception& e) {
-                shown.error = e.what();
-                SDL_Log("%s", e.what());
-            }
+            shown.model = assets.model("models/" + name);  // the placeholder if it cannot be loaded
+            shown.error = assets.model_error("models/" + name);
+            shown.load_ms = static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 /
+                            static_cast<double>(SDL_GetPerformanceFrequency());
+            SDL_Log("Model '%s': %zu parts, %zu triangles, %zu textures, loaded in %.1f ms", name.c_str(),
+                    shown.model->parts.size(), shown.model->triangle_count, shown.model->textures.size(),
+                    shown.load_ms);
             models_.push_back(std::move(shown));
         }
     }
 
     // The surroundings the surfaces reflect: a procedural sky, and every .hdr image of
     // assets/environments/ (equirectangular, as Poly Haven publishes them).
-    void load_environments(moteur::Renderer& renderer) {
+    void load_environments(moteur::Application& app) {
         const Uint64 start = SDL_GetPerformanceCounter();
-        environments_.push_back({"Ciel procédural", moteur::Environment::create(renderer, moteur::make_sky(512, 256), "sky")});
+        environments_.push_back({"Ciel procédural", moteur::Asset<moteur::Environment>(std::make_shared<moteur::Environment>(
+                                                        moteur::Environment::create(app.renderer(), moteur::make_sky(512, 256), "sky")))});
         SDL_Log("Environment 'sky': prefiltered in %.1f ms",
                 static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency()));
-        const std::string directory = moteur::asset_path("environments");
+        const std::string directory = app.assets().file_path("environments");
         int count = 0;
         char** files = SDL_GlobDirectory(directory.c_str(), "*.hdr", 0, &count);
         std::vector<std::string> names;
@@ -1217,15 +1220,10 @@ private:
         std::sort(names.begin(), names.end());
         for (const std::string& name : names) {
             const Uint64 begin = SDL_GetPerformanceCounter();
-            try {
-                const moteur::EnvironmentImage image = moteur::load_environment(directory + "/" + name);
-                environments_.push_back({name, moteur::Environment::create(renderer, image, name.c_str())});
-                SDL_Log("Environment '%s': %dx%d, prefiltered in %.1f ms", name.c_str(), image.width, image.height,
-                        static_cast<double>(SDL_GetPerformanceCounter() - begin) * 1000.0 /
-                            static_cast<double>(SDL_GetPerformanceFrequency()));
-            } catch (const std::exception& e) {
-                SDL_Log("%s", e.what());
-            }
+            environments_.push_back({name, app.assets().environment("environments/" + name)});
+            SDL_Log("Environment '%s': prefiltered in %.1f ms", name.c_str(),
+                    static_cast<double>(SDL_GetPerformanceCounter() - begin) * 1000.0 /
+                        static_cast<double>(SDL_GetPerformanceFrequency()));
         }
         environment_index_ = static_cast<int>(environments_.size()) - 1;  // a real image when there is one
     }
@@ -1493,7 +1491,7 @@ private:
                 if (map.at(kWallLayer, {i, j}) == wall_) {
                     wall_options.depth = static_cast<float>(i + j);
                     const glm::vec2 base = iso_.to_world(glm::vec2(i, j), kTileHeight * 1.5f);
-                    sprites.draw(texture_, base, glm::vec2(kTileWidth * 0.5f, kTileHeight * 1.5f), wall_options);
+                    sprites.draw(*texture_, base, glm::vec2(kTileWidth * 0.5f, kTileHeight * 1.5f), wall_options);
                 }
             }
         }
@@ -1554,7 +1552,7 @@ private:
             moteur::SpriteOptions marker;
             marker.tint = glm::vec4(1.0f, 0.1f, 0.1f, 1.0f);
             marker.depth = 1.0f;
-            sprites.draw(texture_, anchor - glm::vec2(2.0f), glm::vec2(4.0f), marker);
+            sprites.draw(*texture_, anchor - glm::vec2(2.0f), glm::vec2(4.0f), marker);
         };
 
         const std::vector<std::string> names = atlas.names();
@@ -1578,7 +1576,7 @@ private:
     }
 
     moteur::Application& app_;
-    moteur::Texture texture_;  // released automatically; the application outlives it (see gpu_resource.hpp)
+    moteur::Asset<moteur::Texture> texture_;
     Options options_;
     bool standalone_;
     bool stop_requested_ = false;
@@ -1591,11 +1589,11 @@ private:
     // Isometric scene.
     moteur::IsoProjection iso_;
     moteur::Camera2D camera_;
-    std::optional<moteur::TextureAtlas> world_atlas_;
+    moteur::Asset<moteur::TextureAtlas> world_atlas_;
     const moteur::SpriteRegion* tile_a_ = nullptr;
     const moteur::SpriteRegion* tile_b_ = nullptr;
     const moteur::SpriteRegion* highlight_ = nullptr;
-    std::optional<moteur::TextureAtlas> test_atlas_;
+    moteur::Asset<moteur::TextureAtlas> test_atlas_;
     glm::vec2 mouse_ = {-1.0f, -1.0f};  // window pixels; negative means "no mouse"
     glm::ivec2 hovered_tile_ = {0, 0};
     bool has_hovered_tile_ = false;
@@ -1608,7 +1606,7 @@ private:
     moteur::TileId ground_b_ = moteur::kNoTile;
     moteur::TileId wall_ = moteur::kNoTile;
     std::optional<moteur::TileMap> map_;
-    std::optional<moteur::AnimationLibrary> animations_;  // must outlive the creatures' players
+    moteur::Asset<moteur::AnimationLibrary> animations_;  // must outlive the creatures' players
     std::vector<Creature> creatures_;
     std::vector<const moteur::AnimationEvent*> fired_;  // reused every tick
     long steps_ = 0;
@@ -1638,14 +1636,14 @@ private:
     };
     std::vector<StressBillboard> stress_billboards_;
     moteur::Texture glow_texture_;
-    moteur::Texture card_texture_;
+    moteur::Asset<moteur::Texture> card_texture_;
     moteur::Texture white_texture_;
     std::optional<glm::vec3> goal_;          // where it walks to, after a click
     bool follow_ = false;                    // the camera follows the character
     bool show_ray_ = false;                  // debug line: the ray under the mouse
     struct NamedEnvironment {
         std::string name;
-        moteur::Environment environment;
+        moteur::Asset<moteur::Environment> environment;
     };
     std::vector<NamedEnvironment> environments_;
     int environment_index_ = 0;
@@ -1660,7 +1658,7 @@ private:
     std::vector<ShownModel> models_;
 
     // Text scene.
-    std::optional<moteur::Font> font_;
+    moteur::Asset<moteur::Font> font_;
     double fps_last_time_ = 0.0;
     int fps_frames_since_ = 0;
     int fps_display_ = 0;
@@ -1674,7 +1672,8 @@ private:
 // page listing the test scenes with their settings, and the running test with a button to stop it.
 class Sandbox final : public moteur::Game {
 public:
-    Sandbox(moteur::Application& app, double run_seconds)
+    // `launch_test` >= 0: that test (its place in DEBUG > Tests moteur, from 0) starts at once.
+    Sandbox(moteur::Application& app, double run_seconds, int launch_test = -1)
         : app_(app), run_seconds_(run_seconds), credits_(Credits::load(moteur::asset_path("credits.json"))) {
         // The settings each test starts with; the list page can change them before launching.
         TestScene::Options sprites;
@@ -1727,11 +1726,28 @@ public:
              "Les modèles de test et deux sphères, éclairés par l'environnement de test seul, face à une "
              "caméra fixe : la même scène que tools/blender/compare_render.py rend dans Blender.",
              TestKind::BlenderCompare, {}, {}},
+            {"Tranche jouable (états de jeu)",
+             "Écran titre, chargement, la carte de la démo 3D avec un héros suivi par la caméra (clic ou stick "
+             "pour se déplacer, clic sur une créature proche ou compétence 1 pour la frapper), pas, impacts, "
+             "ambiance et musiques, et une pause par-dessus (le monde reste visible, figé). Menus aux flèches, "
+             "à la manette ou à la souris ; Échap ou Start : pause et reprise. Avec des cycles, un pilote "
+             "automatique enchaîne titre, jeu, pause, jeu, pause et titre, et compare ce qui reste en mémoire "
+             "d'un cycle à l'autre.",
+             TestKind::States, {}, demo3d},
+            {"Audio",
+             "Chaque son et musique de test, un feu qui tourne autour de l'auditeur (gauche, droite, distance), "
+             "les volumes par groupe, et une rafale de 200 impacts en une seconde pour la limite de voix. "
+             "Les sons viennent de tools/audio/fetch_test_sounds.py.",
+             TestKind::Audio, {}, {}},
         };
+        if (launch_test >= 0 && launch_test < static_cast<int>(tests_.size())) {
+            request(Action::Launch, launch_test);
+        }
     }
 
     void on_event(const SDL_Event& event) override {
-        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE && !event.key.repeat) {
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE && !event.key.repeat &&
+            !(screen_ == Screen::Running && scene_ && scene_->uses_escape())) {
             // One step back: from a test to the list, from the list to the home screen.
             if (screen_ == Screen::Running) {
                 request(Action::ShowTests);
@@ -1781,19 +1797,21 @@ public:
         if (about_open_) {
             draw_about();
         }
+        app_.debug_tools()->draw();
     }
 
 private:
     enum class Screen { Home, Tests, Running };
     enum class Action { None, ShowHome, ShowTests, Launch };
-    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare };
+    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare, States, Audio };
 
     struct TestEntry {
         const char* name;
         const char* description;
         TestKind kind;
         TestScene::Options options;
-        Demo3D::Options demo3d = {};  // for TestKind::Demo3D
+        Demo3D::Options demo3d = {};  // for TestKind::Demo3D and States
+        int cycles = 0;               // for TestKind::States: the autopilot's
     };
 
     void request(Action action, int test = -1) {
@@ -1809,23 +1827,35 @@ private:
                 return;
             case Action::ShowHome:
                 scene_.reset();
+                app_.assets().collect_garbage();
                 screen_ = Screen::Home;
                 return;
             case Action::ShowTests:
                 scene_.reset();
+                app_.assets().collect_garbage();
                 screen_ = Screen::Tests;
                 return;
             case Action::Launch:
-                scene_.reset();  // the previous test, if any, releases its resources first
+                // The next test is created before the previous one goes, so that the assets both
+                // use stay loaded; what only the previous one used is freed after.
                 try {
                     const TestEntry& test = tests_[static_cast<std::size_t>(action_test_)];
+                    std::unique_ptr<SandboxScene> next;
                     if (test.kind == TestKind::Demo3D) {
-                        scene_ = std::make_unique<Demo3D>(app_, test.demo3d, false);
+                        next = std::make_unique<Demo3D>(app_, test.demo3d, false);
                     } else if (test.kind == TestKind::BlenderCompare) {
-                        scene_ = std::make_unique<BlenderCompare>(app_, BlenderCompare::Options{}, false);
+                        next = std::make_unique<BlenderCompare>(app_, BlenderCompare::Options{}, false);
+                    } else if (test.kind == TestKind::Audio) {
+                        next = std::make_unique<AudioTest>(app_, AudioTest::Options{}, false);
+                    } else if (test.kind == TestKind::States) {
+                        StatesDemo::Options states;
+                        states.demo = test.demo3d;
+                        states.cycles = test.cycles;
+                        next = std::make_unique<StatesDemo>(app_, states, false);
                     } else {
-                        scene_ = std::make_unique<TestScene>(app_, test.options, false);
+                        next = std::make_unique<TestScene>(app_, test.options, false);
                     }
+                    scene_ = std::move(next);
                     running_ = action_test_;
                     screen_ = Screen::Running;
                     error_.clear();
@@ -1834,6 +1864,7 @@ private:
                     screen_ = Screen::Tests;
                     error_ = e.what();
                 }
+                app_.assets().collect_garbage();
                 return;
         }
     }
@@ -1857,6 +1888,8 @@ private:
                 }
                 ImGui::EndMenu();
             }
+            ImGui::Separator();
+            app_.debug_tools()->menu_items();  // inspector, assets, inputs, audio, states
             ImGui::Separator();
             if (ImGui::MenuItem("Accueil", nullptr, false, screen_ != Screen::Home)) {
                 request(Action::ShowHome);
@@ -1935,6 +1968,11 @@ private:
         for (const Credits::Entry& entry : credits_.environments) {
             draw_credit(entry);
         }
+        ImGui::SeparatorText("Sons et musiques de test");
+        ImGui::TextWrapped("Tous en CC0 (domaine public) ; leurs auteurs sont remerciés ici.");
+        for (const Credits::Entry& entry : credits_.sounds) {
+            draw_credit(entry);
+        }
         ImGui::End();
     }
 
@@ -1960,7 +1998,9 @@ private:
                 if (present) {
                     ImGui::TextDisabled("Fichier présent : %s", entry.file.c_str());
                 } else {
-                    ImGui::TextDisabled("Fichier absent : python tools/models/fetch_test_models.py le télécharge");
+                    ImGui::TextDisabled("Fichier absent : python %s le télécharge",
+                                        entry.file.starts_with("assets/audio/") ? "tools/audio/fetch_test_sounds.py"
+                                                                                : "tools/models/fetch_test_models.py");
                 }
             }
             if (!entry.license_file.empty() && ImGui::TreeNode("Texte de la licence")) {
@@ -2042,6 +2082,11 @@ private:
                     ImGui::InputScalar("Graine", ImGuiDataType_U32, &test.demo3d.seed);
                     ImGui::Checkbox("Sol fusionné par blocs de 10 x 10 (sinon une case par instance)", &test.demo3d.merged_floor);
                     break;
+                case TestKind::States:
+                    ImGui::SliderInt("Cycles automatiques (0 : à la main)", &test.cycles, 0, 200);
+                    ImGui::SliderInt("Créatures", &test.demo3d.creatures, 0, 5000);
+                    break;
+                case TestKind::Audio:
                 case TestKind::Atlas:
                 case TestKind::Text:
                 case TestKind::BlenderCompare:
@@ -2144,6 +2189,7 @@ int main(int argc, char** argv) {
     // Without arguments (or with --menu), the program opens on its menu. With scene options, it runs
     // that scene directly, without any interface: that is what scripts and measurements use.
     bool menu = argc == 1;
+    int menu_test = -1;  // --menu-test N: the menu, with its test N (from 0) already running
     TestScene::Options options;
     bool vsync = true;
     bool report = false;
@@ -2152,6 +2198,10 @@ int main(int argc, char** argv) {
     bool demo3d = false;
     Demo3D::Options demo3d_options;
     bool blender_compare = false;
+    bool states = false;  // --states: the game states test; --states-cycles N: with its autopilot
+    int states_cycles = 0;
+    bool audio_test = false;   // --audio: the audio test; --audio-burst: with a burst of 200 sounds at the start
+    bool audio_burst = false;
     // Debug views (milestone 3, part 12).
     moteur::MeshView debug_view = moteur::MeshView::Lit;
     moteur::DebugTexture debug_texture = moteur::DebugTexture::None;
@@ -2159,6 +2209,11 @@ int main(int argc, char** argv) {
     bool gpu_timing = false;
     moteur::AntiAliasing anti_aliasing = moteur::AntiAliasing::None;
     glm::ivec2 pixel_size(0);
+    bool hot_reload = true;
+    std::string record_input;  // --record-input FILE: what the scene read from the input, tick by tick
+    std::string replay_input;  // --replay-input FILE: that recording played back instead of the real input
+    bool prefer_ktx2 = true;        // --no-ktx2: models use their PNG / JPEG images, not their KTX2 ones
+    bool block_compression = true;  // --no-bc: KTX2 textures become RGBA8 instead of BC7 / BC5
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         const bool has_one = i + 1 < argc;
@@ -2230,6 +2285,16 @@ int main(int argc, char** argv) {
             gpu_timing = true;
         } else if (arg == "--blender-compare") {
             blender_compare = true;
+        } else if (arg == "--audio") {
+            audio_test = true;
+        } else if (arg == "--audio-burst") {
+            audio_test = true;
+            audio_burst = true;
+        } else if (arg == "--states") {
+            states = true;
+        } else if (arg == "--states-cycles" && has_one) {
+            states = true;
+            states_cycles = std::max(0, std::atoi(argv[i + 1]));
         } else if (arg == "--demo3d") {
             demo3d = true;
         } else if (arg == "--creatures" && has_one) {
@@ -2262,6 +2327,18 @@ int main(int argc, char** argv) {
             options.interleave = true;
         } else if (arg == "--no-input") {
             options.no_input = true;
+        } else if (arg == "--no-hot-reload") {
+            hot_reload = false;
+        } else if (arg == "--record-input" && has_one) {
+            record_input = argv[i + 1];
+            ++i;
+        } else if (arg == "--replay-input" && has_one) {
+            replay_input = argv[i + 1];
+            ++i;
+        } else if (arg == "--no-ktx2") {
+            prefer_ktx2 = false;
+        } else if (arg == "--no-bc") {
+            block_compression = false;
         } else if (arg == "--no-vsync") {
             vsync = false;
         } else if (arg == "--no-batching") {
@@ -2274,6 +2351,9 @@ int main(int argc, char** argv) {
             report = true;
         } else if (arg == "--menu") {
             menu = true;
+        } else if (arg == "--menu-test" && has_one) {
+            menu = true;
+            menu_test = std::atoi(argv[i + 1]);
         }
     }
     if (options.demo) {
@@ -2290,12 +2370,21 @@ int main(int argc, char** argv) {
     try {
         moteur::ApplicationConfig config;
         config.title = "bac a sable";
+        config.application = "bac_a_sable";  // the player's files: SDL_GetPrefPath("moteur", "bac_a_sable")
+        config.record_input_path = record_input;
+        config.replay_input_path = replay_input;
         config.vsync = vsync;
         config.report_performance = report;
         config.gpu_timing = gpu_timing;
         config.pixel_width = pixel_size.x;
         config.pixel_height = pixel_size.y;
-        if (menu) {
+#ifdef MOTEUR_ASSETS_SOURCE_DIR
+        // Development: the assets edited in the source tree are reloaded while the program runs.
+        if (hot_reload && std::filesystem::is_directory(std::filesystem::path(u8"" MOTEUR_ASSETS_SOURCE_DIR))) {
+            config.assets_source_directory = MOTEUR_ASSETS_SOURCE_DIR;
+        }
+#endif
+        if (menu || states || audio_test) {  // these tests draw their screens with ImGui
             config.debug_ui = true;
             config.debug_ui_font = moteur::asset_path("fonts/Inter-Regular.ttf");  // accents
         }
@@ -2305,9 +2394,41 @@ int main(int argc, char** argv) {
         app.renderer().meshes().set_debug(mesh_debug);
         app.renderer().set_debug_texture(debug_texture);
         app.renderer().set_anti_aliasing(anti_aliasing);
+        app.renderer().set_block_compression(block_compression);
+        app.assets().set_prefer_ktx2(prefer_ktx2);
         if (menu) {
-            Sandbox sandbox(app, options.run_seconds);
+            Sandbox sandbox(app, options.run_seconds, menu_test);
             app.run(sandbox);
+            return 0;
+        }
+        if (audio_test) {
+            AudioTest::Options audio_options;
+            audio_options.burst = audio_burst;
+            audio_options.run_seconds = options.run_seconds;
+            AudioTest game(app, audio_options, true);
+            app.run(game);
+            game.report();
+            return 0;
+        }
+        if (states) {
+            StatesDemo::Options states_options;
+            states_options.demo = demo3d_options;
+            states_options.demo.seed = options.seed;
+            if (map_explicit) {
+                states_options.demo.map_size = options.map_size;
+            }
+            states_options.cycles = states_cycles;
+            states_options.run_seconds = options.run_seconds;
+            states_options.capture_path = options.capture_path;
+            // With --freeze-after, the game freezes after that many of its ticks and captures itself
+            // (the reference capture of the slice, with --replay-input); otherwise the first pause.
+            if (options.freeze_after_ticks > 0) {
+                states_options.demo.freeze_after_ticks = options.freeze_after_ticks;
+                states_options.demo.capture_path = options.capture_path;
+            }
+            StatesDemo game(app, states_options, true);
+            app.run(game);
+            game.report();
             return 0;
         }
         if (blender_compare) {
@@ -2334,6 +2455,7 @@ int main(int argc, char** argv) {
             app.run(game);
             std::cout << "simulated " << game.elapsed() << " s in " << game.ticks() << " ticks, " << game.frames()
                       << " frames\n";
+            std::cout << "world collection: " << game.collect_ms() << " ms per frame\n";
             if (const auto cell = game.hovered_cell()) {
                 std::cout << "hovered cell: " << cell->x << " " << cell->y << '\n';
             } else {

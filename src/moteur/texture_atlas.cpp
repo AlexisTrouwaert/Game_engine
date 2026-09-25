@@ -21,6 +21,14 @@ std::string directory_of(const std::string& path) {
 
 }  // namespace
 
+std::size_t TextureAtlas::gpu_bytes() const {
+    std::size_t bytes = 0;
+    for (const auto& page : pages_) {
+        bytes += page->gpu_bytes;
+    }
+    return bytes;
+}
+
 TextureAtlas TextureAtlas::load(Renderer& renderer, const std::string& json_path) {
     TextureAtlas atlas;
     atlas.source_ = json_path;

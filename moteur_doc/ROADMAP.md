@@ -13,6 +13,7 @@ Moteur de jeu maison, pensé pour supporter un ARPG : monde en **3D** vu par une
 - UI de debug : Dear ImGui (intégré)
 - Modèles 3D : glTF 2.0 (bibliothèque à choisir au jalon 3)
 - Données : JSON (nlohmann/json)
+- Assets : cache et poignées d'EnTT (`entt::resource_cache`), surveillance des fichiers avec efsw, textures KTX2 avec libktx (KTX-Software)
 - IDE : CLion
 
 ## Principes
@@ -57,15 +58,19 @@ Documentation détaillée : [Jalon 3 - Rendu 3D](JALON_3_RENDU_3D.md)
 - [x] Anticrénelage configurable *(aucun, FXAA, MSAA 2×, MSAA 4×)*
 
 ### 4. Systèmes de base
-- [ ] Intégration ECS (EnTT)
-- [ ] Gestion des inputs (clavier, souris, manette)
-- [ ] Gestionnaire d'assets (chargement, cache)
-- [ ] Compression des textures : KTX2 (UASTC transcodé, ou BC7 / BC5 prêts), décidée au jalon 3
-- [ ] Gestion de scènes / états de jeu
-- [ ] Audio (effets, musique)
-- [ ] Intégration Dear ImGui (debug) *(commencé : `DebugUi` et le menu des tests du bac à sable)*
+Documentation détaillée : [Jalon 4 - Systèmes de base](JALON_4_SYSTEMES_DE_BASE.md)
+
+- [x] Intégration ECS (EnTT) *(le monde de la démo 3D en entités ; un registre par scène)*
+- [x] Gestion des inputs (clavier, souris, manette) *(actions et profils de touches ; essais à la manette à faire)*
+- [x] Gestionnaire d'assets (chargement, cache, rechargement à chaud)
+- [x] Compression des textures : KTX2 (UASTC transcodé, ou BC7 / BC5 prêts), décidée au jalon 3
+- [x] Gestion de scènes / états de jeu *(pile d'états : titre, chargement, jeu, pause ; 100 cycles sans fuite)*
+- [x] Audio (effets, musique) *(miniaudio : effets placés, musique en fondu, groupes, limite de voix, limiteur)*
+- [x] Intégration Dear ImGui (debug) *(outils dans DEBUG : inspecteur d'entités, assets, entrées, audio, états ; fenêtres retenues dans `imgui.ini`)*
 
 ### 5. Animation 3D
+Documentation détaillée : [Jalon 5 - Animation 3D](JALON_5_ANIMATION_3D.md)
+
 - [ ] Squelettes et animations glTF
 - [ ] Skinning sur le GPU
 - [ ] Mélange et transitions entre animations

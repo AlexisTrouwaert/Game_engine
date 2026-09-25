@@ -3,11 +3,13 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <stdexcept>
 
 #include "moteur/debug_ui.hpp"
 #include "moteur/fixed_timestep.hpp"
 #include "moteur/frame_stats.hpp"
+#include "moteur/paths.hpp"
 
 namespace moteur {
 
@@ -19,7 +21,7 @@ constexpr int kWarmupFrames = 60;
 }  // namespace
 
 Application::Application(const ApplicationConfig& config) : config_(config) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
     }
 
@@ -56,7 +58,28 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
         renderer_config.debug_ui_font_size = config_.debug_ui_font_size;
         renderer_ = std::make_unique<Renderer>(window_, renderer_config);
         renderer_->set_gpu_timing(config_.gpu_timing);
+        assets_ = std::make_unique<Assets>(*renderer_, asset_path(""));
+        input_ = std::make_unique<Input>();
+        AudioConfig audio_config;
+        audio_config.device = config_.audio;
+        audio_ = std::make_unique<Audio>(audio_config);
+        load_audio_settings();
+        if (!config_.assets_source_directory.empty()) {
+            assets_->enable_hot_reload(config_.assets_source_directory);
+        }
+        if (DebugUi* ui = renderer_->debug_ui()) {
+            // Its settings handler must exist before ImGui reads imgui.ini (at the first frame).
+            debug_tools_ = std::make_unique<DebugTools>(*this);
+            if (const std::string directory = preferences_directory(); !directory.empty()) {
+                ui->set_settings_file(directory + "imgui.ini");
+            }
+        }
     } catch (...) {
+        debug_tools_.reset();
+        audio_.reset();
+        input_.reset();
+        assets_.reset();
+        renderer_.reset();
         SDL_DestroyWindow(window_);
         SDL_Quit();
         throw;
@@ -64,7 +87,12 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
 }
 
 Application::~Application() {
-    // The renderer must be released before the window it draws to.
+    // Assets hold GPU resources: released before the renderer, itself before the window it draws to.
+    save_audio_settings();
+    debug_tools_.reset();  // writes imgui.ini while ImGui is still there
+    audio_.reset();  // its voices hold sounds
+    input_.reset();  // closes the gamepads
+    assets_.reset();
     renderer_.reset();
     SDL_DestroyWindow(window_);
     SDL_Quit();
@@ -76,6 +104,47 @@ glm::vec2 Application::to_pixels(glm::vec2 window_point) const {
     SDL_GetWindowSizeInPixels(window_, &pixels_w, &pixels_h);
     return window_to_pixels(window_point, {static_cast<float>(points_w), static_cast<float>(points_h)},
                             {static_cast<float>(pixels_w), static_cast<float>(pixels_h)});
+}
+
+std::string Application::audio_settings_path() const {
+    const std::string directory = preferences_directory();
+    return directory.empty() ? std::string() : directory + "audio.json";
+}
+
+void Application::load_audio_settings() {
+    const std::string path = audio_settings_path();
+    if (path.empty() || !SDL_GetPathInfo(path.c_str(), nullptr)) {
+        return;
+    }
+    try {
+        audio_->apply_settings_json(read_text_file(path), path);
+    } catch (const std::exception& e) {
+        SDL_Log("%s (the default volumes are used)", e.what());
+    }
+}
+
+void Application::save_audio_settings() {
+    if (!audio_ || !audio_->settings_changed()) {
+        return;
+    }
+    const std::string path = audio_settings_path();
+    const std::string text = audio_->settings_json();
+    if (!path.empty() && SDL_SaveFile(path.c_str(), text.data(), text.size())) {
+        audio_->mark_settings_saved();
+    } else {
+        SDL_Log("Audio: cannot write the settings '%s': %s", path.c_str(), SDL_GetError());
+    }
+}
+
+std::string Application::preferences_directory() const {
+    char* path = SDL_GetPrefPath(config_.organization.c_str(), config_.application.c_str());
+    if (path == nullptr) {
+        SDL_Log("No preferences directory: %s", SDL_GetError());
+        return {};
+    }
+    std::string directory = path;
+    SDL_free(path);
+    return directory;
 }
 
 void Application::run(Game& game) {
@@ -134,33 +203,79 @@ void Application::run(Game& game) {
 
     std::uint64_t previous = SDL_GetPerformanceCounter();
 
+    // Input replay or recording (see ApplicationConfig).
+    std::optional<InputRecording> replay;
+    if (!config_.replay_input_path.empty()) {
+        replay = input_recording_from_json(read_text_file(config_.replay_input_path), config_.replay_input_path);
+        input_->set_enabled(false);
+        SDL_Log("Input: replaying '%s' (%zu ticks)", config_.replay_input_path.c_str(), replay->frames.size());
+    }
+    std::optional<InputRecording> recording;
+    std::size_t tick = 0;
+
     running_ = true;
     while (running_) {
         const std::uint64_t iteration_start = SDL_GetPerformanceCounter();
         const double frame_time = static_cast<double>(iteration_start - previous) / frequency;
         previous = iteration_start;
 
+        assets_->update();  // hot reload, between two frames
+        if (debug_tools_) {
+            debug_tools_->between_frames();  // the tools' reloads and frees, also between two frames
+        }
+
         DebugUi* ui = renderer_->debug_ui();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
                 quit();
+            } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+                audio_->set_focus(false);
+            } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+                audio_->set_focus(true);
             }
+            // A release always reaches the input, even over the debug interface: a button pressed in
+            // the game and released over a window must not stay held.
+            const bool release = event.type == SDL_EVENT_KEY_UP || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
             if (ui != nullptr) {
                 ui->process_event(event);
                 if (ui->captures(event)) {
+                    if (release) {
+                        input_->process_event(event);
+                    }
                     continue;
                 }
             }
+            if (event.type == SDL_EVENT_MOUSE_MOTION) {
+                input_->set_pointer(to_pixels({event.motion.x, event.motion.y}));
+            } else if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
+                input_->set_pointer(glm::vec2(-1.0f));
+            }
+            input_->process_event(event);
             game.on_event(event);
         }
 
         const int steps = timestep.advance(frame_time);
         for (int i = 0; i < steps; ++i) {
+            if (replay) {
+                input_->set_frame(*replay, tick);
+            } else if (!config_.record_input_path.empty()) {
+                if (!recording) {
+                    recording = input_->start_recording();  // the game has declared its actions by now
+                }
+                recording->frames.push_back(input_->frame());
+            }
             game.update(timestep.step());
+            input_->end_tick();  // what this tick has seen is consumed
+            ++tick;
         }
         stats_ticks += steps;
         const std::uint64_t update_end = SDL_GetPerformanceCounter();
+        if (restart_clock_) {
+            // The next frame time starts here: the load that just ran is not owed to the logic.
+            previous = update_end;
+            restart_clock_ = false;
+        }
 
         // begin_frame() blocks until the display can take a new image: that is waiting, not work.
         const bool drawable = renderer_->begin_frame();
@@ -200,6 +315,8 @@ void Application::run(Game& game) {
             // Nothing to draw (minimized window): avoid spinning at full speed.
             SDL_Delay(10);
         }
+        // The sounds the updates asked for, at the end of the frame (see Audio).
+        audio_->update();
 
         stats_time += frame_time;
         if (stats_time >= 1.0) {
@@ -215,6 +332,23 @@ void Application::run(Game& game) {
         }
     }
 
+    if (recording) {
+        const std::string text = input_recording_to_json(*recording);
+        if (SDL_SaveFile(config_.record_input_path.c_str(), text.data(), text.size())) {
+            SDL_Log("Input: %zu ticks recorded into '%s'", recording->frames.size(), config_.record_input_path.c_str());
+        } else {
+            SDL_Log("Input: cannot write '%s': %s", config_.record_input_path.c_str(), SDL_GetError());
+        }
+    }
+
+    if (config_.report_performance) {
+        for (const AssetTypeStats& type : assets_->stats()) {
+            if (type.count > 0) {
+                SDL_Log("Assets: %-11s %4zu in memory, %7.2f MB on the GPU, %zu loads, %zu failures", type.type.c_str(),
+                        type.count, static_cast<double>(type.bytes) / (1024.0 * 1024.0), type.loads, type.failures);
+            }
+        }
+    }
     if (config_.report_performance && cpu_stats.count() > 0) {
         const auto measured = static_cast<double>(cpu_stats.count());
         SDL_Log("perf: %zu frames measured (first %d skipped)", cpu_stats.count(), kWarmupFrames);

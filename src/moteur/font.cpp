@@ -11,6 +11,7 @@
 
 #include "moteur/atlas_builder.hpp"
 #include "moteur/image.hpp"
+#include "moteur/paths.hpp"
 #include "moteur/sprite_renderer.hpp"
 #include "moteur/utf8.hpp"
 
@@ -36,19 +37,27 @@ std::vector<char32_t> Font::default_charset() {
 }
 
 Font::~Font() = default;
+
+std::size_t Font::gpu_bytes() const {
+    std::size_t bytes = 0;
+    for (const Texture& page : pages_) {
+        bytes += page.gpu_bytes;
+    }
+    return bytes;
+}
 Font::Font(Font&&) noexcept = default;
 Font& Font::operator=(Font&&) noexcept = default;
 
 Font Font::load(Renderer& renderer, const std::string& path, float pixel_height, std::vector<char32_t> charset) {
     Font font;
 
-    std::size_t file_size = 0;
-    void* file = SDL_LoadFile(path.c_str(), &file_size);
-    if (file == nullptr) {
-        throw std::runtime_error("Cannot read font '" + path + "': " + SDL_GetError());
+    try {
+        const FileData file = read_file(path);
+        const auto* bytes = static_cast<const unsigned char*>(file.data());
+        font.ttf_buffer_.assign(bytes, bytes + file.size());
+    } catch (const std::runtime_error& e) {
+        throw std::runtime_error("Cannot read font '" + path + "': " + e.what());
     }
-    font.ttf_buffer_.assign(static_cast<unsigned char*>(file), static_cast<unsigned char*>(file) + file_size);
-    SDL_free(file);
 
     font.info_ = std::make_unique<stbtt_fontinfo>();
     const int offset = stbtt_GetFontOffsetForIndex(font.ttf_buffer_.data(), 0);

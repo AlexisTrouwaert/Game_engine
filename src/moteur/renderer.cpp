@@ -5,10 +5,12 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "moteur/billboard_renderer.hpp"
 #include "moteur/debug_lines.hpp"
 #include "moteur/debug_ui.hpp"
+#include "moteur/ktx_texture.hpp"
 #include "moteur/mesh_renderer.hpp"
 #include "moteur/paths.hpp"
 #include "moteur/screenshot.hpp"
@@ -148,6 +150,9 @@ Renderer::Renderer(SDL_Window* window, const RendererConfig& config) : window_(w
     SDL_Log("GPU: backend=%s, device=%s, present=%s, debug=%s, depth=%s, bc7=%s, bc5=%s", SDL_GetGPUDeviceDriver(device_),
             gpu_name, present_mode_name(present_mode), config.debug ? "on" : "off", depth_format_name(),
             samples_format(SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB), samples_format(SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM));
+    compressed_formats_.bc7 = std::string_view(samples_format(SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB)) == "yes" &&
+                              std::string_view(samples_format(SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM)) == "yes";
+    compressed_formats_.bc5 = std::string_view(samples_format(SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM)) == "yes";
 
     try {
         meshes_ = std::make_unique<MeshRenderer>(*this, kSceneFormat, depth_format_);
@@ -483,6 +488,11 @@ Texture Renderer::create_texture(const Image& straight_image, const TextureSetti
     texture.gpu = GpuTexture(device_, raw);  // released automatically if anything below throws
     texture.width = image.width;
     texture.height = image.height;
+    for (Uint32 level = 0; level < levels; ++level) {
+        const std::size_t level_width = std::max(1, image.width >> level);
+        const std::size_t level_height = std::max(1, image.height >> level);
+        texture.gpu_bytes += level_width * level_height * 4;
+    }
 
     SDL_GPUTransferBuffer* transfer = make_filled_transfer_buffer(device_, image.pixels.data(), image.pixels.size());
 
@@ -507,6 +517,17 @@ Texture Renderer::create_texture(const Image& straight_image, const TextureSetti
     SDL_WaitForGPUIdle(device_);
 
     SDL_ReleaseGPUTransferBuffer(device_, transfer);
+    return texture;
+}
+
+Texture Renderer::create_texture(const CompressedImage& image, const char* debug_name) {
+    Texture texture;
+    texture.gpu = create_texture_levels(image.format, image.width, image.height, image.levels, debug_name);
+    texture.width = image.width;
+    texture.height = image.height;
+    for (const std::vector<std::uint8_t>& level : image.levels) {
+        texture.gpu_bytes += level.size();
+    }
     return texture;
 }
 

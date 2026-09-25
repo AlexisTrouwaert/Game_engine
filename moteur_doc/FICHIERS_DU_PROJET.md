@@ -62,18 +62,36 @@ moteur/
       include/moteur/fixed_timestep.hpp   en-tête public : pas de temps fixe
       include/moteur/frame_stats.hpp  en-tête public : statistiques de frame
       include/moteur/image.hpp        en-tête public : chargement d'image
-      include/moteur/paths.hpp        en-tête public : chemins des ressources
+      include/moteur/paths.hpp        en-tête public : chemins des ressources, lecture des fichiers
+      include/moteur/asset_cache.hpp  en-tête public : cache d'un type d'asset (sans GPU)
+      include/moteur/assets.hpp       en-tête public : gestionnaire d'assets
+      include/moteur/ktx_texture.hpp  en-tête public : lecture et transcodage des KTX2 (sans GPU)
+      include/moteur/input.hpp        en-tête public : actions, profils de touches, manettes, rejeu
+      include/moteur/world.hpp        en-tête public : le monde en entités (EnTT), composants et systèmes du moteur
+      include/moteur/state_stack.hpp  en-tête public : pile d'états de jeu, état de chargement
+      include/moteur/process_memory.hpp   en-tête public : mémoire du processus (contrôle des fuites)
+      include/moteur/audio.hpp        en-tête public : sons, musique, groupes, auditeur (miniaudio)
+      include/moteur/audio_rules.hpp  en-tête public : placement des sons et choix des voix (sans périphérique)
+      include/moteur/sound.hpp        en-tête public : sons décodés et musiques en flux
       include/moteur/screenshot.hpp   en-tête public : écriture PNG d'une capture GPU
       include/moteur/debug_lines.hpp      en-tête public : lignes de debug (boîtes, frustums, axes)
       include/moteur/debug_ui.hpp     en-tête public : interface de debug (Dear ImGui)
+      include/moteur/debug_tools.hpp  en-tête public : outils de debug (inspecteur d'entités, assets, entrées, audio, états)
       version.cpp                     implémentation
       application.cpp                 fenêtre et boucle de jeu
       renderer.cpp                    périphérique GPU, frame, ressources
       screenshot.cpp                  conversion de pixels bruts en PNG (capture)
       debug_lines.cpp                 lignes de debug : construction et dessin
       debug_ui.cpp                    ImGui : contexte, backends SDL3 et SDL_GPU
+      debug_tools.cpp                 fenêtres des outils de debug, inscription des composants, imgui.ini
       sprite_renderer.cpp             pipeline de sprites, envoi et draw calls
       sprite_batcher.cpp              tri, sommets et découpe en lots
+      state_stack.cpp                 pile d'états : transitions différées, mise à jour, dessin, chargement par étapes
+      process_memory.cpp              mémoire du processus selon l'OS (Windows, macOS, Linux)
+      audio.cpp                       moteur miniaudio : voix, file de la frame, musique, groupes, limiteur, périphérique
+      audio_rules.cpp                 atténuation, panoramique, fusion des demandes, limite de voix
+      sound.cpp                       décodage des sons (WAV, FLAC, MP3, OGG), ouverture des musiques, WAV de test
+      miniaudio.c                     implémentation de miniaudio et de stb_vorbis (C, bibliothèque à part)
       camera.cpp                      matrices et conversions de la caméra
       iso.cpp                         conversions grille / monde, plage de tuiles
       camera3d.cpp                    matrices, rayon de la souris, frustum, interpolation, suivi
@@ -98,6 +116,11 @@ moteur/
       fixed_timestep.cpp              calcul des pas de logique
       frame_stats.cpp                 moyenne, maximum, percentiles
       image.cpp                       décodage des PNG (stb_image)
+      asset_cache.cpp                 clés d'assets (normalisation, casse sur le disque)
+      assets.cpp                      chargeurs, remplacements, libération, rechargement à chaud (efsw)
+      ktx_texture.cpp                 KTX2 : libktx, transcodage vers BC7 / BC5 / RGBA8
+      input.cpp                       sources, profils JSON, transitions par tick, manettes, enregistrements
+      world.cpp                       interpolation, hiérarchie, collecte pour le rendu, cache des entités fixes
       paths.cpp                       dossier de l'exécutable et des assets
   apps/
     bac_a_sable/                      exécutable de test
@@ -106,12 +129,15 @@ moteur/
       demo3d.hpp, demo3d.cpp          scène de démonstration 3D
       blender_compare.hpp, .cpp       scène comparée avec Blender
       sandbox_scene.hpp               interface des scènes du menu, aléatoire, murs des démos
+      states_demo.hpp, .cpp           tranche jouable (test des états) : titre, chargement, jeu avec héros, pause
+      audio_test.hpp, .cpp            test de l'audio : carte des sons, feu qui tourne, rafale, volumes
   tools/
     atlas_packer/                     outil d'empaquetage d'atlas
       CMakeLists.txt
       main.cpp
     models/                           modèle de référence, téléchargement des assets de test
     blender/                          rendu Blender de la scène comparée, comparaison d'images
+    input/                            rejeu scripté de la tranche jouable (tests/data/slice_replay.json)
   art/                                sources d'art (les PNG que l'on dessine)
     world/                            le sol isométrique + pivots.json
     test/                             19 images de test (orbes, barres, marche...)
@@ -134,6 +160,12 @@ moteur/
     test_model.cpp                    tests de la lecture glTF
     test_tilemap.cpp                  tests de la carte de tuiles
     test_animation.cpp                tests des animations
+    test_asset_cache.cpp              tests du cache d'assets
+    test_ktx_texture.cpp              tests du décodage KTX2
+    test_input.cpp                    tests des entrées (actions, profils, rejeu)
+    test_world.cpp                    tests des systèmes du monde (registre sans GPU)
+    test_state_stack.cpp              tests de la pile d'états et de l'état de chargement
+    test_audio.cpp                    tests de l'audio (règles, décodage, mixage sans périphérique)
     test_anti_aliasing.cpp            tests des noms des modes d'anticrénelage
     test_atlas_builder.cpp            tests de l'empaquetage d'atlas
     test_sprite_region.cpp            tests du placement des sprites d'atlas
@@ -251,7 +283,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 | `name` | Nom du paquet, en minuscules. |
 | `version-string` | Version du projet. Libre, sans effet sur les dépendances. |
 | `builtin-baseline` | Identifiant d'un commit du dépôt vcpkg. Il **épingle les versions** de tous les ports : deux machines avec la même baseline compilent la même version de SDL3. Valeur actuelle : `5f96cd15fd745122cf27e0524606d6c1efc5fd07`. |
-| `dependencies` | Liste des bibliothèques : `sdl3`, `glm` (mathématiques : matrices et vecteurs), `stb` (décodage des PNG), `doctest` (tests unitaires), `nlohmann-json` (description des atlas et des animations), `cgltf` (lecture des modèles glTF), `imgui` avec les fonctionnalités `sdl3-binding` et `sdlgpu3-binding` (interface de debug ; ses shaders sont précompilés pour chaque backend, donc rien à ajouter à la chaîne des shaders), et `sdl3-shadercross` **uniquement sur Windows** (`"platform": "windows"`). Ce dernier apporte l'outil `shadercross`, le compilateur DirectX (DXC) et SPIRV-Cross. Il impose aussi la fonctionnalité `vulkan` de SDL3, sans effet sur le backend choisi. Enfin `winpixevent`, **uniquement sur Windows** : la DLL `WinPixEventRuntime.dll` de Microsoft (MIT), copiée à côté de l'exécutable, grâce à laquelle SDL nomme les passes dans les captures RenderDoc et PIX sous Direct3D 12 (sans elle, rien ne change sauf ces noms). |
+| `dependencies` | Liste des bibliothèques : `sdl3`, `glm` (mathématiques : matrices et vecteurs), `stb` (décodage des PNG), `doctest` (tests unitaires), `nlohmann-json` (description des atlas et des animations), `cgltf` (lecture des modèles glTF), `entt` (cache et poignées d'assets, puis l'ECS), `efsw` (surveillance des fichiers pour le rechargement à chaud), `ktx` avec la fonctionnalité `tools` (lecture et transcodage des textures KTX2, et l'outil `ktx` qui les encode), `imgui` avec les fonctionnalités `sdl3-binding` et `sdlgpu3-binding` (interface de debug ; ses shaders sont précompilés pour chaque backend, donc rien à ajouter à la chaîne des shaders), et `sdl3-shadercross` **uniquement sur Windows** (`"platform": "windows"`). Ce dernier apporte l'outil `shadercross`, le compilateur DirectX (DXC) et SPIRV-Cross. Il impose aussi la fonctionnalité `vulkan` de SDL3, sans effet sur le backend choisi. Enfin `winpixevent`, **uniquement sur Windows** : la DLL `WinPixEventRuntime.dll` de Microsoft (MIT), copiée à côté de l'exécutable, grâce à laquelle SDL nomme les passes dans les captures RenderDoc et PIX sous Direct3D 12 (sans elle, rien ne change sauf ces noms). |
 
 **Quand le modifier** : ajouter une bibliothèque (GLM, EnTT, Dear ImGui, nlohmann-json, etc.) ou mettre à jour la baseline.
 
@@ -359,7 +391,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 |---|---|
 | `ApplicationConfig` | `gpu_timing` (temps GPU par passe, voir `Renderer::set_gpu_timing`), titre, taille de la fenêtre (en points), `pixel_width` / `pixel_height` (si > 0 : la fenêtre est dimensionnée pour avoir exactement ce nombre de pixels, quelle que soit la densité de l'écran, pour comparer des captures entre machines), fréquence de la logique (`fixed_hz`, 60 par défaut), plafond de rattrapage (`max_frame_time`, 0,25 s), `vsync` (activé par défaut), `gpu_debug` (activé hors Release) et `report_performance` (affiche un résumé des temps CPU à la fin, et les compteurs 3D par passe). |
 | `Game` | Interface que le programme implémente. `update(dt)` est appelé à fréquence fixe avec un `dt` constant. `render(renderer, alpha)` est appelé une fois par frame dessinable et sert à **enregistrer** ce qu'il faut dessiner (`renderer.sprites().draw(...)`) : rien n'est envoyé au GPU tant que la frame n'est pas terminée. `alpha` est l'avancement entre deux mises à jour, pour l'interpolation. `on_event()` reçoit les événements SDL bruts. |
-| `Application` | Crée SDL, la fenêtre et le `Renderer` dans son constructeur, les libère dans l'ordre inverse dans son destructeur (RAII), et contient la boucle `run(Game&)`. `quit()` demande l'arrêt. Non copiable. |
+| `Application` | Crée SDL, la fenêtre, le `Renderer` et le gestionnaire d'assets (`assets()`) dans son constructeur, les libère dans l'ordre inverse dans son destructeur (RAII), et contient la boucle `run(Game&)`. `quit()` demande l'arrêt. Non copiable. `ApplicationConfig::assets_source_directory` active le rechargement à chaud. |
 | `to_pixels(point)` | Convertit une position en points de fenêtre (ce que SDL donne pour la souris) en pixels (ce que le rendu dessine). Identique sur un écran normal, différent d'un facteur 2 sur beaucoup de Mac. |
 
 **À savoir** : c'est la première API du moteur. `Game` est ce que l'ARPG devra implémenter.
@@ -372,7 +404,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 
 - **Constructeur** : `SDL_Init`, `SDL_CreateWindow` (redimensionnable, haute densité de pixels), puis création du `Renderer`. Lève `std::runtime_error` en cas d'échec et nettoie ce qui a déjà été créé. Écrit dans les logs la taille en points et en pixels.
 - **Destructeur** : libère le `Renderer` **avant** de détruire la fenêtre, puis appelle `SDL_Quit`.
-- **`run()`** : mesure le temps avec `SDL_GetPerformanceCounter`, confie le calcul des pas de logique à un `FixedTimestep`, traite les événements, exécute les `update()` de durée fixe, puis dessine la frame (`begin_frame`, `Game::render`, `end_frame`).
+- **`run()`** : mesure le temps avec `SDL_GetPerformanceCounter`, confie le calcul des pas de logique à un `FixedTimestep`, applique les rechargements d'assets en attente (`Assets::update()`), traite les événements, exécute les `update()` de durée fixe, puis dessine la frame (`begin_frame`, `Game::render`, `end_frame`).
 - **Mesures** : chaque frame dessinée est chronométrée en trois phases (événements et mises à jour, enregistrement par `Game::render`, exécution par `end_frame`). L'attente de l'écran, qui a lieu dans `begin_frame`, est **exclue** : c'est de l'attente, pas du travail. Les 60 premières frames sont ignorées du résumé (préchauffage). Une fois par seconde, le titre de la fenêtre affiche les FPS, les ticks par seconde, le temps CPU moyen, le nombre de sprites et de draw calls. Avec `report_performance`, un résumé (moyenne, percentile 99, maximum, moyenne par phase) est écrit dans les logs à la fermeture.
 - **Cadence** : c'est le VSync du swapchain qui rythme la boucle, car `begin_frame()` attend l'image suivante. Si la fenêtre est minimisée, rien n'est dessiné et la boucle attend 10 ms pour ne pas tourner à vide.
 
@@ -440,6 +472,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 **Contenu**
 
 - Le modèle `GpuResource<T, Release>` et les alias `GpuBuffer`, `GpuTexture`, `GpuSampler`, `GpuShader`, `GpuTransferBuffer`, `GpuGraphicsPipeline`. Chaque objet possède un pointeur SDL_GPU et libère la ressource dans son destructeur. Il est **déplaçable mais non copiable**, donc une ressource ne peut pas être libérée deux fois.
+- `gpu_resource_counts()` : le nombre d'objets GPU vivants de chaque sorte (compteurs tenus par `GpuResource`), pour vérifier que rien ne fuit d'une scène à l'autre (jalon 4, partie 6).
 - **`NameProperty`** (partie 10) : crée les propriétés SDL nécessaires pour nommer une ressource à sa création (un buffer, une texture, un sampler, un shader ou un pipeline), puis les détruit à la fin de sa portée. Avec un nom nul, `id()` vaut 0, ce que toute fonction `SDL_CreateGPU*()` interprète comme « aucune propriété » : nommer une ressource reste entièrement facultatif. **Il faut garder l'objet en vie jusqu'à l'appel `SDL_CreateGPU*()` qui lit la propriété**, pas seulement jusqu'à la ligne qui remplit `info.props`.
 
 **Règle de durée de vie** : la ressource mémorise le périphérique pour se libérer, donc **le `Renderer` doit vivre plus longtemps que toutes les ressources créées par lui**. En pratique : déclarer les ressources après l'`Application` dans la même portée, ou dans des objets que l'`Application` survit. Le contraire provoque un accès à un périphérique déjà détruit.
@@ -541,9 +574,21 @@ La caméra **ne tourne pas**.
 - Créé par le `Renderer` quand `ApplicationConfig::debug_ui` est vrai (`renderer.debug_ui()` renvoie sinon `nullptr`). Il charge une police TrueType (`debug_ui_font`, Inter pour le bac à sable : la police intégrée d'ImGui n'a pas les accents) et initialise les backends SDL3 (entrées) et SDL_GPU (rendu).
 - `Application::run()` lui passe chaque événement (`process_event`) ; si ImGui l'utilise (`captures` : souris au-dessus d'une de ses fenêtres, champ de texte actif), le jeu ne le reçoit pas. `new_frame()` est appelé juste avant `Game::render()`, qui peut donc appeler les fonctions `ImGui::`.
 - `Renderer::end_frame()` appelle `prepare()` avant le render pass (envoi des sommets) et `render()` à la fin du render pass, après les sprites : l'interface est toujours au-dessus, en pixels de fenêtre.
-- Pas de fichier `imgui.ini` : la disposition est fixée par le code.
+- `imgui.ini` : aucun par défaut ; `set_settings_file()` le place (l'`Application` le met dans le dossier des préférences quand elle crée les outils de debug). Seules les fenêtres des outils y sont retenues, les autres fenêtres du bac à sable ont `NoSavedSettings`.
 
 **À savoir** : l'interface passe par un render pass déjà ouvert, donc ne coûte ni copie ni passe en plus. Sans `debug_ui`, rien d'ImGui ne tourne : les mesures et les captures en ligne de commande sont inchangées.
+
+### `src/moteur/include/moteur/debug_tools.hpp` et `debug_tools.cpp`
+
+**Rôle** : les outils de debug du moteur (jalon 4, partie 8), en fenêtres ImGui : `app.debug_tools()`, nul sans `ApplicationConfig::debug_ui`.
+
+**Contenu**
+
+- `ComponentInspectors` : `add<T>(nom, fonction)` (la fonction dessine le composant avec ImGui et dit s'il a changé ; elle reçoit une copie, remise par `registry.replace`), `add_tag<T>(nom)`, `name()`, `registered()`, `edit()`, `add_engine_components()` (les composants de `world.hpp`).
+- `inspector_filter_matches()` : le filtre de la liste (nom sans casse, ou numéro).
+- `DebugTools` : `watch(world, nom)` / `forget(world)`, `watch(stack, nom)` / `forget(stack)`, `select(entité)`, `components()` ; `menu_items()` (à mettre dans le menu DEBUG du jeu), `draw()` (dans son `render()`), `between_frames()` (appelé par l'`Application` : rechargements et libérations demandés par les boutons) ; les fenêtres **Inspecteur d'entités**, **Assets**, **Entrées**, **Audio**, **États de jeu** ; les fenêtres ouvertes dans `imgui.ini` (section `[MoteurTools][Windows]`).
+
+**À savoir** : l'inspecteur n'ajoute, ne retire et ne détruit rien (sauf la case « Cachée ») : un jeu garde des entités et compte sur leurs composants. Modifier un composant rend la simulation non déterministe ; la fenêtre le signale.
 
 ### `src/moteur/include/moteur/color.hpp` et `color.cpp`
 
@@ -700,7 +745,8 @@ La caméra **ne tourne pas**.
 - `load_gltf(chemin)` : un `.gltf` (avec ses fichiers à côté) ou un `.glb`. `parse_gltf(données, taille, nom, dossier)` : la même chose depuis la mémoire.
 - Ce qui est lu : les maillages en triangles de la scène par défaut (positions ; normales, calculées si absentes ; premières coordonnées de texture ; indices, générés si absents), la hiérarchie des nœuds (**aplatie** : chaque pièce porte la matrice monde de son nœud), la couleur de base et sa texture (intégrée, en data URI ou en fichier, PNG ou JPEG), les facteurs métal et rugosité. Les fichiers externes passent par `SDL_LoadFile` (chemins UTF-8 sous Windows).
 - Ce qui est refusé : un fichier qui exige une extension non prise en charge (compression Draco, meshopt...). Les primitives qui ne sont pas des triangles sont ignorées avec un message. Toute erreur nomme le fichier.
-- `Model` (GPU) : un `Mesh` par pièce, les textures (`Texture`, possédées par le modèle), les matériaux qui les désignent, la boîte englobante et le nombre de triangles. `Model::create(renderer, données, nom)` et `Model::load(renderer, chemin)`.
+- `Model` (GPU) : un `Mesh` par pièce, les textures (partagées : `std::shared_ptr<Texture>`), les matériaux qui les désignent, la boîte englobante, le nombre de triangles et la mémoire GPU. `Model::create(renderer, données, nom, source de textures)` et `Model::load(renderer, chemin)`. La **source de textures** (facultative) fournit les images en fichiers séparés : le gestionnaire d'assets y branche son cache, et `GltfOptions::decode_external_images = false` évite alors de les décoder deux fois. `ModelImage::file` et `ModelData::files` donnent les fichiers lus (pour le rechargement à chaud).
+- `Model::replace_in_place(fresh)` : prend le contenu d'un rechargement en gardant chaque `Mesh` et chaque texture propre au modèle à la même adresse (les scènes gardent des pointeurs vers eux) ; refuse, sans rien changer, un modèle de structure différente.
 - **À savoir** : `CGLTF_IMPLEMENTATION` est défini dans ce fichier, et seulement là.
 
 ### `tools/models/make_reference_model.py` et `assets/models/reference.glb`
@@ -895,11 +941,129 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 
 **Contenu** : `art/world/` (les trois losanges du sol isométrique, 64×32, et `pivots.json` qui place leur pivot au sommet, en (32, 0)) et `art/test/` (19 images de test : quatre orbes rognables, des barres de tailles différentes, un carré, un point d'un pixel, un anneau à bords doux et **huit images de marche 48×64 asymétriques**, avec une ombre semi-transparente). L'asymétrie des personnages (bras gauche long et vert, bras droit court et rouge) sert à repérer un retournement fautif.
 
+### `src/moteur/include/moteur/asset_cache.hpp` et `asset_cache.cpp`
+
+**Rôle** : le cache d'un type d'asset, sans GPU (jalon 4, partie 2), testable avec de faux chargeurs.
+
+**Contenu**
+
+- `Asset<T>` : la poignée, `entt::resource<T>` (un `std::shared_ptr`). Se copie, se garde dans un composant ; `->` et `*` donnent l'asset. `make_asset(objet)` en fait une pour un objet créé par le jeu (maillage généré, texture dessinée), hors de tout cache.
+- `normalize_asset_path(chemin)` : la clé d'un fichier (`/` partout, sans `.`, `..` résolus, casse gardée) ; refuse un chemin vide, absolu ou qui sort de `assets/`.
+- `check_asset_case(racine, clé)` : refuse une casse différente de celle du disque, en nommant l'élément fautif ; laisse passer un fichier absent (le chargeur le signale).
+- `AssetCache<T>(nom du type, remplacement, mesure, remplacement en place)` : `get(clé, chargement)` charge une seule fois (le chargement reçoit la liste des fichiers à remplir, le principal d'abord) ; `reload(clé)` recharge **en place** (même objet, nouveau contenu ; l'ancien reste en cas d'échec) ; `collect_garbage()` libère ce qu'aucune poignée ne tient ; `keys_using(fichier)`, `infos()` (clé, mémoire, utilisateurs, erreur), `error(clé)`, `loads()`, `failures()`. Stockage : `entt::resource_cache` ; deux clés de même hachage lèvent une erreur.
+
+### `src/moteur/include/moteur/assets.hpp` et `assets.cpp`
+
+**Rôle** : le gestionnaire d'assets du moteur (`app.assets()`) : tout fichier chargé par le jeu passe par lui.
+
+**Contenu**
+
+- `texture(chemin, TextureSettings)`, `model(chemin)`, `environment(chemin)` (`.hdr`), `font(chemin, taille)`, `atlas(chemin du .json)`, `animations(chemin)` : un `Asset<T>`, partagé par tous ceux qui demandent la même clé. Les chemins sont relatifs à `assets/`.
+- Remplacements visibles quand un fichier manque ou est invalide (damier magenta, cube magenta, ciel procédural), avec un log qui nomme le fichier ; `model_error(chemin)` en donne la raison. Police, atlas et animations lèvent une exception.
+- `exists(chemin)`, `file_path(chemin)` : pour les fichiers de test facultatifs.
+- `collect_garbage()` : à appeler entre deux scènes.
+- `enable_hot_reload(dossier des sources)` et `update()` : surveillance par **efsw** (fil à part), fichiers pris après 200 ms de calme, copiés à côté de l'exécutable puis rechargés en place ; un modèle passe par `Model::replace_in_place`.
+- `stats()` et `infos()` : par type, nombre, mémoire GPU, chargements, échecs ; la fenêtre DEBUG > Assets du bac à sable les affiche.
+
+**À savoir** : le chargement est synchrone et attend le GPU ; jamais au milieu d'une frame.
+
+### `src/moteur/include/moteur/ktx_texture.hpp` et `ktx_texture.cpp`
+
+**Rôle** : lire les textures KTX2 (jalon 4, partie 3), avec libktx (KTX-Software).
+
+**Contenu**
+
+- `CompressedImage` : format SDL, taille, tous les niveaux (mipmaps) prêts pour le GPU, et `transcoded`.
+- `is_ktx2(octets)` : reconnaît l'identifiant d'un fichier KTX2.
+- `decode_ktx2(octets, nom, TextureSettings, CompressedFormats)` : Basis Universal transcodé en BC5 (deux canaux : normales), BC7 (le reste) ou RGBA8 (GPU sans ces formats, ou taille non multiple de 4) ; BC7, BC5 et RGBA8 pris tels quels. La variante sRGB suit `settings.srgb`. Erreurs avec le nom du fichier.
+- `Renderer::create_texture(const CompressedImage&)` les envoie ; `Renderer::compressed_formats()` et `set_block_compression()` disent et limitent ce que le GPU lit.
+
+### `src/moteur/include/moteur/input.hpp` et `input.cpp`
+
+**Rôle** : les entrées du joueur sous forme d'**actions** (jalon 4, partie 4) : `app.input()`.
+
+**Contenu**
+
+- `InputSource` et `parse_input_source` / `input_source_text` / `input_source_label` : une touche (par position), un bouton de souris, un cran de molette, un bouton ou un axe de manette ; forme texte du fichier (`key:Q`, `mouse:left`, `wheel:up`, `pad:a`, `pad:righttrigger+`) et nom affiché (la touche du clavier du joueur, « Clic droit », « Manette RB »).
+- `Input` : `add_button`, `add_axis`, `clear_actions` ; `load_bindings` (défauts, plusieurs profils) et `apply_user_bindings` (fichier du joueur), `user_bindings_json`, `set_profile`, `describe` ; `process_event`, `set_pointer`, `end_tick`, `release_all`, `set_enabled` (appelés par `Application`) ; `down`, `pressed`, `released`, `presses`, `axis`, `pointer`, `last_device`.
+- `InputRecording`, `input_recording_to_json` / `from_json`, `Input::frame` / `set_frame` : enregistrement et rejeu tick par tick, actions par nom.
+- `Application` : ouvre le sous-système manette, transmet les événements (les relâchements même quand ImGui garde l'événement), appelle `end_tick()` après chaque `update()`, enregistre ou rejoue (`ApplicationConfig::record_input_path`, `replay_input_path`), donne `preferences_directory()`.
+
+### `src/moteur/include/moteur/world.hpp` et `world.cpp`
+
+**Rôle** : le monde d'une scène en **entités** EnTT (jalon 4, partie 5). Une `World` par scène : elle tient le registre (`registry()`), où le jeu ajoute aussi ses propres composants.
+
+**Contenu**
+
+- **Composants du moteur** (des valeurs et des poignées) : `Transform` (position, rotation en quaternion, échelle ; `matrix()`), `PreviousTransform` (l'entité bouge : son `Transform` au tick précédent), `Parent` (attachée à une autre entité, son `Transform` est alors relatif), `Name`, `Hidden`, `MeshComponent` (poignée de maillage et matériau), `ModelComponent` (poignée de modèle), `LightSource` (lumière ponctuelle), `Billboard` (poignée de texture, taille, options).
+- `interpolate(Transform, Transform, t)` : exacte quand rien n'a bougé.
+- **Systèmes** : `begin_tick()` (premier système d'un pas fixe : `PreviousTransform` ← `Transform`) ; `collect(WorldSink&, alpha, CollectOptions)` et `submit(Renderer&, alpha, options)` : maillages, modèles, lumières (les `max_lights` plus proches de `light_focus`) et billboards, interpolés, dans l'ordre de création ; `world_matrix` / `world_position` (à travers les parents) ; `destroy` (avec les entités attachées) ; `entity_count`, `cached`.
+- **Cache des entités fixes** : une entité sans `PreviousTransform` ni `Parent` garde sa matrice et ses boîtes (celles de chaque partie d'un modèle comprises). Les signaux d'EnTT l'effacent quand son `Transform` (par `patch` / `replace`), son `Parent`, son maillage ou `Hidden` changent.
+
+### `src/moteur/include/moteur/state_stack.hpp` et `state_stack.cpp`
+
+**Rôle** : les écrans du jeu (titre, chargement, jeu, pause) en **pile d'états** (jalon 4, partie 6).
+
+**Contenu**
+
+- `GameState` : `enter` / `exit` (posé sur la pile, retiré), `covered` / `uncovered` (un état posé par-dessus, retiré), `on_event`, `update`, `render` ; `transparent()` (l'état du dessous est dessiné d'abord) et `blocking()` (celui du dessous ne tourne plus) ; `name()` pour le debug ; `stack()`.
+- `StateStack`, qui est un `moteur::Game` : `push`, `pop`, `replace`, `reset` sont des **demandes**, appliquées au début du `update()` suivant (entre deux ticks), jamais pendant un `update` ou un `render`. Le remplaçant est construit avant le départ du remplacé (assets partagés gardés). Mise à jour de bas en haut depuis le premier état bloquant, dessin depuis le premier opaque ; un état figé garde l'`alpha` de sa dernière image. Les événements vont à l'état du dessus ; les états en dessous lisent une `Input` muette (`Input::set_muted`). Construite avec l'`Application`, elle libère les assets inutilisés après chaque lot de transitions et relance l'horloge (`Application::restart_clock`). `visit_drawn` pour les tests.
+- `LoadingState` : une liste d'étapes (`label`, fonction), **une par tick**, horloge relancée après chacune, puis la dernière construit l'état qui le remplace ; `progress()`, `label()`, `error()` ; `draw` et `failed` à redéfinir (par défaut : écran vide, et retrait de l'état).
+
+### `src/moteur/include/moteur/audio.hpp` et `audio.cpp`
+
+**Rôle** : le son du jeu (jalon 4, partie 7), avec miniaudio : `app.audio()`.
+
+**Contenu**
+
+- `SoundGroup` (musique, effets, ambiance, interface) ; `PlaySound` (groupe, volume, hauteur, variations, position, priorité, boucle, fondu) ; `SoundId`.
+- `Audio` : `play` (un son ou une variante au hasard, mis en file), `play_stream` (ambiance en flux), `stop`, `set_position`, `set_volume`, `playing`, `stop_all` ; `play_music` / `stop_music` (fondu enchaîné), `set_music_volume` ; volumes (curseurs, gain au carré) et pauses par groupe, volume général, muet sans le focus, réglages en JSON (`settings_json`, `apply_settings_json`) ; `set_listener` (ou d'après une `Camera3D`), `attenuation`, `limits` ; `update()` (une fois par frame : vide la file, déplace les voix placées, libère les voix finies, surveille le périphérique) ; `mix()` sans périphérique (tests) ; `stats()` (voix, compteurs, crêtes, limiteur, périphérique, tampon).
+- Un limiteur en fin de mixage (plafond 0,9). Les voix gardent les échantillons qu'elles jouent (rechargement à chaud sans danger).
+- `Application` : crée l'`Audio` (`ApplicationConfig::audio`), l'appelle à chaque frame, lui passe le focus de la fenêtre, lit et écrit `audio.json` dans le dossier des préférences.
+
+### `src/moteur/include/moteur/audio_rules.hpp` et `audio_rules.cpp`
+
+**Rôle** : les règles de l'audio qui ne demandent aucun périphérique, testées à part.
+
+**Contenu** : `Listener`, `Attenuation`, `place_sound()` (gain et panoramique) ; `VoiceLimits`, `VoiceInfo`, `decide_voice()` (jouer, prendre la place d'une voix, ou ne pas jouer, et pourquoi) ; `merge_requests()` ; `slider_gain()`.
+
+### `src/moteur/include/moteur/sound.hpp` et `sound.cpp`
+
+**Rôle** : les sons comme assets (`assets.sound()`, `assets.music()`).
+
+**Contenu** : `Sound` (échantillons flottants partagés, canaux, fréquence), `Music` (octets compressés partagés, décodés pendant la lecture) ; `decode_sound()`, `open_music()` (erreurs avec le nom du fichier) ; `placeholder_sound()` (le bip d'un son manquant) ; `encode_wav()` (tests).
+
+### `src/moteur/miniaudio.c`
+
+**Rôle** : l'implémentation de miniaudio, avec `stb_vorbis` pour l'OGG (le montage que miniaudio documente), compilée en C dans la bibliothèque `moteur_miniaudio`, sans les avertissements du projet (code tiers).
+
+### `tools/audio/fetch_test_sounds.py`
+
+**Rôle** : télécharger les sons et musiques de test dans `assets/audio/` (10 Mo, hors de Git, tous en CC0 : Kenney et OpenGameArt), en vérifiant le SHA-256 de chaque fichier ; ne garde que les fichiers utilisés des paquets de Kenney, avec leur `License.txt`. Les crédits sont dans `assets/credits.json` (section `sounds`).
+
+### `src/moteur/include/moteur/process_memory.hpp` et `process_memory.cpp`
+
+**Rôle** : `process_memory_bytes()`, la mémoire que le processus s'est réservée (Windows : *private bytes* ; macOS : *physical footprint* ; Linux : mémoire résidente). Pour comparer deux moments d'une même exécution (fuites), pas deux systèmes.
+
+### `assets/input/demo3d.json`
+
+**Rôle** : les touches par défaut de la démo 3D, en deux profils : « clic » (clic gauche pour se déplacer, A Z E R T et clic droit pour les compétences) et « zqsd » (Z Q S D pour se déplacer, A E R F et clic droit), plus la manette. Les touches y sont nommées par leur position sur un QWERTY US (`key:Q` = la touche A d'un AZERTY).
+
+### `tools/input/make_slice_replay.py` et `tests/data/slice_replay.json`
+
+**Rôle** : le rejeu de référence de la tranche jouable (jalon 4, partie 9), écrit par un script plutôt qu'enregistré à la main : 480 ticks (titre, « Jouer », marche, coups, pause, « Reprendre »), actions par leur nom. `python tools/input/make_slice_replay.py` le réécrit. Capture : `bac_a_sable --states --replay-input tests/data/slice_replay.json --freeze-after 340 --run-seconds 9 --pixel-size 1280 720 --capture slice.png`.
+
+### `tools/textures/convert_gltf_textures.py`
+
+**Rôle** : encoder les textures des glTF en KTX2 UASTC et les déclarer avec `KHR_texture_basisu`.
+
+**Usage** : `python tools/textures/convert_gltf_textures.py [fichiers .gltf ou dossiers] [--ktx outil] [--force]` (par défaut, tout `assets/models/`). Rôle de chaque image déduit des matériaux (couleur en sRGB, normales en `--normal-mode`, données en linéaire), `.ktx2` à côté de l'image, image d'origine gardée en repli. L'outil `ktx` est cherché dans les dossiers de build (vcpkg l'installe), puis dans le PATH. Idempotent.
+
 ### `src/moteur/include/moteur/paths.hpp` et `paths.cpp`
 
 **Rôle** : savoir où chercher les fichiers du programme.
 
-**Contenu** : `base_path()` renvoie le dossier de l'exécutable (avec un séparateur final), `asset_path("nom.png")` renvoie `<dossier de l'exécutable>/assets/nom.png`. Le chargement des shaders utilise aussi `base_path()`. `read_text_file(chemin)` lit tout un fichier avec `SDL_LoadFile` (chemins UTF-8 sous Windows) ; il sert au chargement des atlas et des animations.
+**Contenu** : `base_path()` renvoie le dossier de l'exécutable (avec un séparateur final), `asset_path("nom.png")` renvoie `<dossier de l'exécutable>/assets/nom.png`. Le chargement des shaders utilise aussi `base_path()`. `read_file(chemin)` lit tout un fichier avec `SDL_LoadFile` (chemins UTF-8 sous Windows) dans un `FileData`, qui libère les octets lui-même (`release()` les cède, pour cgltf). **Tous** les chargements d'assets passent par elle (images, environnements, polices, glTF et leurs tampons, atlas, animations), pour qu'une archive puisse remplacer le dossier au packaging. `read_text_file(chemin)` la même chose en chaîne.
 
 **Pourquoi relatif à l'exécutable** : le programme fonctionne quel que soit le dossier de travail. Sur Mac, dans un bundle `.app`, l'emplacement des ressources sera différent : ce sera à adapter dans `base_path()` au moment du packaging, sans toucher au reste du code.
 
@@ -935,11 +1099,23 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 
 **Rôle** : la scène de démonstration du jalon 3 (partie 11), dans le menu (« Démo 3D ») ou avec `--demo3d`.
 
-**Contenu** : la carte 100×100 de la démo 2D construite en 3D (sol fusionné par blocs de 10×10, murs de 1,5 m, un brasero-torche par pièce), le décor (rochers, arbres, caisses, tonneaux glTF), les créatures de la démo 2D (demi-tour devant les murs) avec barres de vie, le soleil et les torches avec ombres, la caméra (déplacement, zoom, suivi). Clic droit : choisir une créature ; clic gauche : l'envoyer ; Tab : la suivante ; F : la suivre. Les objets fixes sont préparés une fois (`StaticDraw` : maillage, matrice, matériau, boîte). Réglages et tableau des passes dans le panneau du menu (`draw_controls()`). Options : `--seed`, `--map`, `--creatures`, `--decor`, `--tile-floor`, `--point-shadows`, et celles des captures.
+**Contenu** : la carte 100×100 de la démo 2D construite en 3D (sol fusionné par blocs de 10×10, murs de 1,5 m, un brasero-torche par pièce), le décor (rochers, arbres, caisses, tonneaux glTF), les créatures de la démo 2D (demi-tour devant les murs) avec barres de vie, le soleil et les torches avec ombres, la caméra (déplacement, zoom, suivi). Commandes : les actions de `assets/input/demo3d.json` (profils « clic » et « zqsd », manette). Depuis la partie 5 du jalon 4, le monde est une `moteur::World` : sol, murs et décor sont des entités fixes, chaque créature une entité qui bouge (`Walker` et `Health`, composants propres à la démo) avec un corps et une tête attachés, chaque torche une entité (flamme, lumière, halo), l'anneau de sélection est attaché à la créature choisie, et la marque de destination est cachée (`Hidden`) quand il n'y en a pas. Réglages, tableau des passes et temps de collecte du monde dans le panneau du menu (`draw_controls()`) ; `world collection` en fin de ligne de commande. Options : `--seed`, `--map`, `--creatures`, `--decor`, `--tile-floor`, `--point-shadows`, et celles des captures. `Demo3D::declare_actions()` déclare les actions (et celles des menus) et lit les touches, pour la démo et pour les états qui l'entourent. `Options::hero` (la tranche jouable, jalon 4 partie 9) : un héros à lui, suivi par la caméra, qui frappe les créatures (clic sur une créature à portée, ou compétence 1), avec pas, impacts et ambiance.
+
+### `apps/bac_a_sable/states_demo.hpp` et `states_demo.cpp`
+
+**Rôle** : la tranche jouable (jalon 4, partie 9), née du test des états de jeu (partie 6), dans le menu (« Tranche jouable (états de jeu) ») ou avec `--states`.
+
+**Contenu** : une `StatesDemo` tient une `moteur::StateStack` : écran titre (« Jouer », « Quitter le test », musique du titre), chargement (police et tonneau préchargés, puis construction de la démo 3D, barre de progression ImGui), jeu (la démo 3D ; l'action `pause`, Échap ou Start, pose la pause), pause (transparente et bloquante : le monde reste dessiné, assombri et figé ; « Reprendre », « Retour au titre »). `--states-cycles N` (ou le réglage « Cycles automatiques ») : un pilote automatique enchaîne titre, jeu, pause, jeu, pause, titre N fois ; à chaque retour au titre il note les assets, les objets GPU et la mémoire du processus, et vérifie que le monde n'a pas bougé pendant les pauses ; bilan en fin de ligne de commande. `--capture` : une image de la première pause ; avec `--freeze-after N`, celle du jeu gelé après N de ses ticks (la capture de référence, avec `--replay-input tests/data/slice_replay.json`). Depuis la partie 9 : la démo en mode héros, des menus lus par les actions `menu_up`, `menu_down`, `menu_confirm` (classe `Menu` : le choix en surbrillance, que la souris ne déplace pas), une étape de chargement « Sons », les sons d'interface, `--run-seconds`, et la mesure du chargement (`Slice: loaded in ... ms`).
+
+### `apps/bac_a_sable/audio_test.hpp` et `audio_test.cpp`
+
+**Rôle** : le test de l'audio (jalon 4, partie 7), dans le menu (« Audio ») ou avec `--audio` (`--audio-burst` : une rafale au départ ; avec `--run-seconds`, un bilan en fin de ligne de commande).
+
+**Contenu** : une carte vue de dessus (l'auditeur, les distances d'atténuation, les sources ; un clic y joue un impact), un feu en boucle qui tourne autour de l'auditeur, pas, impacts, clics d'interface, musiques du titre et du jeu, ambiance en flux, volumes et pauses par groupe, rafale de 200 impacts en une seconde ; le panneau montre le périphérique, son tampon, les voix, les compteurs, les crêtes et le limiteur.
 
 ### `apps/bac_a_sable/sandbox_scene.hpp`
 
-**Rôle** : ce que les scènes du menu partagent. `SandboxScene` (un `moteur::Game` avec `draw_controls()` et `stop_requested()`) : le menu tient la scène en cours par cette interface. `Random` : le petit générateur à graine des scènes. `demo_wall(i, j)` : les murs des deux démos (2D et 3D), pour qu'elles aient la même carte.
+**Rôle** : ce que les scènes du menu partagent. `SandboxScene` (un `moteur::Game` avec `draw_controls()`, `stop_requested()` et `uses_escape()`, qui laisse Échap à la scène comme touche de pause) : le menu tient la scène en cours par cette interface. `Random` : le petit générateur à graine des scènes. `demo_wall(i, j)` : les murs des deux démos (2D et 3D), pour qu'elles aient la même carte.
 
 ### `apps/bac_a_sable/main.cpp`
 
@@ -950,7 +1126,7 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 - **Scène « Rendu 3D : premiers maillages »** (`--3d`, `--ortho`, `--camera X Z`, `--view-height H`, ou le menu). Elle charge aussi tous les modèles glTF de `assets/models/` et les pose en rang, avec leur nom, leurs triangles et leur temps de chargement au-dessus (ou leur erreur). Contenu d'origine : un sol en damier de 20×20 cases d'1 m, un mur de cubes, un cube qui tourne, une sphère, une boîte à la taille d'un personnage et quatre piliers de 3 m, vus par une `Camera3D`. **P** change de projection, flèches ou ZQSD déplacent la cible, la molette change la hauteur visible. La case sous la souris est surlignée ; un clic gauche envoie la boîte « personnage » vers le point cliqué ; **F** fait suivre le personnage par la caméra ; `--mouse X Y` simule la souris et écrit la case survolée à la fermeture. Le texte (en `screen_sprites()`) rappelle la projection, ses réglages et les statistiques 3D. Dans le menu, le panneau du test en cours (`TestScene::draw_controls()`, en ImGui) règle la projection, les angles, la hauteur visible et le champ de vision.
 - Classe `TestScene`, qui implémente `Game` : **une** scène de test, choisie par ses `Options` (celles de la ligne de commande). Elle compte les ticks et les frames. Lancée depuis la ligne de commande (`standalone`), Échap et `--run-seconds` quittent le programme ; lancée depuis le menu, ils demandent seulement l'arrêt du test (`stop_requested()`).
 - **Fenêtre « À propos »** (menu **Aide**, ou bouton de l'accueil) : les bibliothèques, la police et les modèles de test, lus dans `assets/credits.json` (structure `Credits`), avec le texte complet de chaque licence à la demande (lu dans `licenses/` ou `assets/fonts/`, avec retour à la ligne) et la présence de chaque modèle. Le bac à sable lie `nlohmann-json` pour lire ce fichier.
-- Classe `Sandbox`, qui implémente `Game` : le programme lancé **sans argument** (ou avec `--menu`). Barre de menus ImGui (**DEBUG > Tests moteur** en sous-menu, avec « Toutes les scènes... » puis chaque scène ; **DEBUG > Accueil**), écran d'accueil, page de sélection (description, réglages et bouton **Lancer** de chaque scène) et panneau du test en cours (**Arrêter le test**, **Accueil**). Échap remonte d'un cran (test → sélection → accueil). Une scène est créée et détruite dans `update()`, jamais pendant une frame : le chargement attend le GPU, et les textures d'une scène sont utilisées par la frame en cours d'enregistrement. Si une scène ne peut pas démarrer, l'erreur s'affiche sur la page de sélection.
+- Classe `Sandbox`, qui implémente `Game` : le programme lancé **sans argument** (ou avec `--menu` ; `--menu-test N` lance en plus le test N, compté depuis 0). Barre de menus ImGui (**DEBUG > Tests moteur** en sous-menu, avec « Toutes les scènes... » puis chaque scène ; les outils de debug du moteur, `DebugTools::menu_items()` ; **DEBUG > Accueil**), écran d'accueil, page de sélection (description, réglages et bouton **Lancer** de chaque scène) et panneau du test en cours (**Arrêter le test**, **Accueil**). Échap remonte d'un cran (test → sélection → accueil). Une scène est créée et détruite dans `update()`, jamais pendant une frame : le chargement attend le GPU, et les textures d'une scène sont utilisées par la frame en cours d'enregistrement. Si une scène ne peut pas démarrer, l'erreur s'affiche sur la page de sélection.
 - **Ressources** : il ne reste que la texture, chargée depuis `sprite.png` et libérée automatiquement. Le bac à sable ne crée plus ni pipeline, ni buffer, ni échantillonneur : c'est le moteur qui les possède.
 - **Sprite principal** : dessiné ×8 (un texel de l'image couvre 8×8 pixels à l'écran), au centre de la fenêtre.
 - **Mouvement** : `update()` calcule le décalage du sprite par rapport au centre de la fenêtre (sinus, amplitude ±300 px en x et ±60 px en y) et garde l'état précédent. `render()` interpole entre les deux avec `alpha`.
@@ -995,6 +1171,9 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 - `test_image.cpp` : alpha pré-multiplié (pixels opaques inchangés, transparents mis à zéro, arrondi au plus proche, image vide).
 - `test_camera.cpp` : la position au centre de la fenêtre, zoom, sens de l'axe Y, aller-retour monde / écran / monde (avec et sans alignement), alignement sur les pixels (y compris avec une fenêtre de taille impaire), rectangle visible, redimensionnement, interpolation, coins de la fenêtre en espace de découpage, accord entre la matrice et `world_to_screen`, zoom invalide, conversion points / pixels.
 - `test_tilemap.cpp` : numérotation du `Tileset`, calques indépendants, `fill`, refus des cases hors de la carte, `clip` d'une plage à l'intérieur, à cheval ou hors de la carte, plage visible d'une caméra dans un coin, `walkable` sur plusieurs calques.
+- `test_input.cpp` : sources lues et réécrites, appui bref vu par un seul tick, appui maintenu, appuis accumulés sans tick, action à deux sources, répétition du système ignorée, crans de molette, diagonales unitaires, zone morte et sens du stick, gâchette comme bouton, profils (et changement qui relâche), fichier du joueur (profil, liaison changée, relu après écriture, profil inconnu ignoré), fichiers invalides nommés, entrées coupées, perte du focus, rejeu par nom d'action et au-delà de sa fin.
+- `test_ktx_texture.cpp` : KTX2 fabriqués en mémoire avec libktx : identifiant, UASTC couleur en BC7 (sRGB ou non) avec ses quatre niveaux et leurs tailles de blocs, repli RGBA8 à 12 niveaux au plus de la source, taille non multiple de 4 en RGBA8, carte de normales à deux canaux en BC5 ou avec x et y en rouge et vert, RGBA8 brut pris tel quel, fichiers invalides ou tronqués nommés dans l'erreur.
+- `test_asset_cache.cpp` : normalisation des chemins (séparateurs, `.`, `..`, refus des chemins absolus ou qui sortent), casse vérifiée sur un vrai dossier temporaire, un chargement par clé, libération de ce que personne ne tient (et rechargement ensuite), remplacement en cas d'échec ou exception sans remplacement, rechargement en place (même objet) et échec qui garde l'ancien contenu, placeholder réparé par un rechargement, fonction de remplacement qui refuse, fichiers d'un asset, mesure de la mémoire.
 - `test_animation.cpp` : clips invalides, durée d'un cycle, image affichée à chaque tick (boucle, une fois, aller-retour), vitesses ×2, ×0,5 et 0, vitesse négative refusée, événements exactement une fois (y compris avec un pas de 20 ticks et une vitesse de ×0,7 sur 80 ticks), clip `Once` après la fin, `set_time`, lecture du JSON et messages d'erreur.
 - `test_mesh_batcher.cpp` : un lot par maillage et textures quelles que soient les couleurs, lots à une face avant ceux à deux faces, objets hors du frustum écartés (boîte tournée comprise), ordre des lots indépendant de ce qui est visible, passe d'ombre limitée aux objets qui en projettent et sans textures, contenu des instances (lignes de la matrice, matériau), nombreux groupes, sous-ensemble des draws.
 - `test_billboard_batcher.cpp` : billboard face à la caméra (en travers de la vue, à la bonne taille), billboard vertical (arêtes verticales, tourne autour de la verticale), tri du plus lointain au plus proche et lots coupés par texture, couleurs pré-multipliées et additif sans alpha, lot jamais au-delà des indices 16 bits.

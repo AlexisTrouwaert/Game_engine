@@ -9,26 +9,29 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <tuple>
 #include <stdexcept>
 
+#include "moteur/ktx_texture.hpp"
+#include "moteur/paths.hpp"
 #include "moteur/renderer.hpp"
 
 namespace moteur {
 
 namespace {
 
-// cgltf reads external buffers through these, so they go through SDL_LoadFile, which handles
+// cgltf reads external buffers through these, so they go through read_file(), which handles
 // UTF-8 paths on Windows (cgltf's own fopen does not).
-cgltf_result read_file(const cgltf_memory_options*, const cgltf_file_options*, const char* path, cgltf_size* size,
-                       void** data) {
-    std::size_t loaded_size = 0;
-    void* loaded = SDL_LoadFile(path, &loaded_size);
-    if (loaded == nullptr) {
+cgltf_result read_buffer_file(const cgltf_memory_options*, const cgltf_file_options*, const char* path,
+                              cgltf_size* size, void** data) {
+    try {
+        FileData file = read_file(path);
+        *size = file.size();
+        *data = file.release();  // freed by release_file
+        return cgltf_result_success;
+    } catch (const std::runtime_error&) {
         return cgltf_result_file_not_found;
     }
-    *size = loaded_size;
-    *data = loaded;
-    return cgltf_result_success;
 }
 
 void release_file(const cgltf_memory_options*, const cgltf_file_options*, void* data) {
@@ -144,14 +147,28 @@ MeshData read_primitive(const cgltf_primitive& primitive) {
     return mesh;
 }
 
-// Decodes a glTF image: inside a buffer (.glb), in a data URI, or in a file next to the model.
-Image read_image(const cgltf_image& image, const std::string& base_directory, const std::string& name) {
+// The decoded URI of a file next to the model ("%20" and the like), empty for data URIs.
+std::string file_uri(const char* uri) {
+    if (uri == nullptr || std::strncmp(uri, "data:", 5) == 0) {
+        return {};
+    }
+    std::string path = uri;
+    cgltf_decode_uri(path.data());
+    path.resize(std::strlen(path.c_str()));
+    return path;
+}
+
+// The encoded bytes of a glTF image (PNG, JPEG or KTX2): inside a buffer (.glb), in a data URI,
+// or in a file next to the model.
+std::vector<std::uint8_t> read_image_bytes(const cgltf_image& image, const std::string& base_directory,
+                                           const std::string& name) {
     if (image.buffer_view != nullptr) {
         const cgltf_buffer_view& view = *image.buffer_view;
         if (view.buffer->data == nullptr) {
             throw std::runtime_error("image '" + name + "' is in a buffer that was not loaded");
         }
-        return decode_image(static_cast<const std::uint8_t*>(view.buffer->data) + view.offset, view.size, name);
+        const auto* bytes = static_cast<const std::uint8_t*>(view.buffer->data) + view.offset;
+        return std::vector<std::uint8_t>(bytes, bytes + view.size);
     }
     if (image.uri == nullptr) {
         throw std::runtime_error("image '" + name + "' has neither data nor URI");
@@ -173,19 +190,19 @@ Image read_image(const cgltf_image& image, const std::string& base_directory, co
         if (cgltf_load_buffer_base64(&options, size, base64.c_str(), &bytes) != cgltf_result_success) {
             throw std::runtime_error("image '" + name + "' has an invalid base64 data URI");
         }
-        try {
-            Image decoded = decode_image(bytes, size, name);
-            std::free(bytes);  // cgltf allocated it with malloc (no custom allocator given)
-            return decoded;
-        } catch (...) {
-            std::free(bytes);
-            throw;
-        }
+        const auto* begin = static_cast<const std::uint8_t*>(bytes);
+        std::vector<std::uint8_t> decoded(begin, begin + size);
+        std::free(bytes);  // cgltf allocated it with malloc (no custom allocator given)
+        return decoded;
     }
-    std::string path = uri;
-    cgltf_decode_uri(path.data());  // "%20" and the like
-    path.resize(std::strlen(path.c_str()));
-    return load_image(base_directory + path);
+    const std::string path = base_directory + file_uri(image.uri);
+    try {
+        const FileData file = read_file(path);
+        const auto* begin = static_cast<const std::uint8_t*>(file.data());
+        return std::vector<std::uint8_t>(begin, begin + file.size());
+    } catch (const std::runtime_error& e) {
+        throw std::runtime_error("Cannot read image '" + path + "': " + e.what());
+    }
 }
 
 }  // namespace
@@ -210,10 +227,11 @@ std::size_t ModelData::triangle_count() const {
     return count;
 }
 
-ModelData parse_gltf(const void* data, std::size_t size, const std::string& name, const std::string& base_directory) {
+ModelData parse_gltf(const void* data, std::size_t size, const std::string& name, const std::string& base_directory,
+                     const GltfOptions& gltf_options) {
     try {
         cgltf_options options = {};
-        options.file.read = read_file;
+        options.file.read = read_buffer_file;
         options.file.release = release_file;
 
         cgltf_data* raw = nullptr;
@@ -243,14 +261,29 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
         }
 
         ModelData model;
-        // An image is decoded once per use kind: the same file may serve as color and as data.
-        std::map<std::pair<const cgltf_image*, bool>, int> image_indices;
-        const auto image_of = [&](const cgltf_texture_view& view, bool srgb, const std::string& role) {
-            if (view.texture == nullptr || view.texture->image == nullptr) {
+        for (cgltf_size i = 0; i < gltf->buffers_count; ++i) {
+            if (std::string file = file_uri(gltf->buffers[i].uri); !file.empty()) {
+                model.files.push_back(std::move(file));
+            }
+        }
+        // An image is decoded once per use kind: the same file may serve as color, as data and as
+        // a normal map.
+        std::map<std::tuple<const cgltf_image*, bool, bool>, int> image_indices;
+        const auto image_of = [&](const cgltf_texture_view& view, bool srgb, const std::string& role, bool normal = false) {
+            if (view.texture == nullptr) {
                 return -1;
             }
+            // KHR_texture_basisu: a KTX2 version of the image, preferred unless told otherwise; the
+            // plain image, when there is one, is the fallback for tools that cannot read KTX2.
             const cgltf_image* image = view.texture->image;
-            auto found = image_indices.find({image, srgb});
+            if (view.texture->has_basisu && view.texture->basisu_image != nullptr &&
+                (gltf_options.prefer_ktx2 || image == nullptr)) {
+                image = view.texture->basisu_image;
+            }
+            if (image == nullptr) {
+                return -1;
+            }
+            auto found = image_indices.find({image, srgb, normal});
             if (found == image_indices.end()) {
                 std::string image_name = role;
                 if (image->name != nullptr) {
@@ -258,8 +291,24 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
                 } else if (image->uri != nullptr && std::strncmp(image->uri, "data:", 5) != 0) {
                     image_name = image->uri;
                 }
-                model.images.push_back({image_name, read_image(*image, base_directory, image_name), srgb});
-                found = image_indices.emplace(std::make_pair(image, srgb), static_cast<int>(model.images.size() - 1)).first;
+                ModelImage entry;
+                entry.name = image_name;
+                entry.srgb = srgb;
+                entry.normal = normal;
+                entry.file = image->buffer_view == nullptr ? file_uri(image->uri) : std::string();
+                if (entry.file.empty() || gltf_options.decode_external_images) {
+                    std::vector<std::uint8_t> bytes = read_image_bytes(*image, base_directory, image_name);
+                    if (is_ktx2(bytes.data(), bytes.size())) {
+                        entry.ktx2 = std::move(bytes);  // decoded for the GPU that will read it (Model::create)
+                    } else {
+                        entry.image = decode_image(bytes.data(), bytes.size(), image_name);
+                    }
+                    if (!entry.file.empty()) {
+                        model.files.push_back(entry.file);
+                    }
+                }
+                model.images.push_back(std::move(entry));
+                found = image_indices.emplace(std::make_tuple(image, srgb, normal), static_cast<int>(model.images.size() - 1)).first;
             }
             return found->second;
         };
@@ -275,7 +324,7 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
                 material.base_color_image = image_of(pbr.base_color_texture, true, material.name + " base color");
                 material.metallic_roughness_image = image_of(pbr.metallic_roughness_texture, false, material.name + " metal roughness");
             }
-            material.normal_image = image_of(source.normal_texture, false, material.name + " normal");
+            material.normal_image = image_of(source.normal_texture, false, material.name + " normal", true);
             if (source.normal_texture.texture != nullptr) {
                 material.normal_scale = source.normal_texture.scale;
             }
@@ -351,25 +400,20 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
     }
 }
 
-ModelData load_gltf(const std::string& path) {
-    std::size_t size = 0;
-    void* data = SDL_LoadFile(path.c_str(), &size);
-    if (data == nullptr) {
-        throw std::runtime_error("Model '" + path + "': cannot read the file: " + SDL_GetError());
+ModelData load_gltf(const std::string& path, const GltfOptions& gltf_options) {
+    FileData file;
+    try {
+        file = read_file(path);
+    } catch (const std::runtime_error& e) {
+        throw std::runtime_error("Model '" + path + "': " + e.what());
     }
     const std::size_t slash = path.find_last_of("/\\");
     const std::string directory = slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
-    try {
-        ModelData model = parse_gltf(data, size, path, directory);  // a .glb's buffer points into `data`
-        SDL_free(data);
-        return model;
-    } catch (...) {
-        SDL_free(data);
-        throw;
-    }
+    return parse_gltf(file.data(), file.size(), path, directory, gltf_options);  // a .glb's buffer points into `file`
 }
 
-Model Model::create(Renderer& renderer, const ModelData& data, const std::string& name) {
+Model Model::create(Renderer& renderer, const ModelData& data, const std::string& name,
+                    const TextureSource& texture_source) {
     Model model;
     // Colors in sRGB, data (normals, roughness, occlusion) as stored; mipmaps for all; straight alpha
     // (3D surfaces do not blend like sprites).
@@ -378,7 +422,23 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
         settings.srgb = image.srgb;
         settings.mipmaps = true;
         settings.premultiply = false;
-        model.textures.push_back(std::make_unique<Texture>(renderer.create_texture(image.image, settings, image.name.c_str())));
+        settings.normal_map = image.normal;
+        if (texture_source && !image.file.empty()) {
+            model.textures.push_back(texture_source(image, settings));
+            continue;
+        }
+        std::shared_ptr<Texture> texture;
+        if (!image.ktx2.empty()) {
+            const CompressedImage decoded = decode_ktx2(image.ktx2.data(), image.ktx2.size(), image.name, settings,
+                                                        renderer.compressed_formats());
+            texture = std::make_shared<Texture>(renderer.create_texture(decoded, image.name.c_str()));
+        } else if (!image.image.pixels.empty()) {
+            texture = std::make_shared<Texture>(renderer.create_texture(image.image, settings, image.name.c_str()));
+        } else {
+            throw std::runtime_error("Model '" + name + "': image '" + image.name + "' was not decoded");
+        }
+        model.gpu_bytes += texture->gpu_bytes;
+        model.textures.push_back(std::move(texture));
     }
     const auto texture = [&model](int index) -> const Texture* {
         return index >= 0 ? model.textures[static_cast<std::size_t>(index)].get() : nullptr;
@@ -402,6 +462,7 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
     for (const ModelPart& source : data.parts) {
         Part part;
         part.mesh = Mesh::create(renderer, source.mesh, (name + ":" + source.name).c_str());
+        model.gpu_bytes += part.mesh.gpu_bytes;
         part.transform = source.transform;
         part.material = source.material;
         model.parts.push_back(std::move(part));
@@ -413,6 +474,51 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
 
 Model Model::load(Renderer& renderer, const std::string& path) {
     return create(renderer, load_gltf(path), path);
+}
+
+void Model::replace_in_place(Model&& fresh) {
+    if (fresh.parts.size() != parts.size() || fresh.materials.size() != materials.size() ||
+        fresh.textures.size() != textures.size()) {
+        throw std::runtime_error("its structure changed (parts, materials or textures): reload the scene");
+    }
+    // A texture only this model holds was created by it, and can take the new pixels in place. A
+    // shared one (from a cache) must be the very same.
+    for (std::size_t i = 0; i < textures.size(); ++i) {
+        if (fresh.textures[i] != textures[i] && textures[i].use_count() > 1) {
+            throw std::runtime_error("it uses another texture file: reload the scene");
+        }
+    }
+    const auto remap = [&](const Texture* texture) -> const Texture* {
+        for (std::size_t i = 0; i < fresh.textures.size(); ++i) {
+            if (fresh.textures[i].get() == texture) {
+                return textures[i].get();
+            }
+        }
+        return texture;
+    };
+    // Nothing can fail from here on.
+    for (std::size_t i = 0; i < textures.size(); ++i) {
+        if (fresh.textures[i] != textures[i]) {
+            *textures[i] = std::move(*fresh.textures[i]);
+        }
+    }
+    for (std::size_t i = 0; i < materials.size(); ++i) {
+        Material material = fresh.materials[i];
+        material.base_color_texture = remap(material.base_color_texture);
+        material.metallic_roughness_texture = remap(material.metallic_roughness_texture);
+        material.normal_texture = remap(material.normal_texture);
+        material.occlusion_texture = remap(material.occlusion_texture);
+        material.emissive_texture = remap(material.emissive_texture);
+        materials[i] = material;
+    }
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        parts[i].mesh = std::move(fresh.parts[i].mesh);
+        parts[i].transform = fresh.parts[i].transform;
+        parts[i].material = fresh.parts[i].material;
+    }
+    bounds = fresh.bounds;
+    triangle_count = fresh.triangle_count;
+    gpu_bytes = fresh.gpu_bytes;
 }
 
 }  // namespace moteur

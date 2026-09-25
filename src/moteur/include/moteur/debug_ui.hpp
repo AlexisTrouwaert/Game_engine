@@ -35,11 +35,17 @@ public:
 
     void new_frame();
 
+    // Where ImGui keeps the windows' places (and what DebugTools adds): imgui.ini in the player's
+    // preferences, never next to the executable. Empty: nothing kept (the default). Before the
+    // first frame, which reads it.
+    void set_settings_file(std::string path);
+
     // Called by the Renderer: prepare() before the render pass (uploads), render() inside it.
     void prepare(SDL_GPUCommandBuffer* commands);
     void render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass);
 
 private:
+    std::string settings_file_;   // ImGui keeps a pointer to it
     bool frame_started_ = false;  // new_frame() called, Render() not yet
     bool prepared_ = false;       // prepare() done this frame, render() not yet
 };
