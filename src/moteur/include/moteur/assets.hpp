@@ -11,7 +11,9 @@
 #include "moteur/asset_cache.hpp"
 #include "moteur/environment.hpp"
 #include "moteur/font.hpp"
+#include "moteur/map_data.hpp"
 #include "moteur/model.hpp"
+#include "moteur/particles.hpp"
 #include "moteur/renderer.hpp"
 #include "moteur/skeleton.hpp"
 #include "moteur/sound.hpp"
@@ -78,6 +80,13 @@ public:
     // masks, crossfades). Throws if it cannot be read or is not valid. Reloaded in place: an
     // Animator takes the new values for the motions it starts afterwards.
     Asset<AnimationSet> animation_set(std::string_view path);
+    // A map (a .json whose cells are drawn in characters, see MapData). Throws if it cannot be read
+    // or is not valid. Reloaded in place, with MapData::revision() one higher: the scene compares it
+    // to rebuild what it made from the map.
+    Asset<MapData> map(std::string_view path);
+    // A particle effect (a .json, see ParticleEffect). Throws if it cannot be read or is not valid.
+    // Reloaded in place: running effects take the new values.
+    Asset<ParticleEffect> particle_effect(std::string_view path);
 
     // Where an asset is on disk, and whether it is there (for optional test assets, which a scene
     // does without rather than showing a placeholder).
@@ -132,6 +141,8 @@ private:
     AssetCache<Skeleton> skeletons_;
     AssetCache<ClipLibrary> clips_;
     AssetCache<AnimationSet> animation_sets_;
+    AssetCache<MapData> maps_;
+    AssetCache<ParticleEffect> effects_;
     std::unique_ptr<Watcher> watcher_;
     bool prefer_ktx2_ = true;
 };

@@ -47,6 +47,7 @@
 #include "sandbox_scene.hpp"
 #include "states_demo.hpp"
 #include "animation_test.hpp"
+#include "world_test.hpp"
 #include "audio_test.hpp"
 
 namespace {
@@ -1675,8 +1676,8 @@ private:
 class Sandbox final : public moteur::Game {
 public:
     // `launch_test` >= 0: that test (its place in DEBUG > Tests moteur, from 0) starts at once.
-    Sandbox(moteur::Application& app, double run_seconds, int launch_test = -1)
-        : app_(app), run_seconds_(run_seconds), credits_(Credits::load(moteur::asset_path("credits.json"))) {
+    Sandbox(moteur::Application& app, double run_seconds, int launch_test = -1, std::string world_map = "salle_portes")
+        : app_(app), run_seconds_(run_seconds), world_map_(std::move(world_map)), credits_(Credits::load(moteur::asset_path("credits.json"))) {
         // The settings each test starts with; the list page can change them before launching.
         TestScene::Options sprites;
         sprites.movers = 3000;
@@ -1747,6 +1748,11 @@ public:
              "pose de repos jusqu'au skinning ; les armes et casques suivent déjà leur os. Les personnages "
              "viennent de tools/models/fetch_test_characters.py.",
              TestKind::Animation, {}, {}},
+            {"Monde",
+             "Une carte de test de assets/maps construite en 3D (murs, piliers, barrières, herbes hautes, trous), "
+             "ses points nommés et les axes de l'origine ; la case sous le pointeur et la grille de jeu dans le "
+             "panneau. Clic droit : poser ou retirer un mur. Modifier le fichier de la carte la recharge.",
+             TestKind::World, {}, {}},
         };
         if (launch_test >= 0 && launch_test < static_cast<int>(tests_.size())) {
             request(Action::Launch, launch_test);
@@ -1811,7 +1817,7 @@ public:
 private:
     enum class Screen { Home, Tests, Running };
     enum class Action { None, ShowHome, ShowTests, Launch };
-    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare, States, Audio, Animation };
+    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare, States, Audio, Animation, World };
 
     struct TestEntry {
         const char* name;
@@ -1855,6 +1861,10 @@ private:
                         next = std::make_unique<BlenderCompare>(app_, BlenderCompare::Options{}, false);
                     } else if (test.kind == TestKind::Audio) {
                         next = std::make_unique<AudioTest>(app_, AudioTest::Options{}, false);
+                    } else if (test.kind == TestKind::World) {
+                        WorldTest::Options world;
+                        world.map = world_map_;
+                        next = std::make_unique<WorldTest>(app_, world, false);
                     } else if (test.kind == TestKind::Animation) {
                         next = std::make_unique<AnimationTest>(app_, AnimationTest::Options{}, false);
                     } else if (test.kind == TestKind::States) {
@@ -2180,6 +2190,7 @@ private:
 
     moteur::Application& app_;
     double run_seconds_;  // > 0 quits by itself, for smoke tests
+    std::string world_map_;  // the map the "Monde" test opens (--world NAME)
     double elapsed_ = 0.0;
     std::vector<TestEntry> tests_;
     Screen screen_ = Screen::Home;
@@ -2201,6 +2212,9 @@ int main(int argc, char** argv) {
     // Without arguments (or with --menu), the program opens on its menu. With scene options, it runs
     // that scene directly, without any interface: that is what scripts and measurements use.
     bool menu = argc == 1;
+    std::string world_map = "salle_portes";
+    bool world_standalone = false;  // --world-auto or --world-crowd N: the "Monde" test without the menu
+    WorldTest::Options world_options;
     int menu_test = -1;  // --menu-test N: the menu, with its test N (from 0) already running
     TestScene::Options options;
     bool vsync = true;
@@ -2392,6 +2406,23 @@ int main(int argc, char** argv) {
         } else if (arg == "--animation") {  // the "Animation" test (milestone 5): --menu-test 10
             menu = true;
             menu_test = 10;
+        } else if (arg == "--world") {  // the "Monde" test (milestone 6): --menu-test 11 [map]
+            menu = true;
+            menu_test = 11;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                world_map = argv[++i];
+            }
+        } else if (arg == "--world-auto") {  // the "Monde" test alone: the hero walks to "but", monsters
+            world_standalone = true;
+            world_options.autopilot = true;
+        } else if (arg == "--world-crowd" && has_one) {  // the load test of milestone 6: N monsters
+            world_standalone = true;
+            world_options.crowd = std::max(0, std::atoi(argv[++i]));
+        } else if (arg == "--world-fires" && has_one) {  // with --world-crowd: the particles' load test
+            world_standalone = true;
+            world_options.fires = std::max(0, std::atoi(argv[++i]));
+        } else if (arg == "--world-map" && has_one) {
+            world_map = argv[++i];
         }
     }
     if (options.demo) {
@@ -2436,7 +2467,7 @@ int main(int argc, char** argv) {
         app.renderer().set_block_compression(block_compression);
         app.assets().set_prefer_ktx2(prefer_ktx2);
         if (menu) {
-            Sandbox sandbox(app, options.run_seconds, menu_test);
+            Sandbox sandbox(app, options.run_seconds, menu_test, world_map);
             app.run(sandbox);
             return 0;
         }
@@ -2468,6 +2499,16 @@ int main(int argc, char** argv) {
             StatesDemo game(app, states_options, true);
             app.run(game);
             game.report();
+            return 0;
+        }
+        if (world_standalone) {
+            world_options.map = world_map;
+            world_options.run_seconds = options.run_seconds;
+            world_options.report = report;
+            world_options.capture_path = options.capture_path;
+            world_options.freeze_after_ticks = options.freeze_after_ticks;
+            WorldTest world(app, world_options, true);
+            app.run(world);
             return 0;
         }
         if (crowd_options.crowd > 0) {

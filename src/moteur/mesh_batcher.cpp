@@ -37,7 +37,9 @@ MeshInstance MeshBatcher::make_instance(const MeshDraw& draw) {
     }
     instance.base_color = material.base_color;
     instance.factors = glm::vec4(material.metallic, material.roughness, material.normal_scale, material.occlusion_strength);
-    instance.emissive = glm::vec4(material.emissive, draw.palette >= 0 ? static_cast<float>(draw.palette) : 0.0f);
+    // w: the palette of a skinned instance, or -1 for a mesh that fades before the hero (cutout).
+    instance.emissive = glm::vec4(material.emissive, draw.palette >= 0 ? static_cast<float>(draw.palette)
+                                                     : (material.fades ? -1.0f : 0.0f));
     return instance;
 }
 

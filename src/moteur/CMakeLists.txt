@@ -42,6 +42,7 @@ add_library(moteur STATIC
     billboard_renderer.cpp
     camera.cpp
     camera3d.cpp
+    collision.cpp
     color.cpp
     debug_lines.cpp
     debug_tools.cpp
@@ -53,18 +54,24 @@ add_library(moteur STATIC
     frame_stats.cpp
     image.cpp
     iso.cpp
+    map_data.cpp
     ktx_texture.cpp
     mesh.cpp
     mesh_batcher.cpp
     mesh_renderer.cpp
     model.cpp
+    movement.cpp
+    nav_grid.cpp
+    particles.cpp
     paths.cpp
+    pathfinding.cpp
     process_memory.cpp
     renderer.cpp
     screenshot.cpp
     shadow.cpp
     skeleton.cpp
     sound.cpp
+    spatial_hash.cpp
     sprite_batcher.cpp
     sprite_region.cpp
     sprite_renderer.cpp
@@ -74,6 +81,7 @@ add_library(moteur STATIC
     tone_mapper.cpp
     tilemap.cpp
     utf8.cpp
+    visibility.cpp
     version.cpp
     world.cpp
 )

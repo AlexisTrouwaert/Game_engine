@@ -81,10 +81,13 @@ Documentation détaillée : [Jalon 5 - Animation 3D](JALON_5_ANIMATION_3D.md)
 - [x] Outils de debug de l'animation *(squelette et axes, pose de liaison, vue des poids, fenêtre DEBUG > Animation, scène « Animation », pose comparée à Blender)*
 
 ### 6. Monde et déplacement
-- [ ] Collisions sur le plan du sol (`TileMap`, formes simples)
-- [ ] Pathfinding (A* sur la grille, ou navmesh : `recastnavigation` est dans vcpkg)
-- [ ] Effets de particules (billboards du jalon 3)
-- [ ] Brouillard de guerre / visibilité (propriété `opaque` de la `TileMap`)
+Documentation détaillée : [Jalon 6 - Monde et déplacement](JALON_6_MONDE_ET_DEPLACEMENT.md)
+
+- [x] Collisions sur le plan du sol (`TileMap`, formes simples) *(cercles contre la grille et entre eux, glissement, poids de poussée ; cartes en JSON dessinées en caractères)*
+- [x] Pathfinding (A* sur la grille, ou navmesh : `recastnavigation` est dans vcpkg) *(A\* maison sur la grille, dégagement par taille, lissage, flow fields pour les foules ; 500 monstres pour 0,43 ms)*
+- [x] Requêtes spatiales et lignes de vue (cercle, cône, rayon sur la grille) *(grille de hachage, résultats triés, lignes de vue symétriques)*
+- [x] Effets de particules (billboards du jalon 3) *(CPU, en JSON, budget de 20 000 ; particules douces repoussées)*
+- [x] Brouillard de guerre / visibilité (propriété `opaque` de la `TileMap`) *(shadowcasting symétrique, cases explorées, murs tramés devant le héros)*
 
 ### 7. Outils et données
 - [ ] Chargement de données JSON (hot reload)

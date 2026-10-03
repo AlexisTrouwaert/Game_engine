@@ -51,6 +51,26 @@ struct PointLight {
 
 // How shadows are drawn: the sun's, and the point lights' (PointLight::casts_shadows). Changing
 // `resolution`, `point_budget` or `point_resolution` recreates the texture concerned.
+// The fog of war (milestone 6, part 8), applied to the meshes and the billboards: what was never
+// seen is dark, what was seen but is out of sight is dimmed and greyed. The game gives a value per
+// cell (MeshRenderer::set_fog_cells); the GPU filters between cells, for soft edges.
+struct FogOfWar {
+    bool enabled = false;
+    glm::vec2 origin{0.0f};     // world (x, z) of the corner of cell (0, 0)
+    float cell_size = 1.0f;     // metres
+    float unexplored = 0.0f;    // brightness of what was never seen
+    float explored = 0.3f;      // brightness of what was seen, out of sight
+    float saturation = 0.35f;   // color kept out of sight (0 grey, 1 full)
+};
+
+// Walls that would hide the hero (milestone 6, part 8): the meshes whose Material::fades is set
+// lose a dithered disc of pixels around the line from the camera to `focus`, in front of it only.
+struct Cutout {
+    bool enabled = false;
+    glm::vec3 focus{0.0f};  // world, the middle of the hero's body
+    float radius = 1.6f;    // metres around the line of sight
+};
+
 struct ShadowOptions {
     bool enabled = true;         // the sun's shadows
     int resolution = 2048;       // texels per side of the sun's shadow map
@@ -125,6 +145,20 @@ public:
     const glm::mat4& view_projection() const { return view_projection_; }
 
     void set_shadows(const ShadowOptions& options) { shadow_options_ = options; }
+
+    // Kept from frame to frame. Values given by set_fog_cells().
+    void set_fog(const FogOfWar& fog) { fog_ = fog; }
+    const FogOfWar& fog() const { return fog_; }
+    // One byte per cell, row after row (row 0 at z = origin.y): 0 never seen, 128 explored, 255 in
+    // sight. Sent with the next frame. A new size creates the texture (and waits for the GPU):
+    // between frames only.
+    void set_fog_cells(int width, int height, const std::vector<std::uint8_t>& cells);
+    void set_cutout(const Cutout& cutout) { cutout_ = cutout; }
+    const Cutout& cutout() const { return cutout_; }
+    // For the billboards: the fog texture (a stand-in when there is none) and its two uniform rows.
+    SDL_GPUTexture* fog_texture() const { return fog_texture_ ? fog_texture_.get() : fog_stand_in_.get(); }
+    SDL_GPUSampler* fog_sampler() const { return fog_sampler_.get(); }
+    void fog_uniforms(glm::vec4& fog, glm::vec4& rect) const;
     const ShadowOptions& shadows() const { return shadow_options_; }
     // Where the shadow map looked in the last frame (for debugging displays).
     const ShadowFrame& shadow_frame() const { return shadow_frame_; }
@@ -272,6 +306,16 @@ private:
     Texture white_;
     Texture flat_normal_;
     GpuTexture black_environment_;
+    // The fog of war: its texture (R8, a texel per cell), a 1 x 1 stand-in, and the bytes to send.
+    FogOfWar fog_;
+    Cutout cutout_;
+    GpuTexture fog_texture_;
+    GpuTexture fog_stand_in_;
+    GpuSampler fog_sampler_;
+    GpuTransferBuffer fog_transfer_;
+    glm::ivec2 fog_size_{0};
+    std::vector<std::uint8_t> fog_cells_;
+    bool fog_dirty_ = false;
 
     std::vector<MeshDraw> draws_;
     MeshBatcher main_batcher_;

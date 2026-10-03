@@ -449,6 +449,18 @@ Détails dans [JALON_5_ANIMATION_3D.md](JALON_5_ANIMATION_3D.md).
 - [ ] Scène « Animation » : les pas du chevalier des mélanges tombent sur ses pieds, en marchant et en courant, et « Frapper » sonne au moment du coup ; la liste des événements montre un pas tous les 32 ticks en marchant (comme sous Windows).
 - [ ] Captures de la tranche et des démos 2D et 3D : mêmes images qu'avant la partie.
 
+## Jalon 6 : Monde et déplacement
+
+Détails dans [JALON_6_MONDE_ET_DEPLACEMENT.md](JALON_6_MONDE_ET_DEPLACEMENT.md).
+
+- [ ] Les MSL exportés sous Windows sont à jour (`mesh.frag.msl` : brouillard et tramage, sampler 8 ; `billboard.vert.msl`, `billboard.frag.msl` : brouillard).
+- [ ] Tests unitaires : **351** cas en Debug et en Release (`test_map_data`, `test_world_grid`, `test_particles`). Les chemins, coûts, champs de vision et collisions sont calculés en entiers ou en opérations exactement arrondies : mêmes résultats que sous Windows. Noter les temps affichés par « Worst cases, measured » et « 20 000 particles, measured » (Windows : A\* 3,9 ms, flow field 5,8 ms, dégagement 3,7 ms, vision 0,015 ms, particules 0,17 ms).
+- [ ] DEBUG > Tests moteur > **Monde** (`--world`) sur chaque carte : le héros va au clic par les portes, glisse au clavier, les monstres (M, B) poursuivent et entourent le héros, le brouillard se lève, les murs se trament devant le héros, les feux et les effets (E) s'affichent ; aucune erreur Metal en Debug, avec `--aa none`, `fxaa`, `msaa4`.
+- [ ] Rechargement à chaud : modifier une carte de `assets/maps/` ou un effet de `assets/effects/` pendant que la scène tourne : « map ... reloaded », « particle effect ... reloaded », la scène suit.
+- [ ] Captures : démo 2D `bd91e8b2c616`, démo 3D `fdc076d9c3ae` et rejeu `952477744ffb` (inchangées sous Windows) ; tranche `--states --replay-input tests/data/slice_replay.json --freeze-after 340 --run-seconds 9 --pixel-size 1280 720 --capture slice.png` → `f5421305c50a` sous Windows ; deux lancements, même hachage sur le Mac.
+- [ ] Charge : `--world-crowd 500 --world-map arene --run-seconds 10 --report` (Windows : 0,43 ms de logique par tick), `--world-fires 800 --world-map arene --run-seconds 8 --report` (Windows : 3,6 ms de CPU par image pour 19 000 particules, 23 draw calls).
+- [ ] Jouer la tranche : salles noires jusqu'à leur découverte, squelettes qui repèrent le héros, le poursuivent et frappent, étincelles et fumée, flammes des braseros.
+
 ## Après le Mac : les tests qui restent à faire
 
 - [x] **Casque débranché sous Windows** (jalon 4, partie 7) *(fait le 2026-09-25 : pas de plantage)* : débrancher et rebrancher le casque pendant la scène « Audio » ; pas de plantage, le son suit (log `Audio: now playing on ...` ou `sound device started again`).

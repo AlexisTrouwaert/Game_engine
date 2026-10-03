@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "moteur/camera3d.hpp"
+#include "moteur/mesh_renderer.hpp"
 
 namespace moteur {
 
@@ -25,7 +26,8 @@ BillboardRenderer::BillboardRenderer(Renderer& renderer, SDL_GPUTextureFormat co
     vertex_info.uniform_buffers = 1;  // the view-projection matrix
     ShaderInfo fragment_info;
     fragment_info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
-    fragment_info.samplers = 1;
+    fragment_info.samplers = 2;         // the texture, the fog of war
+    fragment_info.uniform_buffers = 1;  // the fog settings
     // Kept: the pipeline is made again when the number of samples changes (MSAA).
     vertex_shader_ = renderer.load_shader("billboard.vert", vertex_info);
     fragment_shader_ = renderer.load_shader("billboard.frag", fragment_info);
@@ -138,6 +140,7 @@ void BillboardRenderer::draw(const Texture& texture, glm::vec3 center, glm::vec2
     billboard.color = options.color;
     billboard.additive = options.additive;
     billboard.facing = options.facing;
+    billboard.rotation = options.rotation;
     batcher_.add(billboard);
 }
 
@@ -192,6 +195,12 @@ void BillboardRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass
     const SDL_GPUBufferBinding indices = {index_buffer_.get(), 0};
     SDL_BindGPUIndexBuffer(pass, &indices, SDL_GPU_INDEXELEMENTSIZE_16BIT);
     SDL_PushGPUVertexUniformData(commands, 0, &view_projection_, sizeof(view_projection_));
+    const MeshRenderer& meshes = renderer_.meshes();
+    glm::vec4 fog[2];
+    meshes.fog_uniforms(fog[0], fog[1]);
+    SDL_PushGPUFragmentUniformData(commands, 0, fog, sizeof(fog));
+    const SDL_GPUTextureSamplerBinding fog_binding = {meshes.fog_texture(), meshes.fog_sampler()};
+    SDL_BindGPUFragmentSamplers(pass, 1, &fog_binding, 1);
     const void* bound_texture = nullptr;
     for (const BillboardRun& run : batcher_.runs()) {
         if (run.texture != bound_texture) {

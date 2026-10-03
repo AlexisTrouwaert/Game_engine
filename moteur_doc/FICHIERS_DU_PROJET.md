@@ -53,6 +53,14 @@ moteur/
       include/moteur/shadow.hpp       en-tête public : ombres du soleil et des lumières ponctuelles (sans GPU)
       include/moteur/model.hpp        en-tête public : modèles glTF (CPU et GPU)
       include/moteur/tilemap.hpp      en-tête public : carte de tuiles et types de tuiles (sans GPU)
+      include/moteur/map_data.hpp     en-tête public : carte lue d'un JSON dessiné en caractères (sans GPU)
+      include/moteur/nav_grid.hpp     en-tête public : grille de jeu (praticable, opaque, version) (sans GPU)
+      include/moteur/collision.hpp    en-tête public : cercles contre la grille et entre eux (sans GPU)
+      include/moteur/spatial_hash.hpp en-tête public : grille de hachage et requêtes spatiales (sans GPU)
+      include/moteur/pathfinding.hpp  en-tête public : dégagement, A*, flow fields (sans GPU)
+      include/moteur/movement.hpp     en-tête public : composant Mover et systèmes de déplacement (sans GPU)
+      include/moteur/visibility.hpp   en-tête public : rayons, lignes de vue, champ de vision, exploration (sans GPU)
+      include/moteur/particles.hpp    en-tête public : effets de particules (description JSON, système)
       include/moteur/animation.hpp    en-tête public : clips et lecteur d'animation (sans GPU)
       include/moteur/animation_data.hpp   en-tête public : squelettes et clips lus d'un glTF (sans GPU)
       include/moteur/animation_clock.hpp  en-tête public : temps d'un clip en ticks (sprites et squelettes)
@@ -167,6 +175,9 @@ moteur/
     test_debug_lines.cpp              tests des lignes de debug
     test_model.cpp                    tests de la lecture glTF
     test_tilemap.cpp                  tests de la carte de tuiles
+    test_map_data.cpp                 tests des cartes en fichier et de la grille de jeu
+    test_world_grid.cpp               tests des collisions, chemins, requêtes, vision et déplacements (et mesures)
+    test_particles.cpp                tests des effets de particules
     test_animation.cpp                tests des animations
     test_asset_cache.cpp              tests du cache d'assets
     test_ktx_texture.cpp              tests du décodage KTX2
@@ -1113,6 +1124,54 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 ### `assets/animations/kaykit.json`
 
 **Rôle** (jalon 5, partie 6) : la description des clips KayKit (chevalier, squelettes : même squelette, mêmes clips) : vitesses au sol de `Walking_A` / `_B` et `Running_A` / `_B` mesurées par `measure_stride`, phase de `Running_A` pour que les pieds se posent avec ceux de la marche, fondus (12 ticks par défaut, 6 pour les attaques), événements (pas là où les pieds se posent, impacts des attaques à une main, `death_ground`), blend space `locomotion` (`Idle`, `Walking_A`, `Running_A`), masque `upper_body` (depuis `spine`, rampe de 2). Un test vérifie que les vitesses et les phases correspondent aux clips.
+
+### `src/moteur/include/moteur/map_data.hpp` et `map_data.cpp`
+
+**Rôle** (jalon 6, partie 2) : **`MapData`**, une carte lue d'un JSON versionné (format en commentaire dans l'en-tête) : types de tuiles par nom, légende (un caractère = une tuile par calque et un point nommé facultatif), lignes de caractères (ligne 0 = z 0), description. Donne le `Tileset`, la `TileMap`, les points nommés (`points`, `point`), `tile_id` / `tile_name`, et `to_ascii()` qui réécrit les lignes à l'identique. Asset : `assets.map(chemin)`, rechargé à chaud (`revision()` augmente).
+
+### `src/moteur/include/moteur/nav_grid.hpp` et `nav_grid.cpp`
+
+**Rôle** (jalon 6, partie 2) : **`NavGrid`**, praticable et opaque par case, calques réunis (une case sans tuile est un trou ; dehors : bloqué et opaque), `refresh` / `set` d'une case et `version()` qui change avec elle ; `cell_at()`, `cell_centre()` ; `to_ascii()`.
+
+### `src/moteur/include/moteur/collision.hpp` et `collision.cpp`
+
+**Rôle** (jalon 6, partie 3) : composant **`Collider`** (rayon, couche, masque, poids de poussée, arrêté par les murs) ; `circle_fits`, `push_out_of_walls`, `move_circle` (glissement), `nearest_fit`, `segment_clear` (lancer de cercle) ; le système **`separate_colliders`** (remplit la `SpatialHash`, séparation douce par poids dans un ordre fixe, sortie des murs) ; `plane_position`.
+
+### `src/moteur/include/moteur/spatial_hash.hpp` et `spatial_hash.cpp`
+
+**Rôle** (jalon 6, parties 3 et 6) : **`SpatialHash`**, les cercles du plan rangés en seaux carrés ; `candidates` pour les collisions, `query_circle`, `query_cone`, `query_rect` pour le jeu, triées par distance puis identifiant.
+
+### `src/moteur/include/moteur/pathfinding.hpp` et `pathfinding.cpp`
+
+**Rôle** (jalon 6, partie 4) : **`ClearanceMap`** (dégagement par case, `update_around`), **`find_path`** (A\* à huit directions, coûts entiers, sans coupe de coin, limite de nœuds, destination la plus proche, lissage ; `PathResult`, `PathStatus`), **`FlowField`** (Dijkstra depuis une cible, `next`, `direction`).
+
+### `src/moteur/include/moteur/movement.hpp` et `movement.cpp`
+
+**Rôle** (jalon 6, partie 5) : composant **`Mover`** (vitesse, mode, chemin, état, orientation en vecteur, vitesse réelle) et les systèmes du tick `plan_paths` (budget par tick), `move_movers` (chemin, direct avec glissement, flow fields), `finish_movers` (vitesse réelle, bloqué) ; `facing_rotation`. L'ordre des systèmes d'un tick est écrit en tête de l'en-tête.
+
+### `src/moteur/include/moteur/visibility.hpp` et `visibility.cpp`
+
+**Rôle** (jalon 6, parties 6 et 8) : `raycast` (parcours de grille, opaque ou non praticable, rien par un coin), `line_of_sight` (symétrique), **`FieldOfView`** (shadowcasting symétrique, pentes entières), **`ExploredMap`** (cases vues).
+
+### `src/moteur/include/moteur/particles.hpp` et `particles.cpp`
+
+**Rôle** (jalon 6, partie 7) : **`ParticleEffect`** (description JSON des émetteurs, format en commentaire dans l'en-tête ; asset `assets.particle_effect(chemin)`, rechargé à chaud) et **`ParticleSystem`** (un par scène : `play`, `move`, `stop`, `kill`, `update` au temps réel, `draw` en billboards, `add_lights`, budget global, `stats`).
+
+### `assets/maps/` et `tools/maps/make_slice_map.py`
+
+**Rôle** (jalon 6) : les cartes de test (`zigzag`, `cul_de_sac`, `salle_portes`, `labyrinthe`, `piliers`, `passage_etroit`, `arene`, `ile`) et la carte de la tranche `tranche.json`, réécrite par `python tools/maps/make_slice_map.py` (mêmes salles que la démo 3D construite en code). Toutes sont relues par les tests.
+
+### `assets/effects/`, `assets/particles/` et `tools/textures/make_particle_textures.py`
+
+**Rôle** (jalon 6, partie 7) : les effets de particules (`fire`, `brazier_fire`, `sparks`, `blood`, `dust`, `death_smoke`, `magic_trail`, `magic_circle`) et leurs textures, générées par `python tools/textures/make_particle_textures.py` (numpy et Pillow ; graines fixes, rien à créditer).
+
+### `assets/input/world.json`
+
+**Rôle** (jalon 6) : les touches de la scène « Monde » (clic, ZQSD, flèches, molette, clic droit, M, B, E, Espace, P ; manette).
+
+### `apps/bac_a_sable/world_test.hpp` et `world_test.cpp`
+
+**Rôle** (jalon 6) : la scène de test « Monde » (DEBUG > Tests moteur ; `--world [carte]`, `--menu-test 11`) : une carte de `assets/maps/` en 3D, un héros (chemins, glissement), des monstres (vue, flow fields, collisions, coups), le brouillard, les murs tramés, les effets, les overlays (grille, dégagement, cercles, chemins, flow field, champ de vision, cône, rayon), les temps des systèmes ; un mur posé ou retiré au clic droit, la carte rechargée à chaud. Sans menu : `--world-auto`, `--world-crowd N`, `--world-fires N`, `--world-map nom` (avec `--report`, `--capture`, `--freeze-after`).
 
 ### `apps/bac_a_sable/animation_test.hpp` et `animation_test.cpp`
 

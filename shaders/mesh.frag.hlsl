@@ -23,6 +23,8 @@ SamplerState emissive_sampler : register(s4, space2);
 SamplerState environment_sampler : register(s5, space2);
 SamplerComparisonState shadow_sampler : register(s6, space2);         // compares, filters 2 x 2
 SamplerComparisonState point_shadow_sampler : register(s7, space2);   // the same
+Texture2D<float> fog_texture : register(t8, space2);                  // fog of war: a texel per cell
+SamplerState fog_sampler : register(s8, space2);
 
 #define MAX_POINT_LIGHTS 32
 #define MAX_SHADOWED_POINT_LIGHTS 8
@@ -41,6 +43,9 @@ cbuffer Frame : register(b0, space3) {
     float4 point_shadow_tiles;   // x, y: size of a tile in atlas coordinates; z: 1 / tile size in texels; w: normal offset (texels)
     float4 point_shadow_params;  // x, y: size of a texel in atlas coordinates; z: texel size per metre of distance; w: depth bias (m)
     float4 debug_view;  // x: 0 lit, 1 wireframe (lit), 2 normals, 3 base color, 4 distance, 5 weights; y: distance shown black (m)
+    float4 fog;         // fog of war: x on, y brightness never seen, z brightness explored, w saturation out of sight
+    float4 fog_rect;    // xy: world (x, z) of the texture's corner; zw: 1 / its size in metres
+    float4 cutout;      // xyz: the point kept visible (the hero); w: radius (m) of the dithered hole, 0 off
 };
 
 static const float PI = 3.14159265;
@@ -55,6 +60,8 @@ struct Input {
     nointerpolation float4 factors : TEXCOORD5;     // metallic, roughness, normal scale, occlusion strength
     nointerpolation float4 emissive : TEXCOORD6;    // rgb
     float joint_weight : TEXCOORD7;                 // weights view (see mesh.vert.hlsl)
+    nointerpolation float3 origin : TEXCOORD8;      // the instance's place (see mesh.vert.hlsl)
+    float4 position : SV_Position;                  // pixel of the target (the cutout's dithering)
     bool front : SV_IsFrontFace;
 };
 
@@ -169,7 +176,49 @@ float point_visibility(int row, float3 world_position, float3 geometric_normal, 
     return lit / 9.0;
 }
 
+// Fog of war (milestone 6, part 8): what was never seen is dark, what was seen but is out of sight
+// is dimmed and greyed. The texture holds 0 (never seen), 0.5 (explored) or 1 (in sight) per cell,
+// filtered: soft edges.
+float3 apply_fog(float3 color, float3 world_position) {
+    if (fog.x < 0.5) {
+        return color;
+    }
+    // Clamped at the edges (the sampler): outside the map there is nothing to draw anyway.
+    const float2 uv = (world_position.xz - fog_rect.xy) * fog_rect.zw;
+    const float seen = fog_texture.SampleLevel(fog_sampler, uv, 0.0);
+    const float brightness = seen < 0.5 ? lerp(fog.y, fog.z, seen * 2.0) : lerp(fog.z, 1.0, seen * 2.0 - 1.0);
+    const float saturation = seen < 0.5 ? fog.w : lerp(fog.w, 1.0, seen * 2.0 - 1.0);
+    const float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+    return lerp(luma.xxx, color, saturation) * brightness;
+}
+
+// The walls between the camera and the hero (instances marked "fades", emissive.w = -1): a hole
+// of dithered pixels around the line of sight to the hero, in the objects whose place is in front
+// of the hero (decided per object, not per pixel: a wall the hero leans on is cut on all its faces,
+// never on its top only). No blending and no sorting: whole pixels are dropped, in a 4 x 4 pattern.
+void cut_out(Input input) {
+    if (cutout.w <= 0.0 || input.emissive.w > -0.5) {
+        return;
+    }
+    const float3 to_focus = cutout.xyz - eye.xyz;
+    const float focus_distance = length(to_focus);
+    const float3 axis = to_focus / focus_distance;
+    if (dot(input.origin - eye.xyz, axis) > focus_distance - 0.3) {
+        return;  // the object is behind the hero, or level with it
+    }
+    const float3 p = input.world_position - eye.xyz;
+    const float along = dot(p, axis);
+    const float across = length(p - axis * along);
+    const float fade = saturate((cutout.w - across) / (cutout.w * 0.4));
+    static const float bayer[16] = {0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0};
+    const uint2 pixel = (uint2)input.position.xy % 4;
+    if (fade * 0.85 > (bayer[pixel.y * 4 + pixel.x] + 0.5) / 16.0) {
+        discard;
+    }
+}
+
 float4 main(Input input) : SV_Target0 {
+    cut_out(input);
     const float4 base_color = input.base_color * base_color_texture.Sample(base_color_sampler, input.uv);
     const float4 metal_rough = metallic_roughness_texture.Sample(metallic_roughness_sampler, input.uv);
     const float metallic = saturate(input.factors.x * metal_rough.b);
@@ -251,5 +300,7 @@ float4 main(Input input) : SV_Target0 {
     color += ambient * occlusion * environment.x;
 
     color += input.emissive.rgb * emissive_texture.Sample(emissive_sampler, input.uv).rgb;
-    return float4(color, 1.0);
+    // Read a little inside the surface: a wall's face lies exactly on the edge between its cell and
+    // the next one (outside the map at the border), which would flicker between the two.
+    return float4(apply_fog(color, input.world_position - geometric_normal * 0.3), 1.0);
 }

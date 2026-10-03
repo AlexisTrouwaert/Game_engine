@@ -16,6 +16,7 @@ struct Input {
 struct Output {
     float2 uv : TEXCOORD0;
     float4 color : TEXCOORD1;
+    float3 world_position : TEXCOORD2;  // for the fog of war
     float4 position : SV_Position;
 };
 
@@ -24,5 +25,6 @@ Output main(Input input) {
     output.position = mul(view_projection, float4(input.position, 1.0));
     output.uv = input.uv;
     output.color = input.color;
+    output.world_position = input.position;
     return output;
 }

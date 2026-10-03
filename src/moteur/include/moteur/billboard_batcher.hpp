@@ -20,6 +20,7 @@ static_assert(sizeof(BillboardVertex) == 36, "BillboardVertex is uploaded as is:
 enum class BillboardFacing {
     Camera,   // faces the camera entirely (sparks, glows, smoke)
     Upright,  // stays vertical, turns only around the vertical axis (a character or a tree on a card)
+    Flat,     // lies on the ground (a puddle, a magic circle): the texture's top towards -z
 };
 
 // What the game asks for: a textured rectangle in the world, turned towards the camera.
@@ -31,6 +32,7 @@ struct BillboardDesc {
     glm::vec4 color{1.0f};          // linear, rgb may exceed 1; a: opacity
     bool additive = false;          // adds its light to what is behind instead of covering it (fire, sparks)
     BillboardFacing facing = BillboardFacing::Camera;
+    float rotation = 0.0f;          // radians, in its own plane (smoke that turns)
 };
 
 // Where the camera is and which way it looks, for turning billboards (see Camera3D).
@@ -71,6 +73,7 @@ public:
 private:
     std::vector<BillboardDesc> billboards_;
     std::vector<std::uint32_t> order_;
+    std::vector<std::uint32_t> texture_rank_;
     std::vector<float> depth_;
     std::vector<BillboardVertex> vertices_;
     std::vector<BillboardRun> runs_;

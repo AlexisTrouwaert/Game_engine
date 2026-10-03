@@ -1,4 +1,4 @@
-add_executable(bac_a_sable main.cpp demo3d.cpp blender_compare.cpp states_demo.cpp audio_test.cpp animation_test.cpp anim_compare.cpp)
+add_executable(bac_a_sable main.cpp demo3d.cpp blender_compare.cpp states_demo.cpp audio_test.cpp animation_test.cpp anim_compare.cpp world_test.cpp)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 

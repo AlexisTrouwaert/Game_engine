@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "emitters": [
+    {
+      "texture": "particles/ring.png",
+      "burst": 1, "lifetime": [1.2, 1.2], "facing": "flat", "spin": [1.5, 1.5],
+      "size": [[0, 0.5], [0.3, 2.4], [1, 2.6]],
+      "color": [[0, [0.8, 1.6, 3.0, 1.0]], [0.6, [0.5, 1.0, 2.2, 1.0]], [1, [0, 0, 0, 0]]],
+      "additive": true,
+      "light": { "color": [0.4, 0.6, 1.0], "intensity": 5, "range": 4 }
+    }
+  ]
+}

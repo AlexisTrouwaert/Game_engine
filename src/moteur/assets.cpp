@@ -167,7 +167,12 @@ Assets::Assets(Renderer& renderer, std::string root)
                  [](Skeleton& current, Skeleton&& fresh) { current.replace_in_place(std::move(fresh)); }),
       clips_("clips", {}, [](const ClipLibrary& clips) { return clips.bytes(); },
              [](ClipLibrary& current, ClipLibrary&& fresh) { current.replace_in_place(std::move(fresh)); }),
-      animation_sets_("animation set") {}
+      animation_sets_("animation set"),
+      maps_("map", {}, {}, [](MapData& current, MapData&& fresh) {
+          fresh.set_revision(current.revision() + 1);
+          current = std::move(fresh);
+      }),
+      effects_("particle effect") {}
 
 // The watcher goes first: its thread must not call into a half-destroyed manager.
 Assets::~Assets() {
@@ -327,6 +332,26 @@ Asset<AnimationSet> Assets::animation_set(std::string_view path) {
     });
 }
 
+Asset<MapData> Assets::map(std::string_view path) {
+    const std::string key = normalize_asset_path(path);
+    return maps_.get(key, [this, key](std::vector<std::string>& files) {
+        files.push_back(key);
+        check_asset_case(root_, key);
+        const FileData file = read_file(root_ + key);
+        return MapData::parse({static_cast<const char*>(file.data()), file.size()}, key);
+    });
+}
+
+Asset<ParticleEffect> Assets::particle_effect(std::string_view path) {
+    const std::string key = normalize_asset_path(path);
+    return effects_.get(key, [this, key](std::vector<std::string>& files) {
+        files.push_back(key);
+        check_asset_case(root_, key);
+        const FileData file = read_file(root_ + key);
+        return ParticleEffect::parse({static_cast<const char*>(file.data()), file.size()}, key);
+    });
+}
+
 std::size_t Assets::collect_garbage() {
     // Models first: they hold textures, which become free once the models are gone.
     std::size_t freed = models_.collect_garbage();
@@ -340,6 +365,8 @@ std::size_t Assets::collect_garbage() {
     freed += skeletons_.collect_garbage();
     freed += clips_.collect_garbage();
     freed += animation_sets_.collect_garbage();
+    freed += maps_.collect_garbage();
+    freed += effects_.collect_garbage();
     if (freed > 0) {
         SDL_Log("Assets: %zu freed", freed);
     }
@@ -416,6 +443,12 @@ void Assets::reload_file(const std::string& key) {
     for (const std::string& asset : animation_sets_.keys_using(key)) {
         animation_sets_.reload(asset);
     }
+    for (const std::string& asset : maps_.keys_using(key)) {
+        maps_.reload(asset);
+    }
+    for (const std::string& asset : effects_.keys_using(key)) {
+        effects_.reload(asset);
+    }
 }
 
 namespace {
@@ -438,13 +471,13 @@ AssetTypeStats stats_of(const AssetCache<T>& cache) {
 std::vector<AssetTypeStats> Assets::stats() const {
     return {stats_of(textures_), stats_of(models_), stats_of(environments_),
             stats_of(fonts_),    stats_of(atlases_), stats_of(animations_), stats_of(sounds_), stats_of(musics_),
-            stats_of(skeletons_), stats_of(clips_), stats_of(animation_sets_)};
+            stats_of(skeletons_), stats_of(clips_), stats_of(animation_sets_), stats_of(maps_), stats_of(effects_)};
 }
 
 std::vector<std::vector<AssetInfo>> Assets::infos() const {
     return {textures_.infos(), models_.infos(), environments_.infos(),
             fonts_.infos(),    atlases_.infos(), animations_.infos(), sounds_.infos(), musics_.infos(),
-            skeletons_.infos(), clips_.infos(), animation_sets_.infos()};
+            skeletons_.infos(), clips_.infos(), animation_sets_.infos(), maps_.infos(), effects_.infos()};
 }
 
 bool Assets::reload(std::size_t type, const std::string& key) {
@@ -460,6 +493,8 @@ bool Assets::reload(std::size_t type, const std::string& key) {
         case 8: return skeletons_.reload(key);
         case 9: return clips_.reload(key);
         case 10: return animation_sets_.reload(key);
+        case 11: return maps_.reload(key);
+        case 12: return effects_.reload(key);
         default: return false;
     }
 }

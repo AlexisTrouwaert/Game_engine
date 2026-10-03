@@ -3,20 +3,29 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "moteur/camera3d.hpp"
+#include "moteur/collision.hpp"
 #include "moteur/environment.hpp"
 #include "moteur/font.hpp"
 #include "moteur/input.hpp"
+#include "moteur/map_data.hpp"
 #include "moteur/material.hpp"
 #include "moteur/mesh.hpp"
 #include "moteur/model.hpp"
+#include "moteur/movement.hpp"
+#include "moteur/nav_grid.hpp"
+#include "moteur/particles.hpp"
+#include "moteur/pathfinding.hpp"
 #include "moteur/renderer.hpp"
+#include "moteur/spatial_hash.hpp"
 #include "moteur/tilemap.hpp"
+#include "moteur/visibility.hpp"
 #include "moteur/world.hpp"
 
 #include "sandbox_scene.hpp"
@@ -57,6 +66,10 @@ public:
         // demo of milestone 3 (a creature to choose and send), whose captures do not change.
         // Milestone 5, part 11: the hero is the animated KayKit knight, sword in hand, and the
         // creatures are animated KayKit skeletons (when tools/models/fetch_test_characters.py ran).
+        // Milestone 6, part 11: the slice's map is assets/maps/tranche.json (the same rooms), the
+        // hero walks by paths and slides on walls, the creatures collide, see the hero, chase and
+        // strike it; braziers burn, blows spark and bleed, the dead vanish in smoke; the fog of war
+        // hides what the hero has not seen, and walls before the hero fade.
         bool hero = false;
     };
 
@@ -162,6 +175,18 @@ private:
     // A creature's position on the map, in cells (x along X, y along Z), at the current tick.
     glm::vec2 cell_position(entt::entity creature) const;
     void draw_overlay(moteur::Renderer& renderer, const moteur::Camera3D& camera, float blend);
+    // Milestone 6 (the slice only): the grid of the file map, the hunt of the creatures, the moves
+    // (paths, flow field, collisions), the field of view and the fog, the effects.
+    void hunt();
+    // The hero's moves of this tick: a click walks by a path (held: follows the pointer), a click on
+    // a creature strikes it or walks up to it, keys and stick walk straight and slide on walls.
+    void steer_hero(const std::optional<glm::vec3>& ground);
+    // A creature's blow lands (its attack's "impact" event, or at once without animation).
+    void creature_blow(entt::entity creature);
+    void move_characters(float dt);
+    void update_sight();
+    void play_effect(const char* path, glm::vec3 at, float scale = 1.0f);
+    bool is_wall(int i, int j) const;
 
     // The actions of the scene.
     struct Actions {
@@ -234,6 +259,25 @@ private:
     std::vector<moteur::Asset<moteur::Sound>> impacts_;
     moteur::Asset<moteur::Music> ambience_;
     moteur::SoundId ambience_voice_ = moteur::kNoSound;
+
+    // Milestone 6 (the slice).
+    moteur::Asset<moteur::MapData> slice_map_;
+    moteur::NavGrid grid_;
+    moteur::ClearanceMap clearance_;
+    moteur::SpatialHash hash_;
+    moteur::FlowField field_;  // towards the hero, for the creatures that chase it
+    glm::ivec2 field_cell_{-1};
+    moteur::FieldOfView view_;
+    moteur::ExploredMap explored_;
+    glm::ivec2 view_cell_{-1};
+    std::vector<std::uint8_t> fog_cells_;
+    moteur::ParticleSystem particles_;
+    std::map<std::string, moteur::Asset<moteur::ParticleEffect>> effects_;
+    std::uint64_t last_frame_ns_ = 0;
+    bool fog_on_ = true;
+    bool pressed_on_ground_ = false;
+    int follow_repath_ = 0;
+    int blows_taken_ = 0;
 
     moteur::Camera3D camera_;
     glm::vec2 mouse_{-1.0f};

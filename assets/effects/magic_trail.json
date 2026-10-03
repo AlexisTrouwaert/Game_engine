@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "emitters": [
+    {
+      "texture": "particles/glow.png",
+      "rate": 60, "loop": true, "duration": 1,
+      "lifetime": [0.25, 0.45], "shape": "sphere", "radius": 0.05,
+      "speed": [0.0, 0.3], "drag": 2.0,
+      "size": [[0, 0.14], [1, 0.0]],
+      "color": [[0, [0.6, 1.4, 3.0, 1.0]], [1, [0.2, 0.3, 1.0, 0]]],
+      "additive": true
+    }
+  ]
+}

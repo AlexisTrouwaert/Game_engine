@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "profile": "defaut",
+  "profiles": {
+    "defaut": {
+      "label": "Scène Monde",
+      "buttons": {
+        "move_to": ["mouse:left"],
+        "zoom_in": ["wheel:up", "pad:dpup"],
+        "zoom_out": ["wheel:down", "pad:dpdown"],
+        "toggle_wall": ["mouse:right", "pad:x"],
+        "spawn": ["key:M", "mouse:middle", "pad:y"],
+        "spawn_big": ["key:B"],
+        "effect": ["key:E", "pad:b"],
+        "follow": ["key:Space", "pad:rightstick"],
+        "projection": ["key:P"]
+      },
+      "axes": {
+        "move": {"up": ["key:W"], "down": ["key:S"], "left": ["key:A"], "right": ["key:D"], "stick": "left"},
+        "camera": {"up": ["key:Up"], "down": ["key:Down"], "left": ["key:Left"], "right": ["key:Right"], "stick": "right"}
+      }
+    }
+  }
+}

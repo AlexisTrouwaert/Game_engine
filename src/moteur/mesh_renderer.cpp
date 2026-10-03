@@ -33,6 +33,9 @@ struct FrameUniforms {
     glm::vec4 point_shadow_tiles;   // x, y: tile size in atlas coordinates; z: 1 / tile texels; w: normal offset (texels)
     glm::vec4 point_shadow_params;  // x, y: texel size in atlas coordinates; z: texel size per metre; w: depth bias (m)
     glm::vec4 debug_view;           // x: MeshView; y: MeshRenderer::kDistanceViewRange
+    glm::vec4 fog;                  // x on, y never seen, z explored, w saturation
+    glm::vec4 fog_rect;             // xy: corner (x, z); zw: 1 / size in metres
+    glm::vec4 cutout;               // xyz: focus; w: radius, 0 off
 };
 
 constexpr std::size_t kInitialInstances = 1024;
@@ -66,7 +69,7 @@ void hash_bytes(std::uint64_t& hash, const void* data, std::size_t size) {
     }
 }
 
-constexpr int kMaterialTextures = 5;  // then the environment in slot 5, the shadow map in slot 6
+constexpr int kMaterialTextures = 5;  // then the environment in slot 5, the shadow maps in 6 and 7, the fog in 8
 
 // The most precise depth format that can be both drawn into and sampled: SDL guarantees D16 for
 // sampling, not D32.
@@ -148,7 +151,7 @@ MeshRenderer::MeshRenderer(Renderer& renderer, SDL_GPUTextureFormat color_format
     ShaderInfo fragment_info;
     fragment_info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
     fragment_info.uniform_buffers = 1;               // frame
-    fragment_info.samplers = kMaterialTextures + 3;  // + the environment, the sun's and the point lights' shadows
+    fragment_info.samplers = kMaterialTextures + 4;  // + the environment, the shadows (sun, points), the fog
 
     // Kept: the scene pipelines are made again when the number of samples changes (MSAA).
     vertex_shader_ = renderer.load_shader("mesh.vert", vertex_info);
@@ -331,6 +334,31 @@ MeshRenderer::MeshRenderer(Renderer& renderer, SDL_GPUTextureFormat color_format
     const std::vector<std::vector<std::uint8_t>> black(1, std::vector<std::uint8_t>(8, 0));  // one RGBA16F texel
     black_environment_ = renderer.create_texture_levels(SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, 1, 1, black,
                                                         "environment.black");
+    fog_stand_in_ = renderer.create_texture_levels(SDL_GPU_TEXTUREFORMAT_R8_UNORM, 1, 1, {{255}}, "fog.none");
+    fog_sampler_ = renderer.create_sampler(SDL_GPU_FILTER_LINEAR, "fog.sampler");
+}
+
+void MeshRenderer::set_fog_cells(int width, int height, const std::vector<std::uint8_t>& cells) {
+    if (width <= 0 || height <= 0 || cells.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height)) {
+        throw std::invalid_argument("MeshRenderer::set_fog_cells: " + std::to_string(cells.size()) + " bytes for " +
+                                    std::to_string(width) + " x " + std::to_string(height) + " cells");
+    }
+    if (fog_size_ != glm::ivec2(width, height)) {
+        fog_texture_ = renderer_.create_texture_levels(SDL_GPU_TEXTUREFORMAT_R8_UNORM, width, height, {cells}, "fog");
+        fog_transfer_ = renderer_.create_transfer_buffer(cells.size());
+        fog_size_ = {width, height};
+        fog_dirty_ = false;
+        return;
+    }
+    fog_cells_ = cells;
+    fog_dirty_ = true;
+}
+
+void MeshRenderer::fog_uniforms(glm::vec4& fog, glm::vec4& rect) const {
+    const bool on = fog_.enabled && fog_texture_;
+    fog = glm::vec4(on ? 1.0f : 0.0f, fog_.unexplored, fog_.explored, fog_.saturation);
+    const glm::vec2 size = glm::vec2(glm::max(fog_size_, glm::ivec2(1))) * fog_.cell_size;
+    rect = glm::vec4(fog_.origin, 1.0f / size.x, 1.0f / size.y);
 }
 
 void MeshRenderer::create_scene_pipelines(SDL_GPUSampleCount samples) {
@@ -523,6 +551,28 @@ void MeshRenderer::ensure_palette_capacity(std::size_t rows) {
 
 void MeshRenderer::prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats) {
     stats.dropped_lights += dropped_lights_;
+    if (fog_dirty_ && fog_texture_) {
+        void* mapped = SDL_MapGPUTransferBuffer(device_, fog_transfer_.get(), true);
+        if (mapped == nullptr) {
+            throw std::runtime_error(std::string("SDL_MapGPUTransferBuffer (fog) failed: ") + SDL_GetError());
+        }
+        std::memcpy(mapped, fog_cells_.data(), fog_cells_.size());
+        SDL_UnmapGPUTransferBuffer(device_, fog_transfer_.get());
+        SDL_GPUCopyPass* fog_pass = SDL_BeginGPUCopyPass(commands);
+        SDL_GPUTextureTransferInfo source = {};
+        source.transfer_buffer = fog_transfer_.get();
+        source.pixels_per_row = static_cast<Uint32>(fog_size_.x);
+        source.rows_per_layer = static_cast<Uint32>(fog_size_.y);
+        SDL_GPUTextureRegion region = {};
+        region.texture = fog_texture_.get();
+        region.w = static_cast<Uint32>(fog_size_.x);
+        region.h = static_cast<Uint32>(fog_size_.y);
+        region.d = 1;
+        SDL_UploadToGPUTexture(fog_pass, &source, &region, true);
+        SDL_EndGPUCopyPass(fog_pass);
+        stats.bytes_uploaded += fog_cells_.size();
+        fog_dirty_ = false;
+    }
     if (!has_work()) {
         return;
     }
@@ -825,6 +875,8 @@ void MeshRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pas
     frame.shadow = glm::vec4(shadows_drawn_ ? 1.0f : 0.0f, shadow_frame_.texel_size, shadow_options_.normal_offset,
                              shadow_options_.depth_bias);
     frame.debug_view = glm::vec4(static_cast<float>(view_), kDistanceViewRange, 0.0f, 0.0f);
+    fog_uniforms(frame.fog, frame.fog_rect);
+    frame.cutout = cutout_.enabled ? glm::vec4(cutout_.focus, cutout_.radius) : glm::vec4(0.0f);
     SDL_PushGPUFragmentUniformData(commands, 0, &frame, sizeof(frame));
     struct {
         glm::mat4 view_projection;
@@ -839,10 +891,11 @@ void MeshRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pas
     }
     SDL_GPUTexture* environment = environment_ != nullptr ? environment_->specular.get() : black_environment_.get();
     SDL_GPUTexture* point_atlas = point_atlas_ ? point_atlas_.get() : point_atlas_stand_in_.get();
-    const SDL_GPUTextureSamplerBinding environment_bindings[3] = {
+    const SDL_GPUTextureSamplerBinding environment_bindings[4] = {
         {environment, environment_sampler_.get()},
         {shadow_map_.get(), shadow_sampler_.get()},
         {point_atlas, shadow_sampler_.get()},
+        {fog_texture(), fog_sampler_.get()},
     };
 
     const SDL_GPUGraphicsPipeline* bound_pipeline = nullptr;
@@ -861,7 +914,7 @@ void MeshRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pas
         if (pipeline != bound_pipeline) {
             // Bindings are not assumed to survive a pipeline change, on any backend: rebind everything.
             SDL_BindGPUGraphicsPipeline(pass, pipeline);
-            SDL_BindGPUFragmentSamplers(pass, kMaterialTextures, environment_bindings, 3);
+            SDL_BindGPUFragmentSamplers(pass, kMaterialTextures, environment_bindings, 4);
             bound_pipeline = pipeline;
             for (const Texture*& texture : bound_textures) {
                 texture = nullptr;

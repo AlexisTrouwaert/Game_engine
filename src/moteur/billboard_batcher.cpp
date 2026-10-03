@@ -1,6 +1,7 @@
 #include "moteur/billboard_batcher.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 
 namespace moteur {
@@ -23,6 +24,16 @@ void BillboardBatcher::corners(const BillboardDesc& billboard, const BillboardVi
         const glm::vec3 flat(view.right.x, 0.0f, view.right.z);
         right = glm::dot(flat, flat) > 1e-8f ? glm::normalize(flat) : glm::vec3(1.0f, 0.0f, 0.0f);
         up = glm::vec3(0.0f, 1.0f, 0.0f);
+    } else if (billboard.facing == BillboardFacing::Flat) {
+        right = glm::vec3(1.0f, 0.0f, 0.0f);
+        up = glm::vec3(0.0f, 0.0f, -1.0f);
+    }
+    if (billboard.rotation != 0.0f) {
+        const float c = std::cos(billboard.rotation);
+        const float s = std::sin(billboard.rotation);
+        const glm::vec3 turned_right = right * c + up * s;
+        up = up * c - right * s;
+        right = turned_right;
     }
     const glm::vec3 half_right = right * (billboard.size.x * 0.5f);
     const glm::vec3 half_up = up * (billboard.size.y * 0.5f);
@@ -40,15 +51,33 @@ void BillboardBatcher::finish(const BillboardView& view) {
         return;
     }
 
-    // Farthest first; a stable sort keeps the recording order between equal depths, so the result
-    // is the same on every run.
+    // The covering ones first, farthest first; a stable sort keeps the recording order between equal
+    // depths, so the result is the same on every run. Then the additive ones, grouped by texture
+    // (in the order the textures first appear): adding light does not depend on the order, and
+    // thousands of sparks, flames and glows then take a few draw calls instead of one per change.
     depth_.resize(count);
+    texture_rank_.resize(count);
+    std::vector<const void*> textures;
     for (std::size_t i = 0; i < count; ++i) {
         depth_[i] = glm::dot(billboards_[i].center - view.eye, view.forward);
+        const auto found = std::find(textures.begin(), textures.end(), billboards_[i].texture);
+        texture_rank_[i] = static_cast<std::uint32_t>(found - textures.begin());
+        if (found == textures.end()) {
+            textures.push_back(billboards_[i].texture);
+        }
     }
     order_.resize(count);
     std::iota(order_.begin(), order_.end(), 0u);
-    std::stable_sort(order_.begin(), order_.end(), [this](std::uint32_t a, std::uint32_t b) { return depth_[a] > depth_[b]; });
+    std::stable_sort(order_.begin(), order_.end(), [this](std::uint32_t a, std::uint32_t b) {
+        const bool add_a = billboards_[a].additive, add_b = billboards_[b].additive;
+        if (add_a != add_b) {
+            return add_b;  // covering before additive
+        }
+        if (add_a) {
+            return texture_rank_[a] < texture_rank_[b];  // then the recording order (stable sort)
+        }
+        return depth_[a] > depth_[b];
+    });
 
     vertices_.reserve(count * 4);
     for (std::size_t k = 0; k < count; ++k) {

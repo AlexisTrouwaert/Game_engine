@@ -25,6 +25,8 @@ struct Material {
     glm::vec3 emissive{0.0f};           // light the surface gives off by itself (linear, can exceed 1)
     bool double_sided = false;          // draw back faces too (leaves, thin cloth), lit from their side
     bool casts_shadow = true;           // false for light sources (a flame) and effects
+    bool fades = false;                 // a wall or tall decor: dithered away where it would hide the
+                                        // hero (MeshRenderer::set_cutout); not for skinned meshes
 
     const Texture* base_color_texture = nullptr;
     const Texture* metallic_roughness_texture = nullptr;

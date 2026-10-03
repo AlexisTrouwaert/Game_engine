@@ -18,6 +18,7 @@ struct BillboardOptions {
     bool additive = false;    // adds light instead of covering (fire, sparks, glows)
     BillboardFacing facing = BillboardFacing::Camera;
     glm::vec4 uv_rect{0.0f, 0.0f, 1.0f, 1.0f};
+    float rotation = 0.0f;    // radians, in its own plane
 };
 
 // Sprites in the 3D world (milestone 3, part 10): textured rectangles turned towards the camera,

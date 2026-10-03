@@ -13,7 +13,9 @@
 #include "moteur/aabb.hpp"
 #include "moteur/animator.hpp"
 #include "moteur/application.hpp"
+#include "moteur/collision.hpp"
 #include "moteur/debug_lines.hpp"
+#include "moteur/movement.hpp"
 #include "moteur/state_stack.hpp"
 #include "moteur/world.hpp"
 
@@ -218,6 +220,26 @@ void ComponentInspectors::add_engine_components() {
             return true;
         }
         return false;
+    });
+    add<Collider>("Collision", [](Collider& collider) {
+        bool changed = ImGui::DragFloat("Rayon (m)", &collider.radius, 0.01f, 0.05f, 5.0f);
+        changed |= ImGui::DragInt("Poids de poussée", &collider.push_weight, 0.1f, 0, 100);
+        changed |= ImGui::Checkbox("Arrêté par les murs", &collider.blocked_by_walls);
+        ImGui::Text("Couche %08X, masque %08X", collider.layer, collider.mask);
+        return changed;
+    });
+    add<Mover>("Déplacement", [](Mover& mover) {
+        static const char* const kModes[] = {"Arrêt", "Vers un point", "Direct", "Flow field"};
+        static const char* const kStates[] = {"Repos", "Attend un chemin", "En route", "Arrivé", "Bloqué", "Sans chemin"};
+        bool changed = ImGui::DragFloat("Vitesse (m/s)", &mover.speed, 0.05f, 0.0f, 30.0f);
+        changed |= ImGui::DragFloat("Rotation", &mover.turn_rate, 0.1f, 0.0f, 100.0f);
+        ImGui::Text("Mode : %s, état : %s", kModes[static_cast<int>(mover.mode)], kStates[static_cast<int>(mover.state)]);
+        ImGui::Text("Vitesse réelle : %.2f m/s, chemin : %zu / %zu points", mover.actual_speed, mover.next_point,
+                    mover.path.size());
+        if (mover.mode == MoveMode::ToPoint) {
+            ImGui::Text("But : (%.2f, %.2f)", mover.goal.x, mover.goal.y);
+        }
+        return changed;
     });
     add<LightSource>("Lumière", [](LightSource& light) {
         bool changed = edit_linear_color("Couleur", light.color);

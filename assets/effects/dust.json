@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "emitters": [
+    {
+      "texture": "particles/smoke.png",
+      "burst": 4, "lifetime": [0.4, 0.7], "shape": "disc", "radius": 0.12,
+      "direction": [0, 1, 0], "speed": [0.2, 0.5], "drag": 2.5,
+      "size": [[0, 0.15], [1, 0.45]], "spin": [-1, 1],
+      "color": [[0, [0.35, 0.32, 0.28, 0.35]], [1, [0.35, 0.32, 0.28, 0]]]
+    }
+  ]
+}
