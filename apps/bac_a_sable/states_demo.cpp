@@ -256,6 +256,10 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo) {
     struct Held {
         moteur::Asset<moteur::Font> font;
         moteur::Asset<moteur::Model> barrel;
+        std::vector<moteur::Asset<moteur::Model>> characters;
+        std::vector<moteur::Asset<moteur::Skeleton>> skeletons;
+        std::vector<moteur::Asset<moteur::ClipLibrary>> clips;
+        moteur::Asset<moteur::AnimationSet> animation_set;
         std::vector<moteur::Asset<moteur::Sound>> sounds;
         moteur::Asset<moteur::Music> ambience;
     };
@@ -268,6 +272,19 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo) {
              if (assets.exists(Demo3D::kBarrel)) {
                  held->barrel = assets.model(Demo3D::kBarrel);
              }
+         }},
+        {"Personnages animés",
+         [&assets, held] {
+             if (!Demo3D::characters_available(assets)) {  // tools/models/fetch_test_characters.py
+                 return;
+             }
+             for (const char* path : {Demo3D::kKnight, Demo3D::kSkeletons[0], Demo3D::kSkeletons[1]}) {
+                 held->characters.push_back(assets.model(path));
+                 held->skeletons.push_back(assets.skeleton(path));
+                 held->clips.push_back(assets.clips(path));
+             }
+             held->characters.push_back(assets.model(Demo3D::kSword));
+             held->animation_set = assets.animation_set(Demo3D::kAnimationSet);
          }},
         {"Sons",
          [&assets, held] {

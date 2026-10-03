@@ -14,11 +14,11 @@ bool MeshBatcher::Key::operator==(const Key& other) const {
             return false;
         }
     }
-    return double_sided == other.double_sided;
+    return double_sided == other.double_sided && skinned == other.skinned;
 }
 
 std::size_t MeshBatcher::KeyHash::operator()(const Key& key) const {
-    std::size_t hash = key.double_sided ? 1u : 0u;
+    std::size_t hash = (key.double_sided ? 1u : 0u) + (key.skinned ? 2u : 0u);
     for (const void* pointer : key.pointers) {
         hash = hash * 1099511628211ull ^ std::hash<const void*>{}(pointer);
     }
@@ -37,7 +37,7 @@ MeshInstance MeshBatcher::make_instance(const MeshDraw& draw) {
     }
     instance.base_color = material.base_color;
     instance.factors = glm::vec4(material.metallic, material.roughness, material.normal_scale, material.occlusion_strength);
-    instance.emissive = glm::vec4(material.emissive, 0.0f);
+    instance.emissive = glm::vec4(material.emissive, draw.palette >= 0 ? static_cast<float>(draw.palette) : 0.0f);
     return instance;
 }
 
@@ -79,7 +79,7 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
         }
         ++submitted_;
         const Material& material = draw.material;
-        Key key = {{draw.mesh, nullptr, nullptr, nullptr, nullptr, nullptr}, material.double_sided};
+        Key key = {{draw.mesh, nullptr, nullptr, nullptr, nullptr, nullptr}, material.double_sided, draw.palette >= 0};
         if (pass == Pass::Main) {
             key.pointers[1] = material.base_color_texture;
             key.pointers[2] = material.metallic_roughness_texture;
@@ -153,6 +153,7 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
         batch.mesh = first.mesh;
         batch.material = &first.material;
         batch.count = cursor_[g];
+        batch.skinned = keys_[g].skinned;
     }
     cursor_.assign(batch_count, 0);  // now: where the next instance of each batch goes
     std::uint32_t offset = 0;
@@ -164,7 +165,7 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
     }
 
     // 4. The instances, each at the next free place of its batch: recording order within a batch.
-    // The shadow pass only reads the world matrix: the rest is not computed.
+    // The shadow pass only reads the world matrix (and the palette): the rest is not computed.
     instances_.resize(visible_.size());
     for (std::size_t v = 0; v < visible_.size(); ++v) {
         const std::uint32_t batch = order_[group_of_[v]];
@@ -176,6 +177,7 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
             for (int r = 0; r < 3; ++r) {
                 instance.world[r] = glm::vec4(draw.world[0][r], draw.world[1][r], draw.world[2][r], draw.world[3][r]);
             }
+            instance.emissive = glm::vec4(0.0f, 0.0f, 0.0f, draw.palette >= 0 ? static_cast<float>(draw.palette) : 0.0f);
         }
     }
 }

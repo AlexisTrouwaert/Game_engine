@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "moteur/animator.hpp"
 #include "moteur/billboard_renderer.hpp"
 #include "moteur/color.hpp"
 #include "moteur/fixed_timestep.hpp"
@@ -63,6 +64,18 @@ struct Walker {  // a creature
 struct Health {
     float value;  // [0, 1]
 };
+struct Stature {  // an animated character: how tall it stands (its bar goes above)
+    float height;  // metres
+};
+
+constexpr float kHeroHeight = 1.8f;      // metres: the knight, scaled to it
+constexpr float kCreatureHeight = 1.5f;  // the skeletons
+constexpr float kBodyTop = 1.6f;         // the bodies of primitives (the demo of milestone 3)
+const char* const kAttack = "1H_Melee_Attack_Chop";
+// The knight carries every weapon of its pack in its file: its shield stays, the sword is a file
+// of its own held on its right hand (see spawn_hero()), the others go.
+const std::vector<std::string> kKnightHidden = {"1H_Sword", "1H_Sword_Offhand", "2H_Sword", "Badge_Shield",
+                                                "Rectangle_Shield", "Spike_Shield"};
 
 // Centre of a room, where its brazier stands.
 bool is_brazier_cell(int i, int j) {
@@ -114,6 +127,10 @@ Demo3D::Demo3D(moteur::Application& app, const Options& options, bool standalone
     white.pixels = {255, 255, 255, 255};
     white_ = renderer.create_texture(white, "demo.white");
 
+    animated_ = options_.hero && characters_available(app.assets());
+    if (options_.hero && !animated_) {
+        SDL_Log("Slice: no animated characters (python tools/models/fetch_test_characters.py): bodies of primitives");
+    }
     build_map();
     build_floor();
     build_decor();
@@ -184,6 +201,9 @@ Demo3D::Demo3D(moteur::Application& app, const Options& options, bool standalone
         });
         tools->components().add<Health>("Santé (démo)", [](Health& health) {
             return ImGui::SliderFloat("Vie", &health.value, 0.0f, 1.0f);
+        });
+        tools->components().add<Stature>("Taille (démo)", [](Stature& stature) {
+            return ImGui::DragFloat("Hauteur (m)", &stature.height, 0.01f, 0.1f, 5.0f);
         });
     }
 }
@@ -412,16 +432,22 @@ void Demo3D::spawn_creatures() {
         const float pace = 0.75f + 0.5f * random.next();
         const glm::vec3 color = linear(0.35f + 0.55f * random.next(), 0.35f + 0.55f * random.next(), 0.35f + 0.55f * random.next());
         const float health = 0.3f + 0.7f * random.next();
-        // The creature is where its feet are; its body and head are attached to it.
-        const entt::entity creature = registry.create();
+        // The creature is where its feet are; its body and head are attached to it (or, in the
+        // animated slice, a KayKit skeleton, warriors and minions in turn).
         const moteur::Transform foot = place({position.x, 0.0f, position.y}, glm::vec3(1.0f));
-        registry.emplace<moteur::Transform>(creature, foot);
-        registry.emplace<moteur::PreviousTransform>(creature, foot);
+        const entt::entity creature =
+            animated_ ? spawn_animated(kSkeletons[k % 2], foot, kCreatureHeight, {}) : registry.create();
+        if (!animated_) {
+            registry.emplace<moteur::Transform>(creature, foot);
+            registry.emplace<moteur::PreviousTransform>(creature, foot);
+        }
         registry.emplace<Walker>(creature, direction * (kCreatureSpeed * pace), std::nullopt);
         registry.emplace<Health>(creature, health);
         registry.emplace<moteur::Name>(creature, "créature " + std::to_string(k));
-        attach(creature, cube_, place({0.0f, 0.5f, 0.0f}, {0.45f, 1.0f, 0.45f}), surface(color, 0.7f));
-        attach(creature, sphere_, place({0.0f, 1.2f, 0.0f}, glm::vec3(0.38f)), skin);
+        if (!animated_) {
+            attach(creature, cube_, place({0.0f, 0.5f, 0.0f}, {0.45f, 1.0f, 0.45f}), surface(color, 0.7f));
+            attach(creature, sphere_, place({0.0f, 1.2f, 0.0f}, glm::vec3(0.38f)), skin);
+        }
         if (k == 0) {
             selected_ = creature;
         }
@@ -448,8 +474,23 @@ void Demo3D::spawn_hero() {
     while (!walkable(start)) {
         start.x += 1.0f;
     }
-    hero_ = registry.create();
     const moteur::Transform foot = place({start.x, 0.0f, start.y}, glm::vec3(1.0f));
+    if (animated_) {
+        // The knight, its sword (a file of its own) on the right_hand point of its description.
+        hero_ = spawn_animated(kKnight, foot, kHeroHeight, kKnightHidden);
+        registry.emplace<Walker>(hero_, glm::vec2(0.0f), std::nullopt);
+        registry.emplace<Health>(hero_, 1.0f);
+        registry.emplace<moteur::Name>(hero_, "héros");
+        const entt::entity sword = registry.create();
+        registry.emplace<moteur::Name>(sword, "épée (right_hand)");
+        registry.emplace<moteur::Transform>(sword);
+        registry.emplace<moteur::Parent>(sword, hero_);
+        registry.emplace<moteur::BoneAttachment>(sword, "right_hand");
+        registry.emplace<moteur::ModelComponent>(sword, app_.assets().model(kSword), std::vector<std::uint32_t>{});
+        selected_ = hero_;
+        return;
+    }
+    hero_ = registry.create();
     registry.emplace<moteur::Transform>(hero_, foot);
     registry.emplace<moteur::PreviousTransform>(hero_, foot);
     registry.emplace<Walker>(hero_, glm::vec2(0.0f), std::nullopt);
@@ -468,6 +509,108 @@ void Demo3D::spawn_hero() {
     selected_ = hero_;
 }
 
+bool Demo3D::characters_available(moteur::Assets& assets) {
+    for (const char* path : {kKnight, kSword, kSkeletons[0], kSkeletons[1]}) {
+        if (!assets.exists(path)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+entt::entity Demo3D::spawn_animated(const char* path, const moteur::Transform& foot, float height,
+                                    const std::vector<std::string>& hidden_nodes) {
+    moteur::Assets& assets = app_.assets();
+    entt::registry& registry = world_.registry();
+    const entt::entity entity = registry.create();
+    moteur::ModelComponent model{assets.model(path), {}};
+    for (const std::string& node : hidden_nodes) {
+        model.hide(node);
+    }
+    const float file_height = model.model->bounds.size().y;
+    moteur::Transform placed = foot;
+    placed.scale = glm::vec3(file_height > 0.0f ? height / file_height : 1.0f);
+    registry.emplace<moteur::Transform>(entity, placed);
+    registry.emplace<moteur::PreviousTransform>(entity, placed);
+    registry.emplace<moteur::ModelComponent>(entity, std::move(model));
+    registry.emplace<Stature>(entity, height);
+    moteur::Animator animator =
+        moteur::Animator::create(assets.skeleton(path), assets.clips(path), assets.animation_set(kAnimationSet));
+    animator.play("locomotion", {.fade_ticks = 0});
+    registry.emplace<moteur::Animator>(entity, std::move(animator));
+    return entity;
+}
+
+float Demo3D::top_of(entt::entity entity) const {
+    const Stature* stature = world_.registry().try_get<Stature>(entity);
+    return stature != nullptr ? stature->height : kBodyTop;
+}
+
+void Demo3D::attack(entt::entity target) {
+    if (!animated_) {
+        if (target != entt::null) {
+            strike(target);
+        }
+        return;
+    }
+    entt::registry& registry = world_.registry();
+    moteur::Animator& animator = registry.get<moteur::Animator>(hero_);
+    if (!animator.play(kAttack, {.layer = 1, .loop = false})) {
+        return;  // a blow under way: clicking again does not start it again
+    }
+    attack_target_ = target;
+    if (target != entt::null) {  // turned towards it
+        const glm::vec2 d = cell_position(target) - cell_position(hero_);
+        if (glm::dot(d, d) > 1e-6f) {
+            registry.patch<moteur::Transform>(hero_, [&d](moteur::Transform& t) {
+                t.rotation = glm::angleAxis(std::atan2(d.x, d.y), glm::vec3(0.0f, 1.0f, 0.0f));
+            });
+        }
+    }
+}
+
+void Demo3D::animate_characters(float dt) {
+    entt::registry& registry = world_.registry();
+    // Facing where they went this tick, their clips at the pace of their feet.
+    for (auto [entity, transform, previous, animator] :
+         registry.view<moteur::Transform, const moteur::PreviousTransform, moteur::Animator>().each()) {
+        const glm::vec2 moved(transform.position.x - previous.value.position.x, transform.position.z - previous.value.position.z);
+        const float distance = glm::length(moved);
+        if (distance > 1e-5f) {
+            transform.rotation = glm::angleAxis(std::atan2(moved.x, moved.y), glm::vec3(0.0f, 1.0f, 0.0f));  // KayKit faces +Z
+        }
+        const float speed = dt > 0.0f ? distance / dt : 0.0f;
+        animator.set_move_speed(static_cast<double>(speed / transform.scale.y));  // metres of the file
+    }
+    events_.clear();
+    moteur::advance_animators(registry, 1, &events_);
+    for (const moteur::AnimatorEvent& event : events_) {
+        if (event.entity != hero_) {
+            continue;  // the creatures' own footsteps: silent, there are hundreds
+        }
+        if (event.name == "impact") {
+            // The blow lands on what is within reach now: the creature clicked if it still is,
+            // otherwise the nearest one (one that walked into the swing is hit).
+            entt::entity target = attack_target_;
+            if (target == entt::null || !registry.valid(target) || !in_reach(target)) {
+                target = creature_in_reach();
+            }
+            if (target != entt::null) {
+                strike(target);
+            }
+            attack_target_ = entt::null;
+        } else if (event.name.rfind("step", 0) == 0 && !steps_.empty()) {
+            moteur::PlaySound step;
+            const glm::vec2 at = cell_position(hero_);
+            step.position = glm::vec3(at.x, 0.0f, at.y);
+            step.volume = 0.6f;
+            step.pitch_variation = 0.06f;
+            step.volume_variation = 0.15f;
+            app_.audio().play(steps_, step);
+        }
+    }
+}
+
 bool Demo3D::in_reach(entt::entity creature) const {
     constexpr float kReach = 2.0f;  // cells
     const glm::vec2 d = cell_position(creature) - cell_position(hero_);
@@ -483,11 +626,20 @@ entt::entity Demo3D::creature_in_reach() const {
 void Demo3D::strike(entt::entity creature) {
     entt::registry& registry = world_.registry();
     Health& health = registry.get<Health>(creature);
+    const bool was_alive = health.value > 0.0f;
     health.value = std::max(health.value - 0.25f, 0.0f);
     if (health.value <= 0.0f) {
         Walker& walker = registry.get<Walker>(creature);  // down: it stops where it is
         walker.velocity = glm::vec2(0.0f);
         walker.goal.reset();
+    }
+    if (moteur::Animator* animator = registry.try_get<moteur::Animator>(creature)) {
+        if (health.value <= 0.0f && was_alive) {
+            animator->stop(1, 4);
+            animator->play("Death_A", {.loop = false});  // falls, and stays on the ground
+        } else if (health.value > 0.0f) {
+            animator->play("Hit_A", {.layer = 1, .loop = false, .restart = true});  // the upper body takes the blow
+        }
     }
     flashes_.push_back({0, creature, live_ticks_ + 45});
     ++hits_;
@@ -689,7 +841,7 @@ void Demo3D::apply_input(float dt) {
         if (const entt::entity target = creature_near(*ground, 0.8f); target != entt::null) {
             pressed_on_creature_ = true;
             if (in_reach(target)) {
-                strike(target);
+                attack(target);
             } else {
                 hero.goal = cell_position(target);
             }
@@ -717,9 +869,7 @@ void Demo3D::apply_input(float dt) {
             flashes_.push_back({i + 1, selected_, live_ticks_ + 45});
             // The slice: the first skill strikes the nearest creature within reach.
             if (i == 0 && hero_ != entt::null) {
-                if (const entt::entity target = creature_in_reach(); target != entt::null) {
-                    strike(target);
-                }
+                attack(creature_in_reach());
             }
         }
     }
@@ -746,6 +896,11 @@ void Demo3D::update(double dt) {
     world_.begin_tick();
     const bool frozen = options_.freeze_after_ticks > 0 && ticks_ > options_.freeze_after_ticks;
     if (frozen) {
+        // Frozen, the characters hold their pose: no tick, but the previous one becomes the
+        // current one, so that every frame drawn from now on is the same, whatever its alpha.
+        if (animated_) {
+            moteur::advance_animators(world_.registry(), 0);
+        }
         return;
     }
     ++live_ticks_;
@@ -758,7 +913,9 @@ void Demo3D::update(double dt) {
         reported_selection_ = selected_;
     }
     move_creatures(step);
-    if (hero_ != entt::null) {
+    if (animated_) {
+        animate_characters(step);  // footsteps on the events
+    } else if (hero_ != entt::null) {
         play_steps(hero_before);
     }
     show_selection();
@@ -798,6 +955,7 @@ void Demo3D::render(moteur::Renderer& renderer, double alpha) {
     moteur::CollectOptions collect;
     collect.light_focus = camera.target();
     collect.max_lights = std::max(torch_lights_, 0);
+    collect.view = camera.frustum();  // animated characters out of view: no pose to compute
     world_.submit(renderer, blend, collect);
     collect_seconds_ += static_cast<double>(SDL_GetPerformanceCounter() - collect_start) / static_cast<double>(SDL_GetPerformanceFrequency());
 
@@ -832,7 +990,7 @@ void Demo3D::draw_overlay(moteur::Renderer& renderer, const moteur::Camera3D& ca
         // In the order of creation: bars that overlap always cover each other the same way.
         for (auto [entity, health] : world_.registry().storage<Health>().reach()) {
             const glm::vec3 p = world_.world_position(entity, blend);
-            const auto head = camera.world_to_screen({p.x, 1.6f, p.z});
+            const auto head = camera.world_to_screen({p.x, top_of(entity), p.z});  // above the box, still
             if (!head || head->x < -bar.x || head->y < -bar.y || head->x > view.x + bar.x || head->y > view.y + bar.y) {
                 continue;
             }
@@ -861,7 +1019,7 @@ void Demo3D::draw_overlay(moteur::Renderer& renderer, const moteur::Camera3D& ca
             continue;
         }
         const glm::vec3 p = world_.world_position(flash.creature, blend);
-        const auto head = camera.world_to_screen({p.x, 1.9f, p.z});
+        const auto head = camera.world_to_screen({p.x, top_of(flash.creature) + 0.3f, p.z});
         if (!head) {
             continue;
         }

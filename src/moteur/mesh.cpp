@@ -170,6 +170,15 @@ Mesh Mesh::create(Renderer& renderer, const MeshData& data, const char* name) {
     mesh.index_count = static_cast<std::uint32_t>(data.indices.size());
     mesh.bounds = data.bounds();
     mesh.gpu_bytes = data.vertices.size() * sizeof(Vertex3D) + data.indices.size() * sizeof(std::uint32_t);
+    if (!data.skin.empty()) {
+        if (data.skin.size() != data.vertices.size()) {
+            throw std::invalid_argument("Mesh '" + base + "' has " + std::to_string(data.skin.size()) + " skin entries for " +
+                                        std::to_string(data.vertices.size()) + " vertices");
+        }
+        mesh.skin = renderer.create_buffer(SDL_GPU_BUFFERUSAGE_VERTEX, data.skin.data(),
+                                           data.skin.size() * sizeof(VertexSkin), (base + ".skin").c_str());
+        mesh.gpu_bytes += data.skin.size() * sizeof(VertexSkin);
+    }
     return mesh;
 }
 

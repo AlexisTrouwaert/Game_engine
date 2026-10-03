@@ -1,4 +1,4 @@
-add_executable(bac_a_sable main.cpp demo3d.cpp blender_compare.cpp states_demo.cpp audio_test.cpp)
+add_executable(bac_a_sable main.cpp demo3d.cpp blender_compare.cpp states_demo.cpp audio_test.cpp animation_test.cpp anim_compare.cpp)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 
@@ -14,14 +14,17 @@ moteur_add_shaders(bac_a_sable
         sprite.vert.hlsl
         sprite.frag.hlsl
         mesh.vert.hlsl
+        mesh_skinned.vert.hlsl
         mesh.frag.hlsl
         tonemap.vert.hlsl
         tonemap.frag.hlsl
         fxaa.frag.hlsl
         shadow.vert.hlsl
+        shadow_skinned.vert.hlsl
         shadow.frag.hlsl
         shadow_clear.vert.hlsl
         point_shadow.vert.hlsl
+        point_shadow_skinned.vert.hlsl
         point_shadow.frag.hlsl
         billboard.vert.hlsl
         billboard.frag.hlsl
@@ -33,7 +36,7 @@ moteur_add_shaders(bac_a_sable
 moteur_add_assets(bac_a_sable)
 
 # Shown by the "À propos" window; keep in step with assets/credits.json.
-set(_licenses sdl3 imgui glm stb nlohmann-json cgltf mikktspace entt efsw ktx miniaudio)
+set(_licenses sdl3 imgui glm stb nlohmann-json cgltf mikktspace entt efsw ktx miniaudio ozz-animation)
 if(WIN32)
     list(APPEND _licenses winpixevent)
 endif()

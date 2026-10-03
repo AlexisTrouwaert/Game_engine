@@ -97,6 +97,14 @@
       "copyright": "Copyright 2025 David Reid",
       "url": "https://miniaud.io",
       "license_file": "licenses/miniaudio.txt"
+    },
+    {
+      "name": "ozz-animation",
+      "version": "0.17.0",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2020 Guillaume Blanc",
+      "url": "https://github.com/guillaumeblanc/ozz-animation",
+      "license_file": "licenses/ozz-animation.txt"
     }
   ],
   "fonts": [
@@ -150,6 +158,54 @@
       "source": "Poly Haven",
       "url": "https://polyhaven.com/a/boulder_01",
       "file": "assets/models/polyhaven/boulder_01/boulder_01_1k.gltf"
+    },
+    {
+      "name": "Adventurers Character Pack (chevalier, épée)",
+      "authors": "Kay Lousberg (kaylousberg.com)",
+      "license": "CC0",
+      "source": "KayKit",
+      "url": "https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0",
+      "file": "assets/models/characters/kaykit_adventurers/Knight.glb"
+    },
+    {
+      "name": "Skeletons Character Pack (guerrier, sbire, lame)",
+      "authors": "Kay Lousberg (kaylousberg.com)",
+      "license": "CC0",
+      "source": "KayKit",
+      "url": "https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0",
+      "file": "assets/models/characters/kaykit_skeletons/Skeleton_Warrior.glb"
+    },
+    {
+      "name": "SimpleSkin (modèle de test glTF)",
+      "authors": "Marco Hutter",
+      "license": "CC0",
+      "source": "Khronos glTF-Sample-Assets",
+      "url": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/SimpleSkin",
+      "file": "assets/models/characters/khronos/SimpleSkin.gltf"
+    },
+    {
+      "name": "InterpolationTest (modèle de test glTF)",
+      "authors": "Khronos",
+      "license": "CC0",
+      "source": "Khronos glTF-Sample-Assets",
+      "url": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/InterpolationTest",
+      "file": "assets/models/characters/khronos/InterpolationTest.glb"
+    },
+    {
+      "name": "RiggedFigure (modèle de test glTF)",
+      "authors": "Cesium",
+      "license": "CC-BY 4.0",
+      "source": "Khronos glTF-Sample-Assets",
+      "url": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/RiggedFigure",
+      "file": "assets/models/characters/khronos/RiggedFigure.glb"
+    },
+    {
+      "name": "Fox (modèle de test glTF)",
+      "authors": "PixelMannen (modèle, CC0) ; tomkranis, @AsoboStudio et @scurest (squelette et animations, CC-BY 4.0)",
+      "license": "CC0 et CC-BY 4.0",
+      "source": "Khronos glTF-Sample-Assets",
+      "url": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Fox",
+      "file": "assets/models/characters/khronos/Fox.glb"
     }
   ],
   "sounds": [

@@ -26,6 +26,8 @@ enum class MeshView {
     Normals,    // the shading normal (normal map included), as a color: n * 0.5 + 0.5
     BaseColor,  // the surface color alone, without light
     Distance,   // distance to the camera: near is white, MeshRenderer::kDistanceViewRange metres black
+    Weights,    // skinned meshes: the weight of one palette entry (set_weight_joint), blue 0 to red 1;
+                // meshes without skin dark grey
 };
 
 // Debug lines the MeshRenderer adds itself (to Renderer::debug_lines()) after culling.
@@ -111,6 +113,11 @@ public:
     bool culling() const { return culling_; }
 
     void set_view(MeshView view) { view_ = view; }
+    // For MeshView::Weights: the palette entry whose weights are shown (an index in a skin's joints,
+    // SkinData::joints; -1: none). The same entry for every skinned mesh: meant for one character,
+    // or characters sharing a skin layout (the KayKit ones).
+    void set_weight_joint(int palette_index) { weight_joint_ = palette_index; }
+    int weight_joint() const { return weight_joint_; }
     MeshView view() const { return view_; }
     void set_debug(const MeshDebug& debug) { debug_ = debug; }
     const MeshDebug& debug() const { return debug_; }
@@ -144,6 +151,20 @@ public:
     // `world`), for decor that does not move: saves recomputing it every frame.
     void draw(const Mesh& mesh, const glm::mat4& world, const Material& material, const Aabb& bounds);
 
+    // Skinning (milestone 5): the matrices of one pose for this frame (PoseSampler::palette: model
+    // matrix x inverse bind matrix of each joint of a skin), to give to the draws of the meshes
+    // that follow it. Sent to the GPU once, whatever the number of meshes using them.
+    struct Palette {
+        std::int32_t first = -1;  // index of its first matrix among the frame's
+        std::uint32_t size = 0;
+    };
+    Palette add_palette(const std::vector<glm::mat4>& matrices);
+    // Records a skinned mesh (Mesh::skinned()): its vertices follow `palette`, then `world` (the
+    // entity's place). `bounds`: where it is in the world in this pose.
+    void draw(const Mesh& mesh, const glm::mat4& world, const Material& material, const Aabb& bounds, Palette palette);
+    // Matrices recorded so far this frame.
+    std::size_t palette_matrices() const { return palette_rows_.size() / 3; }
+
     // Number of draws recorded so far in the current frame.
     std::size_t queued() const { return draws_.size(); }
     // True when this frame has something to draw (draws and a camera): the "scene" pass runs then.
@@ -172,6 +193,10 @@ private:
     // After prepare(): the lines asked for by debug().
     void add_debug_lines(DebugLineBuffer& lines) const;
     void ensure_instance_capacity(std::size_t instances);
+    void ensure_palette_capacity(std::size_t rows);
+    // Binds what the batch's pipeline reads: its vertices (and skin), its slice of the instances,
+    // the palettes for a skinned one, and its indices; then draws it.
+    void draw_batch(SDL_GPURenderPass* pass, const MeshBatch& batch, std::size_t first_instance);
     // The pipelines of the "scene" pass, for `samples` per pixel (MSAA): made again by the Renderer
     // when the anti-aliasing changes.
     void create_scene_pipelines(SDL_GPUSampleCount samples);
@@ -183,6 +208,7 @@ private:
         dropped_lights_ = 0;
         has_camera_ = false;
         shadows_drawn_ = false;
+        palette_rows_.clear();
     }
 
     GpuGraphicsPipeline single_sided_;
@@ -190,14 +216,25 @@ private:
     GpuGraphicsPipeline wireframe_single_sided_;
     GpuGraphicsPipeline wireframe_double_sided_;
     MeshView view_ = MeshView::Lit;
+    int weight_joint_ = -1;
     MeshDebug debug_;
     GpuGraphicsPipeline shadow_single_sided_;
     GpuGraphicsPipeline shadow_double_sided_;
+    // The same for skinned meshes (mesh_skinned.vert.hlsl and the like).
+    GpuGraphicsPipeline skinned_single_sided_;
+    GpuGraphicsPipeline skinned_double_sided_;
+    GpuGraphicsPipeline skinned_wireframe_single_sided_;
+    GpuGraphicsPipeline skinned_wireframe_double_sided_;
+    GpuGraphicsPipeline shadow_skinned_single_sided_;
+    GpuGraphicsPipeline shadow_skinned_double_sided_;
+    GpuGraphicsPipeline point_skinned_single_sided_;
+    GpuGraphicsPipeline point_skinned_double_sided_;
     Renderer& renderer_;
     SDL_GPUDevice* device_ = nullptr;
     SDL_GPUTextureFormat color_format_ = SDL_GPU_TEXTUREFORMAT_INVALID;  // of the "scene" pass
     SDL_GPUTextureFormat depth_format_ = SDL_GPU_TEXTUREFORMAT_INVALID;
     GpuShader vertex_shader_;
+    GpuShader skinned_vertex_shader_;
     GpuShader fragment_shader_;
     SDL_GPUTextureFormat shadow_format_ = SDL_GPU_TEXTUREFORMAT_D16_UNORM;
     GpuTexture shadow_map_;
@@ -243,6 +280,12 @@ private:
     GpuBuffer instance_buffer_;
     GpuTransferBuffer instance_transfer_;
     std::size_t instance_capacity_ = 0;
+    // The palettes of the frame: three rows (float4) per matrix, sent every frame into a storage
+    // buffer that the skinned vertex shaders read (skinning.hlsli).
+    std::vector<glm::vec4> palette_rows_;
+    GpuBuffer palette_buffer_;
+    GpuTransferBuffer palette_transfer_;
+    std::size_t palette_capacity_ = 0;  // rows
     std::vector<PointLight> lights_;
     int dropped_lights_ = 0;
     glm::mat4 view_projection_{1.0f};

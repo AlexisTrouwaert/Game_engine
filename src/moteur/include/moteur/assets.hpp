@@ -7,11 +7,13 @@
 #include <vector>
 
 #include "moteur/animation.hpp"
+#include "moteur/animation_set.hpp"
 #include "moteur/asset_cache.hpp"
 #include "moteur/environment.hpp"
 #include "moteur/font.hpp"
 #include "moteur/model.hpp"
 #include "moteur/renderer.hpp"
+#include "moteur/skeleton.hpp"
 #include "moteur/sound.hpp"
 #include "moteur/texture_atlas.hpp"
 
@@ -65,6 +67,17 @@ public:
     Asset<Sound> sound(std::string_view path);
     // A music or an ambience, kept compressed and decoded while it plays; a failed one is silent.
     Asset<Music> music(std::string_view path);
+    // The skeleton of a glTF model (its meshes and textures are not read). Throws if the file has
+    // none: there is no sensible placeholder.
+    Asset<Skeleton> skeleton(std::string_view path);
+    // Every clip of a glTF file, built for its skeleton (a file of clips only is fine). They play
+    // on any skeleton of the same structure: check with ClipLibrary::mismatch(). Throws if the
+    // file cannot be read or has no skeleton.
+    Asset<ClipLibrary> clips(std::string_view path);
+    // The description of a character's skeletal animations (a .json: ground speeds, blend spaces,
+    // masks, crossfades). Throws if it cannot be read or is not valid. Reloaded in place: an
+    // Animator takes the new values for the motions it starts afterwards.
+    Asset<AnimationSet> animation_set(std::string_view path);
 
     // Where an asset is on disk, and whether it is there (for optional test assets, which a scene
     // does without rather than showing a placeholder).
@@ -116,6 +129,9 @@ private:
     AssetCache<AnimationLibrary> animations_;
     AssetCache<Sound> sounds_;
     AssetCache<Music> musics_;
+    AssetCache<Skeleton> skeletons_;
+    AssetCache<ClipLibrary> clips_;
+    AssetCache<AnimationSet> animation_sets_;
     std::unique_ptr<Watcher> watcher_;
     bool prefer_ktx2_ = true;
 };

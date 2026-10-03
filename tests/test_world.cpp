@@ -313,6 +313,39 @@ TEST_CASE("World: a still model keeps the boxes of its parts") {
     CHECK(shown.draws.size() == 2);
 }
 
+TEST_CASE("World: hidden parts of a model are not drawn") {
+    moteur::World world;
+    entt::registry& registry = world.registry();
+    moteur::Model model;
+    for (const char* node : {"Body", "Round_Shield", "Sword", "Round_Shield"}) {
+        moteur::Model::Part part;
+        part.mesh.bounds.add(glm::vec3(-0.5f));
+        part.mesh.bounds.add(glm::vec3(0.5f));
+        part.node = node;
+        model.parts.push_back(std::move(part));
+    }
+    CHECK(model.parts_of("Round_Shield") == std::vector<std::uint32_t>{1, 3});
+    CHECK(model.parts_of("Helmet").empty());
+
+    const entt::entity knight = registry.create();
+    registry.emplace<moteur::Transform>(knight);
+    auto& component = registry.emplace<moteur::ModelComponent>(knight, moteur::make_asset(std::move(model)));
+    CHECK(component.hide("Round_Shield") == 2);
+    CHECK(component.hide("Round_Shield") == 2);  // already hidden: nothing added twice
+    CHECK(component.hide("Helmet") == 0);
+    CHECK(component.hidden_parts == std::vector<std::uint32_t>{1, 3});
+    CHECK(component.hidden(3));
+    CHECK_FALSE(component.hidden(2));
+
+    for (int run = 0; run < 2; ++run) {  // the second one from the cache of still entities
+        Recorder recorder;
+        world.collect(recorder, 1.0f);
+        REQUIRE(recorder.draws.size() == 2);
+        CHECK(recorder.draws[0].mesh == &registry.get<moteur::ModelComponent>(knight).model->parts[0].mesh);
+        CHECK(recorder.draws[1].mesh == &registry.get<moteur::ModelComponent>(knight).model->parts[2].mesh);
+    }
+}
+
 TEST_CASE("World: entity count") {
     moteur::World world;
     CHECK(world.entity_count() == 0);

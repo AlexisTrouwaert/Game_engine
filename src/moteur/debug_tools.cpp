@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "moteur/aabb.hpp"
+#include "moteur/animator.hpp"
 #include "moteur/application.hpp"
 #include "moteur/debug_lines.hpp"
 #include "moteur/state_stack.hpp"
@@ -141,6 +142,16 @@ void ComponentInspectors::add_engine_components() {
         }
         return false;
     });
+    add<BoneAttachment>("Sur un os", [](BoneAttachment& attachment) {
+        char buffer[128] = {};
+        std::snprintf(buffer, sizeof(buffer), "%s", attachment.point.c_str());
+        if (ImGui::InputText("Point", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+            attachment.point = buffer;
+            return true;
+        }
+        ImGui::SetItemTooltip("Un point d'attache de la description du parent, ou un nom d'os.");
+        return false;
+    });
     add<Name>("Nom", [](Name& name) {
         char buffer[128] = {};
         std::snprintf(buffer, sizeof(buffer), "%s", name.value.c_str());
@@ -164,6 +175,47 @@ void ComponentInspectors::add_engine_components() {
             ImGui::Text("%zu parties, %zu triangles, %.2f Mo", model.parts.size(), model.triangle_count, megabytes(model.gpu_bytes));
             ImGui::Text("Taille : %.2f x %.2f x %.2f m", static_cast<double>(size.x), static_cast<double>(size.y),
                         static_cast<double>(size.z));
+        }
+        return false;
+    });
+    add<Animator>("Animation", [](Animator& animator) {
+        bool any = false;
+        for (int l = 0; l < Animator::kLayers; ++l) {
+            const Animator::Layer& layer = animator.layer(l);
+            if (layer.motions.empty()) {
+                continue;
+            }
+            any = true;
+            if (l > 0) {
+                ImGui::Text("Couche %d (haut du corps) : %.0f %%", l, layer.weight / 10.0);
+            }
+            for (const Animator::Motion& motion : layer.motions) {
+                const ClipClock& clock = motion.clock;
+                if (motion.blend_space()) {
+                    ImGui::BulletText("%s (mélange) %.0f %%, phase %.3f, x%.2f", motion.name.c_str(), motion.weight / 10.0,
+                                      static_cast<double>(motion.ratio(1.0f)), motion.rate / 1000.0);
+                } else {
+                    const double ticks = static_cast<double>(clock.cycle_time()) / ClipClock::kOne;
+                    ImGui::BulletText("%s (%s) %.0f %%, %.1f / %d ticks (%.2f s)%s", motion.name.c_str(),
+                                      clock.once() ? "une fois" : "en boucle", motion.weight / 10.0, ticks,
+                                      clock.cycle_ticks(), ticks / kClipTicksPerSecond, clock.finished() ? ", fini" : "");
+                }
+            }
+        }
+        if (!any) {
+            ImGui::TextDisabled("Aucun clip (pose de repos)");
+        }
+        if (animator.clips) {
+            ImGui::TextDisabled("%zu clips de %s", animator.clips->size(), animator.clips->source().c_str());
+        }
+        if (animator.set) {
+            ImGui::TextDisabled("Description : %s", animator.set->source().c_str());
+        }
+        ImGui::Text("Vitesse de déplacement : %.3f m/s", animator.move_speed());
+        float speed = static_cast<float>(animator.speed());
+        if (ImGui::DragFloat("Vitesse", &speed, 0.01f, 0.0f, 5.0f, "x%.3f")) {
+            animator.set_speed(speed);
+            return true;
         }
         return false;
     });
@@ -257,6 +309,7 @@ const char* DebugTools::window_key(Window window) {
         case Window::Input: return "Input";
         case Window::Audio: return "Audio";
         case Window::States: return "States";
+        case Window::Animation: return "Animation";
     }
     return "";
 }
@@ -324,7 +377,8 @@ void DebugTools::forget(StateStack& stack) {
 }
 
 void DebugTools::menu_items() {
-    static constexpr const char* kLabels[kWindowCount] = {"Inspecteur d'entités", "Assets", "Entrées", "Audio", "États de jeu"};
+    static constexpr const char* kLabels[kWindowCount] = {"Inspecteur d'entités", "Assets", "Entrées", "Audio", "États de jeu",
+                                                          "Animation"};
     for (int i = 0; i < kWindowCount; ++i) {
         if (ImGui::MenuItem(kLabels[i], nullptr, open_[i])) {
             set_open(static_cast<Window>(i), !open_[i]);
@@ -358,6 +412,97 @@ void DebugTools::draw() {
     window(Window::Input, &DebugTools::draw_input);
     window(Window::Audio, &DebugTools::draw_audio);
     window(Window::States, &DebugTools::draw_states);
+    window(Window::Animation, &DebugTools::draw_animation);
+}
+
+void DebugTools::draw_animation() {
+    if (!begin_window("Animation", Window::Animation, 420.0f, 360.0f)) {
+        return;
+    }
+    if (world_ == nullptr) {
+        ImGui::TextDisabled("Aucun monde (une scène doit appeler watch(world))");
+        ImGui::End();
+        return;
+    }
+    entt::registry& registry = world_->registry();
+    const auto label = [&registry](entt::entity entity) {
+        const Name* name = registry.try_get<Name>(entity);
+        return "#" + std::to_string(entt::to_entity(entity)) + (name != nullptr ? " " + name->value : std::string());
+    };
+    // The entity selected in the inspector if it is animated, else the one chosen here.
+    if (registry.valid(selected_) && registry.all_of<Animator>(selected_)) {
+        animated_ = selected_;
+    }
+    if (!registry.valid(animated_) || !registry.all_of<Animator>(animated_)) {
+        animated_ = entt::null;
+    }
+    if (ImGui::BeginCombo("Entité", animated_ == entt::null ? "(aucune)" : label(animated_).c_str())) {
+        for (auto [entity, animator] : registry.view<Animator>().each()) {
+            if (ImGui::Selectable(label(entity).c_str(), entity == animated_)) {
+                animated_ = entity;
+                selected_ = entity;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (animated_ == entt::null) {
+        ImGui::TextDisabled("Aucune entité animée choisie");
+        ImGui::End();
+        return;
+    }
+    const Animator& animator = registry.get<Animator>(animated_);
+    ImGui::Text("Tick %lld ; vitesse x%.2f ; déplacement %.2f m/s", static_cast<long long>(animator.ticks()),
+                animator.speed(), animator.move_speed());
+    const Animator::LastEvent& last = animator.last_event();
+    if (last.tick >= 0) {
+        ImGui::Text("Dernier événement : %s (%s), tick %lld, il y a %lld ticks", last.name.c_str(), last.clip.c_str(),
+                    static_cast<long long>(last.tick), static_cast<long long>(animator.ticks() - last.tick));
+    } else {
+        ImGui::TextDisabled("Aucun événement encore");
+    }
+    for (int l = 0; l < Animator::kLayers; ++l) {
+        const Animator::Layer& layer = animator.layer(l);
+        if (layer.motions.empty()) {
+            continue;
+        }
+        ImGui::SeparatorText(l == 0 ? "Corps entier" : "Haut du corps");
+        if (l > 0) {
+            ImGui::Text("Poids de la couche : %.0f %%", layer.weight / 10.0);
+        }
+        for (const Animator::Motion& motion : layer.motions) {
+            // The clip's timeline: where it is, and its events (ticks, or the blend space's cycle).
+            const ClipClock& clock = motion.clock;
+            const float ratio = motion.ratio(1.0f);
+            char overlay[160];
+            if (motion.blend_space()) {
+                std::snprintf(overlay, sizeof(overlay), "%s (mélange) %.0f %% : phase %.2f, x%.2f", motion.name.c_str(),
+                              motion.weight / 10.0, static_cast<double>(ratio), motion.rate / 1000.0);
+            } else {
+                const double ticks = static_cast<double>(clock.cycle_time()) / ClipClock::kOne;
+                std::snprintf(overlay, sizeof(overlay), "%s %.0f %% : %.1f / %d ticks (%.2f s)%s", motion.name.c_str(),
+                              motion.weight / 10.0, ticks, clock.cycle_ticks(), ticks / kClipTicksPerSecond,
+                              clock.finished() ? ", fini" : "");
+            }
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            ImGui::ProgressBar(ratio, ImVec2(-1.0f, 0.0f), overlay);
+            const ImVec2 size = ImGui::GetItemRectSize();
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            for (std::size_t m = 0; m < motion.marks.size(); ++m) {
+                const float x = at.x + size.x * static_cast<float>(motion.marks[m]) / static_cast<float>(clock.cycle_ticks());
+                draw->AddLine(ImVec2(x, at.y), ImVec2(x, at.y + size.y), IM_COL32(255, 220, 60, 255), 2.0f);
+            }
+            if (ImGui::IsItemHovered() && !motion.events.empty()) {
+                ImGui::BeginTooltip();
+                for (std::size_t m = 0; m < motion.events.size(); ++m) {
+                    const Animator::MotionEvent& event = motion.events[m];
+                    ImGui::Text("%s (%s) : %d / %d%s", event.name.c_str(), event.clip.c_str(), motion.marks[m],
+                                clock.cycle_ticks(), event.always ? ", toujours" : "");
+                }
+                ImGui::EndTooltip();
+            }
+        }
+    }
+    ImGui::End();
 }
 
 bool DebugTools::begin_window(const char* title, Window which, float width, float height) {

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "fade_ticks": 12,
+  "clips": {
+    "Walking_A": {
+      "ground_speed": 0.82,
+      "events": [ { "time": 0.533, "name": "step_right" }, { "time": 1.058, "name": "step_left" } ]
+    },
+    "Walking_B": {
+      "ground_speed": 0.80,
+      "events": [ { "time": 0.517, "name": "step_right" }, { "time": 1.05, "name": "step_left" } ]
+    },
+    "Running_A": {
+      "ground_speed": 3.47, "phase": 0.164,
+      "events": [ { "time": 0.125, "name": "step_left" }, { "time": 0.525, "name": "step_right" } ]
+    },
+    "Running_B": {
+      "ground_speed": 2.19,
+      "events": [ { "time": 0.083, "name": "step_left" }, { "time": 0.617, "name": "step_right" } ]
+    },
+    "1H_Melee_Attack_Chop": { "fade_ticks": 6, "events": [ { "time": 0.6, "name": "impact", "always": true } ] },
+    "1H_Melee_Attack_Slice_Diagonal": { "fade_ticks": 6, "events": [ { "time": 0.4, "name": "impact", "always": true } ] },
+    "1H_Melee_Attack_Slice_Horizontal": { "fade_ticks": 6, "events": [ { "time": 0.27, "name": "impact", "always": true } ] },
+    "1H_Melee_Attack_Stab": { "fade_ticks": 6, "events": [ { "time": 0.4, "name": "impact", "always": true } ] },
+    "Hit_A": { "fade_ticks": 4 },
+    "Death_A": { "fade_ticks": 6, "events": [ { "time": 0.53, "name": "death_ground" } ] },
+    "Death_B": { "events": [ { "time": 1.67, "name": "death_ground" } ] }
+  },
+  "blend_spaces": {
+    "locomotion": ["Idle", "Walking_A", "Running_A"]
+  },
+  "masks": {
+    "upper_body": { "joint": "spine", "ramp": 2 }
+  },
+  "upper_mask": "upper_body",
+  "attach_points": {
+    "right_hand": { "joint": "handslot.r", "position": [0, 0.0333, 0], "rotation": [0, 180, 0] },
+    "left_hand": { "joint": "handslot.l" },
+    "shield": { "joint": "handslot.l", "position": [0, 0.017, 0.156] },
+    "head": { "joint": "head" }
+  }
+}

@@ -6,9 +6,12 @@
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <set>
 #include <tuple>
 #include <stdexcept>
 
@@ -205,6 +208,209 @@ std::vector<std::uint8_t> read_image_bytes(const cgltf_image& image, const std::
     }
 }
 
+// A node's transformation relative to its parent. glTF gives either TRS or a matrix (without shear,
+// the specification says), which is split here.
+JointPose node_pose(const cgltf_node& node) {
+    JointPose pose;
+    if (node.has_matrix) {
+        const glm::mat4 m = glm::make_mat4(node.matrix);
+        pose.translation = glm::vec3(m[3]);
+        pose.scale = {glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2]))};
+        if (glm::determinant(glm::mat3(m)) < 0.0f) {
+            pose.scale.x = -pose.scale.x;  // a mirror: one negative scale, put on x
+        }
+        glm::mat3 rotation(m);
+        for (int i = 0; i < 3; ++i) {
+            rotation[i] = pose.scale[i] != 0.0f ? rotation[i] / pose.scale[i] : rotation[i];
+        }
+        pose.rotation = glm::normalize(glm::quat_cast(rotation));
+        return pose;
+    }
+    if (node.has_translation) {
+        pose.translation = glm::make_vec3(node.translation);
+    }
+    if (node.has_rotation) {  // glTF: x, y, z, w
+        pose.rotation = glm::normalize(glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]));
+    }
+    if (node.has_scale) {
+        pose.scale = glm::make_vec3(node.scale);
+    }
+    return pose;
+}
+
+// What was adjusted while reading the skins of a model, logged once for the whole model.
+struct SkinReport {
+    std::size_t over_four = 0;   // vertices with more than four influences (the weakest dropped)
+    std::size_t unweighted = 0;  // vertices without any weight (given to the palette's first joint)
+};
+
+// The joints and weights of each vertex of a skinned primitive: JOINTS_0 / WEIGHTS_0, and
+// JOINTS_1 / WEIGHTS_1 when present; the four strongest kept, normalized to 65535.
+std::vector<VertexSkin> read_skin(const cgltf_primitive& primitive, std::size_t vertex_count, std::size_t palette,
+                                  SkinReport& report) {
+    struct Influence {
+        cgltf_uint joint = 0;
+        float weight = 0.0f;
+    };
+    std::vector<std::vector<Influence>> influences(vertex_count);
+    for (cgltf_int set = 0;; ++set) {
+        const cgltf_accessor* joints = cgltf_find_accessor(&primitive, cgltf_attribute_type_joints, set);
+        const cgltf_accessor* weights = cgltf_find_accessor(&primitive, cgltf_attribute_type_weights, set);
+        if (joints == nullptr || weights == nullptr) {
+            if (set == 0) {
+                throw std::runtime_error("a skinned primitive has no JOINTS_0 or WEIGHTS_0");
+            }
+            break;
+        }
+        if (joints->count < vertex_count || weights->count < vertex_count) {
+            throw std::runtime_error("JOINTS_" + std::to_string(set) + " or WEIGHTS_" + std::to_string(set) +
+                                     " has fewer elements than POSITION");
+        }
+        if (cgltf_num_components(joints->type) != 4) {
+            throw std::runtime_error("JOINTS_" + std::to_string(set) + " is not a VEC4");
+        }
+        const std::vector<float> w = read_floats(weights, 4);
+        for (std::size_t v = 0; v < vertex_count; ++v) {
+            cgltf_uint indices[4] = {};
+            if (!cgltf_accessor_read_uint(joints, v, indices, 4)) {
+                throw std::runtime_error("JOINTS_" + std::to_string(set) + " cannot be read");
+            }
+            for (int k = 0; k < 4; ++k) {
+                const float weight = w[v * 4 + static_cast<std::size_t>(k)];
+                if (weight <= 0.0f) {
+                    continue;
+                }
+                if (indices[k] >= palette) {
+                    throw std::runtime_error("a vertex uses joint " + std::to_string(indices[k]) + " of a skin of " +
+                                             std::to_string(palette) + " joints");
+                }
+                influences[v].push_back({indices[k], weight});
+            }
+        }
+    }
+
+    std::vector<VertexSkin> skin(vertex_count);
+    for (std::size_t v = 0; v < vertex_count; ++v) {
+        std::vector<Influence>& list = influences[v];
+        // Strongest first; equal weights by joint index, so the result never depends on the file's order.
+        std::sort(list.begin(), list.end(), [](const Influence& a, const Influence& b) {
+            return a.weight != b.weight ? a.weight > b.weight : a.joint < b.joint;
+        });
+        if (list.size() > 4) {
+            ++report.over_four;
+            list.resize(4);
+        }
+        VertexSkin& out = skin[v];
+        float sum = 0.0f;
+        for (const Influence& influence : list) {
+            sum += influence.weight;
+        }
+        if (list.empty() || sum <= 0.0f) {
+            ++report.unweighted;
+            continue;  // the default VertexSkin: joint 0, weight 1
+        }
+        int total = 0;
+        for (std::size_t k = 0; k < list.size(); ++k) {
+            out.joints[static_cast<int>(k)] = static_cast<std::uint8_t>(list[k].joint);
+            const int weight = static_cast<int>(std::lround(list[k].weight / sum * 65535.0f));
+            out.weights[static_cast<int>(k)] = static_cast<std::uint16_t>(weight);
+            total += weight;
+        }
+        // Rounding may miss 65535 by a few units: the strongest influence takes the difference.
+        out.weights[0] = static_cast<std::uint16_t>(out.weights[0] + (65535 - total));
+    }
+    return skin;
+}
+
+// A glTF animation sampler turned into linear keys, times still those of the file.
+template <typename T>
+KeyTrack<T> read_keys(const cgltf_animation_sampler& sampler, std::size_t components) {
+    const std::vector<float> times = read_floats(sampler.input, 1);
+    const std::vector<float> values = read_floats(sampler.output, components);
+    const auto value_at = [&](std::size_t element) {
+        T value;
+        for (std::size_t c = 0; c < components; ++c) {
+            value[static_cast<int>(c)] = values[element * components + c];
+        }
+        return value;
+    };
+    const bool cubic = sampler.interpolation == cgltf_interpolation_type_cubic_spline;
+    if (times.empty() || values.size() / components < times.size() * (cubic ? 3 : 1)) {
+        throw std::runtime_error("an animation sampler has fewer values than times");
+    }
+    for (std::size_t i = 1; i < times.size(); ++i) {
+        if (!(times[i] > times[i - 1])) {
+            throw std::runtime_error("an animation sampler has times that do not increase");
+        }
+    }
+
+    KeyTrack<T> keys;
+    const auto push = [&keys](float time, const T& value) {
+        keys.times.push_back(time);
+        keys.values.push_back(value);
+    };
+    switch (sampler.interpolation) {
+        case cgltf_interpolation_type_step: {
+            // The value holds until the next key: a key just before it keeps the previous value.
+            constexpr float kStepGap = 1e-4f;
+            for (std::size_t i = 0; i < times.size(); ++i) {
+                if (i > 0 && times[i] - kStepGap > times[i - 1]) {
+                    push(times[i] - kStepGap, value_at(i - 1));
+                }
+                push(times[i], value_at(i));
+            }
+            break;
+        }
+        case cgltf_interpolation_type_cubic_spline: {
+            // Each key is (in-tangent, value, out-tangent); tangents are scaled by the segment's
+            // duration (glTF specification, appendix C). Sampled at 60 Hz and at every key.
+            constexpr float kRate = 60.0f;
+            const auto element = [&](std::size_t key, std::size_t which) { return value_at(key * 3 + which); };
+            for (std::size_t k = 0; k + 1 < times.size(); ++k) {
+                const float t0 = times[k];
+                const float dt = times[k + 1] - t0;
+                const int steps = std::max(1, static_cast<int>(std::ceil(dt * kRate - 1e-3f)));
+                for (int s = 0; s < steps; ++s) {
+                    const float u = static_cast<float>(s) / static_cast<float>(steps);
+                    const float u2 = u * u;
+                    const float u3 = u2 * u;
+                    const T value = (2.0f * u3 - 3.0f * u2 + 1.0f) * element(k, 1) +
+                                    (u3 - 2.0f * u2 + u) * dt * element(k, 2) +
+                                    (-2.0f * u3 + 3.0f * u2) * element(k + 1, 1) + (u3 - u2) * dt * element(k + 1, 0);
+                    push(t0 + u * dt, value);
+                }
+            }
+            push(times.back(), element(times.size() - 1, 1));
+            break;
+        }
+        default:  // linear
+            for (std::size_t i = 0; i < times.size(); ++i) {
+                push(times[i], value_at(i));
+            }
+            break;
+    }
+    return keys;
+}
+
+// glTF stores quaternions as x, y, z, w; glm's constructor takes w first.
+KeyTrack<glm::quat> to_rotations(const KeyTrack<glm::vec4>& xyzw) {
+    KeyTrack<glm::quat> rotations;
+    rotations.times = xyzw.times;
+    for (const glm::vec4& q : xyzw.values) {
+        const glm::quat rotation(q.w, q.x, q.y, q.z);
+        const float length = glm::length(rotation);
+        rotations.values.push_back(length > 0.0f ? rotation / length : glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    }
+    return rotations;
+}
+
+template <typename T>
+void shift_times(KeyTrack<T>& keys, float start) {
+    for (float& time : keys.times) {
+        time -= start;
+    }
+}
+
 }  // namespace
 
 Aabb ModelData::bounds() const {
@@ -312,7 +518,7 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
             }
             return found->second;
         };
-        for (cgltf_size i = 0; i < gltf->materials_count; ++i) {
+        for (cgltf_size i = 0; gltf_options.meshes && i < gltf->materials_count; ++i) {
             const cgltf_material& source = gltf->materials[i];
             ModelMaterial material;
             material.name = source.name != nullptr ? source.name : "material " + std::to_string(i);
@@ -356,13 +562,90 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
             }
         }
 
-        std::vector<const cgltf_node*> pending(roots.rbegin(), roots.rend());
-        while (!pending.empty()) {
-            const cgltf_node* node = pending.back();
-            pending.pop_back();
-            for (cgltf_size i = node->children_count; i > 0; --i) {
-                pending.push_back(node->children[i - 1]);  // depth first, in file order
+        // Every node of the scene, depth first, children in file order.
+        std::vector<const cgltf_node*> scene_nodes;
+        {
+            std::vector<const cgltf_node*> pending(roots.rbegin(), roots.rend());
+            while (!pending.empty()) {
+                const cgltf_node* node = pending.back();
+                pending.pop_back();
+                scene_nodes.push_back(node);
+                for (cgltf_size i = node->children_count; i > 0; --i) {
+                    pending.push_back(node->children[i - 1]);
+                }
             }
+        }
+        const auto index_of = [&gltf](const cgltf_node* node) { return static_cast<std::size_t>(node - gltf->nodes); };
+        const auto node_name_of = [&](const cgltf_node* node) {
+            return node->name != nullptr && node->name[0] != '\0' ? std::string(node->name)
+                                                                  : "node " + std::to_string(index_of(node));
+        };
+
+        // The skeleton: the nodes the skins use and the nodes the animations move, with all their
+        // ancestors, in the order of the scene (parents first).
+        std::vector<char> in_skeleton(gltf->nodes_count, 0);
+        const auto mark = [&](const cgltf_node* node) {
+            for (; node != nullptr && !in_skeleton[index_of(node)]; node = node->parent) {
+                in_skeleton[index_of(node)] = 1;
+            }
+        };
+        for (cgltf_size s = 0; s < gltf->skins_count; ++s) {
+            for (cgltf_size j = 0; j < gltf->skins[s].joints_count; ++j) {
+                mark(gltf->skins[s].joints[j]);
+            }
+        }
+        for (cgltf_size a = 0; a < gltf->animations_count; ++a) {
+            for (cgltf_size c = 0; c < gltf->animations[a].channels_count; ++c) {
+                const cgltf_animation_channel& channel = gltf->animations[a].channels[c];
+                if (channel.target_path != cgltf_animation_path_type_weights) {
+                    mark(channel.target_node);
+                }
+            }
+        }
+        std::vector<int> joint_of(gltf->nodes_count, -1);
+        for (const cgltf_node* node : scene_nodes) {
+            if (!in_skeleton[index_of(node)]) {
+                continue;
+            }
+            JointData joint;
+            joint.name = node_name_of(node);
+            joint.parent = node->parent != nullptr ? joint_of[index_of(node->parent)] : -1;
+            joint.rest = node_pose(*node);
+            joint_of[index_of(node)] = static_cast<int>(model.skeleton.joints.size());
+            model.skeleton.joints.push_back(std::move(joint));
+        }
+        const std::vector<glm::mat4> rest_model = model.skeleton.rest_model_matrices();
+
+        for (cgltf_size s = 0; s < gltf->skins_count; ++s) {
+            const cgltf_skin& source = gltf->skins[s];
+            SkinData skin;
+            skin.name = source.name != nullptr ? source.name : "skin " + std::to_string(s);
+            if (source.joints_count > 256) {
+                throw std::runtime_error("skin '" + skin.name + "' has " + std::to_string(source.joints_count) +
+                                         " joints (256 at most)");
+            }
+            std::vector<float> inverse_binds;
+            if (source.inverse_bind_matrices != nullptr) {
+                inverse_binds = read_floats(source.inverse_bind_matrices, 16);
+                if (inverse_binds.size() < source.joints_count * 16) {
+                    throw std::runtime_error("skin '" + skin.name + "' has fewer inverse bind matrices than joints");
+                }
+            }
+            for (cgltf_size j = 0; j < source.joints_count; ++j) {
+                const int joint = joint_of[index_of(source.joints[j])];
+                if (joint < 0) {
+                    throw std::runtime_error("skin '" + skin.name + "' uses node '" + node_name_of(source.joints[j]) +
+                                             "', which is not in the default scene");
+                }
+                skin.joints.push_back(joint);
+                skin.inverse_binds.push_back(inverse_binds.empty() ? glm::mat4(1.0f)
+                                                                   : glm::make_mat4(&inverse_binds[j * 16]));
+            }
+            model.skins.push_back(std::move(skin));
+        }
+
+        SkinReport skin_report;
+        for (const cgltf_node* node : gltf_options.meshes ? scene_nodes : std::vector<const cgltf_node*>{}) {
             if (node->mesh == nullptr) {
                 continue;
             }
@@ -370,6 +653,11 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
             cgltf_node_transform_world(node, glm::value_ptr(world));
             const std::string node_name = node->name != nullptr ? node->name : "node";
             const std::string mesh_name = node->mesh->name != nullptr ? node->mesh->name : "mesh";
+            // A mesh without weights under a joint follows the nearest one.
+            int carrier = -1;
+            for (const cgltf_node* above = node; above != nullptr && carrier < 0; above = above->parent) {
+                carrier = joint_of[index_of(above)];
+            }
             for (cgltf_size p = 0; p < node->mesh->primitives_count; ++p) {
                 const cgltf_primitive& primitive = node->mesh->primitives[p];
                 const std::string part_name = node_name + "/" + mesh_name + "#" + std::to_string(p);
@@ -379,20 +667,136 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
                 }
                 ModelPart part;
                 part.name = part_name;
+                part.node = node_name;
+                const bool skinned = node->skin != nullptr &&
+                                     cgltf_find_accessor(&primitive, cgltf_attribute_type_joints, 0) != nullptr;
                 try {
                     part.mesh = read_primitive(primitive);
+                    if (skinned) {
+                        part.skin = static_cast<int>(node->skin - gltf->skins);
+                        part.mesh.skin = read_skin(primitive, part.mesh.vertices.size(), node->skin->joints_count, skin_report);
+                    }
                 } catch (const std::runtime_error& e) {
                     throw std::runtime_error("part '" + part_name + "': " + e.what());
                 }
-                part.transform = world;
+                if (skinned) {
+                    // glTF ignores the node of a skinned mesh: the joints place it. In the rest
+                    // pose, a joint's rest matrix times its inverse bind matrix takes the mesh into
+                    // the model (the identity when the file was bound in the rest pose; not for a
+                    // Z-up rig such as Khronos's RiggedFigure). The first joint of the skin stands
+                    // for all: skinning (milestone 5, part 5) does each vertex exactly.
+                    const SkinData& skin = model.skins[static_cast<std::size_t>(part.skin)];
+                    part.transform = skin.joints.empty() ? glm::mat4(1.0f)
+                                                         : rest_model[static_cast<std::size_t>(skin.joints[0])] * skin.inverse_binds[0];
+                    // The farthest vertex from its main joint (weights are sorted, strongest first).
+                    for (std::size_t v = 0; v < part.mesh.vertices.size(); ++v) {
+                        const auto entry = static_cast<std::size_t>(part.mesh.skin[v].joints[0]);
+                        const glm::vec3 joint(rest_model[static_cast<std::size_t>(skin.joints[entry])][3]);
+                        const glm::vec3 vertex(part.transform * glm::vec4(part.mesh.vertices[v].position, 1.0f));
+                        part.skin_radius = std::max(part.skin_radius, glm::length(vertex - joint));
+                    }
+                } else {
+                    part.transform = world;
+                    if (carrier >= 0) {
+                        part.joint = carrier;
+                        part.joint_offset = glm::inverse(rest_model[static_cast<std::size_t>(carrier)]) * world;
+                    }
+                }
                 part.material = primitive.material != nullptr ? static_cast<int>(primitive.material - gltf->materials) : -1;
                 if (!part.mesh.indices.empty()) {
                     model.parts.push_back(std::move(part));
                 }
             }
         }
-        if (model.parts.empty()) {
+        if (skin_report.over_four > 0) {
+            SDL_Log("Model '%s': %zu vertices have more than four joint influences; the four strongest are kept",
+                    name.c_str(), skin_report.over_four);
+        }
+        if (skin_report.unweighted > 0) {
+            SDL_Log("Model '%s': %zu skinned vertices have no weight; they follow their skin's first joint",
+                    name.c_str(), skin_report.unweighted);
+        }
+        if (gltf_options.meshes && model.parts.empty()) {
             throw std::runtime_error("no triangle mesh in the default scene");
+        }
+
+        // Clips: the channels that move skeleton nodes, as linear keys starting at 0.
+        std::size_t morph_channels = 0;
+        std::set<std::string> clip_names;
+        for (cgltf_size a = 0; a < gltf->animations_count && !model.skeleton.empty(); ++a) {
+            const cgltf_animation& animation = gltf->animations[a];
+            ClipData clip;
+            clip.name = animation.name != nullptr && animation.name[0] != '\0' ? animation.name
+                                                                              : "animation " + std::to_string(a);
+            const std::string base_name = clip.name;
+            for (int copy = 2; clip_names.count(clip.name) != 0; ++copy) {
+                clip.name = base_name + " (" + std::to_string(copy) + ")";  // names must be unique
+            }
+            clip.tracks.resize(model.skeleton.joints.size());
+            float start = 0.0f;
+            float end = 0.0f;
+            bool any = false;
+            try {
+                for (cgltf_size c = 0; c < animation.channels_count; ++c) {
+                    const cgltf_animation_channel& channel = animation.channels[c];
+                    if (channel.target_path == cgltf_animation_path_type_weights) {
+                        ++morph_channels;
+                        continue;
+                    }
+                    if (channel.target_node == nullptr || channel.sampler == nullptr) {
+                        continue;
+                    }
+                    const int joint = joint_of[index_of(channel.target_node)];
+                    if (joint < 0) {
+                        continue;  // a node outside the default scene
+                    }
+                    JointTrack& track = clip.tracks[static_cast<std::size_t>(joint)];
+                    const cgltf_animation_sampler& sampler = *channel.sampler;
+                    float first = 0.0f;
+                    float last = 0.0f;
+                    switch (channel.target_path) {
+                        case cgltf_animation_path_type_translation:
+                            track.translations = read_keys<glm::vec3>(sampler, 3);
+                            first = track.translations.times.front();
+                            last = track.translations.times.back();
+                            break;
+                        case cgltf_animation_path_type_rotation:
+                            track.rotations = to_rotations(read_keys<glm::vec4>(sampler, 4));
+                            first = track.rotations.times.front();
+                            last = track.rotations.times.back();
+                            break;
+                        case cgltf_animation_path_type_scale:
+                            track.scales = read_keys<glm::vec3>(sampler, 3);
+                            first = track.scales.times.front();
+                            last = track.scales.times.back();
+                            break;
+                        default:
+                            continue;
+                    }
+                    start = any ? std::min(start, first) : first;
+                    end = any ? std::max(end, last) : last;
+                    any = true;
+                }
+            } catch (const std::runtime_error& e) {
+                throw std::runtime_error("animation '" + clip.name + "': " + e.what());
+            }
+            if (!any) {
+                SDL_Log("Model '%s': animation '%s' moves no node of the skeleton, skipped", name.c_str(), clip.name.c_str());
+                continue;
+            }
+            // Blender exports the start of the scene's frame range: the clip starts at its first key.
+            for (JointTrack& track : clip.tracks) {
+                shift_times(track.translations, start);
+                shift_times(track.rotations, start);
+                shift_times(track.scales, start);
+            }
+            constexpr float kPoseDuration = 1.0f / 60.0f;
+            clip.duration = end - start > 1e-6f ? end - start : kPoseDuration;
+            clip_names.insert(clip.name);
+            model.clips.push_back(std::move(clip));
+        }
+        if (morph_channels > 0) {
+            SDL_Log("Model '%s': %zu morph target channels skipped (not supported)", name.c_str(), morph_channels);
         }
         return model;
     } catch (const std::exception& e) {
@@ -465,8 +869,15 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
         model.gpu_bytes += part.mesh.gpu_bytes;
         part.transform = source.transform;
         part.material = source.material;
+        part.node = source.node;
+        part.skin = source.skin;
+        part.joint = source.joint;
+        part.joint_offset = source.joint_offset;
+        part.skin_radius = source.skin_radius;
         model.parts.push_back(std::move(part));
     }
+    model.skins = data.skins;
+    model.joint_count = data.skeleton.joints.size();
     model.bounds = data.bounds();
     model.triangle_count = data.triangle_count();
     return model;
@@ -512,13 +923,23 @@ void Model::replace_in_place(Model&& fresh) {
         materials[i] = material;
     }
     for (std::size_t i = 0; i < parts.size(); ++i) {
-        parts[i].mesh = std::move(fresh.parts[i].mesh);
-        parts[i].transform = fresh.parts[i].transform;
-        parts[i].material = fresh.parts[i].material;
+        parts[i] = std::move(fresh.parts[i]);  // each Mesh stays at its address, with the new buffers
     }
+    skins = std::move(fresh.skins);
+    joint_count = fresh.joint_count;
     bounds = fresh.bounds;
     triangle_count = fresh.triangle_count;
     gpu_bytes = fresh.gpu_bytes;
+}
+
+std::vector<std::uint32_t> Model::parts_of(std::string_view node) const {
+    std::vector<std::uint32_t> indices;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        if (parts[i].node == node) {
+            indices.push_back(static_cast<std::uint32_t>(i));
+        }
+    }
+    return indices;
 }
 
 }  // namespace moteur

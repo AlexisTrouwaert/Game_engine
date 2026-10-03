@@ -41,10 +41,12 @@
 #include "moteur/tilemap.hpp"
 #include "moteur/version.hpp"
 
+#include "anim_compare.hpp"
 #include "blender_compare.hpp"
 #include "demo3d.hpp"
 #include "sandbox_scene.hpp"
 #include "states_demo.hpp"
+#include "animation_test.hpp"
 #include "audio_test.hpp"
 
 namespace {
@@ -1739,6 +1741,12 @@ public:
              "les volumes par groupe, et une rafale de 200 impacts en une seconde pour la limite de voix. "
              "Les sons viennent de tools/audio/fetch_test_sounds.py.",
              TestKind::Audio, {}, {}},
+            {"Animation",
+             "Les personnages animés de test côte à côte, chacun jouant un clip de son fichier (choix du clip, "
+             "vitesse, temps), leur squelette par-dessus. Jalon 5 en cours : les maillages déformés restent en "
+             "pose de repos jusqu'au skinning ; les armes et casques suivent déjà leur os. Les personnages "
+             "viennent de tools/models/fetch_test_characters.py.",
+             TestKind::Animation, {}, {}},
         };
         if (launch_test >= 0 && launch_test < static_cast<int>(tests_.size())) {
             request(Action::Launch, launch_test);
@@ -1803,7 +1811,7 @@ public:
 private:
     enum class Screen { Home, Tests, Running };
     enum class Action { None, ShowHome, ShowTests, Launch };
-    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare, States, Audio };
+    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare, States, Audio, Animation };
 
     struct TestEntry {
         const char* name;
@@ -1847,6 +1855,8 @@ private:
                         next = std::make_unique<BlenderCompare>(app_, BlenderCompare::Options{}, false);
                     } else if (test.kind == TestKind::Audio) {
                         next = std::make_unique<AudioTest>(app_, AudioTest::Options{}, false);
+                    } else if (test.kind == TestKind::Animation) {
+                        next = std::make_unique<AnimationTest>(app_, AnimationTest::Options{}, false);
                     } else if (test.kind == TestKind::States) {
                         StatesDemo::Options states;
                         states.demo = test.demo3d;
@@ -2087,6 +2097,7 @@ private:
                     ImGui::SliderInt("Créatures", &test.demo3d.creatures, 0, 5000);
                     break;
                 case TestKind::Audio:
+                case TestKind::Animation:
                 case TestKind::Atlas:
                 case TestKind::Text:
                 case TestKind::BlenderCompare:
@@ -2109,7 +2120,8 @@ private:
             return;
         }
         ImGui::PushItemWidth(200.0f);
-        static const char* const kViews[] = {"Éclairé", "Fil de fer", "Normales", "Couleur de base", "Distance"};
+        static const char* const kViews[] = {"Éclairé", "Fil de fer", "Normales", "Couleur de base", "Distance",
+                                             "Poids d'un os"};
         int view = static_cast<int>(meshes.view());
         if (ImGui::Combo("Vue", &view, kViews, IM_ARRAYSIZE(kViews))) {
             meshes.set_view(static_cast<moteur::MeshView>(view));
@@ -2192,12 +2204,16 @@ int main(int argc, char** argv) {
     int menu_test = -1;  // --menu-test N: the menu, with its test N (from 0) already running
     TestScene::Options options;
     bool vsync = true;
+    double fixed_hz = 60.0;  // --fixed-hz N: another logic rate (animation interpolation made visible at 10)
     bool report = false;
     bool map_explicit = false;
     bool sprites_explicit = false;
     bool demo3d = false;
     Demo3D::Options demo3d_options;
     bool blender_compare = false;
+    AnimationTest::Options crowd_options;  // --skinned N [--no-shadows]: the animation load test
+    bool anim_compare = false;  // --anim-compare [clip seconds]: the knight's pose, to compare with Blender
+    AnimCompare::Options anim_compare_options;
     bool states = false;  // --states: the game states test; --states-cycles N: with its autopilot
     int states_cycles = 0;
     bool audio_test = false;   // --audio: the audio test; --audio-burst: with a burst of 200 sounds at the start
@@ -2262,6 +2278,7 @@ int main(int argc, char** argv) {
                          : name == "normals" ? moteur::MeshView::Normals
                          : name == "albedo"  ? moteur::MeshView::BaseColor
                          : name == "distance" ? moteur::MeshView::Distance
+                         : name == "weights"  ? moteur::MeshView::Weights
                                              : moteur::MeshView::Lit;
         } else if (arg == "--debug-texture" && has_one) {
             const std::string_view name = argv[i + 1];
@@ -2285,6 +2302,21 @@ int main(int argc, char** argv) {
             gpu_timing = true;
         } else if (arg == "--blender-compare") {
             blender_compare = true;
+        } else if (arg == "--skinned" && has_one) {
+            crowd_options.crowd = std::max(1, std::atoi(argv[i + 1]));
+            ++i;
+        } else if (arg == "--skinned-zoom" && has_one) {
+            crowd_options.crowd_zoom = static_cast<float>(std::strtod(argv[i + 1], nullptr));
+            ++i;
+        } else if (arg == "--no-shadows") {
+            crowd_options.sun_shadows = false;
+        } else if (arg == "--anim-compare") {
+            anim_compare = true;
+            if (i + 2 < argc && argv[i + 1][0] != '-') {
+                anim_compare_options.clip = argv[i + 1];
+                anim_compare_options.seconds = std::strtod(argv[i + 2], nullptr);
+                i += 2;
+            }
         } else if (arg == "--audio") {
             audio_test = true;
         } else if (arg == "--audio-burst") {
@@ -2341,6 +2373,9 @@ int main(int argc, char** argv) {
             block_compression = false;
         } else if (arg == "--no-vsync") {
             vsync = false;
+        } else if (arg == "--fixed-hz" && has_one) {
+            fixed_hz = std::max(1.0, std::atof(argv[i + 1]));
+            ++i;
         } else if (arg == "--no-batching") {
             options.batching = false;
         } else if (arg == "--depth") {
@@ -2354,6 +2389,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--menu-test" && has_one) {
             menu = true;
             menu_test = std::atoi(argv[i + 1]);
+        } else if (arg == "--animation") {  // the "Animation" test (milestone 5): --menu-test 10
+            menu = true;
+            menu_test = 10;
         }
     }
     if (options.demo) {
@@ -2374,6 +2412,7 @@ int main(int argc, char** argv) {
         config.record_input_path = record_input;
         config.replay_input_path = replay_input;
         config.vsync = vsync;
+        config.fixed_hz = fixed_hz;
         config.report_performance = report;
         config.gpu_timing = gpu_timing;
         config.pixel_width = pixel_size.x;
@@ -2429,6 +2468,20 @@ int main(int argc, char** argv) {
             StatesDemo game(app, states_options, true);
             app.run(game);
             game.report();
+            return 0;
+        }
+        if (crowd_options.crowd > 0) {
+            crowd_options.run_seconds = options.run_seconds;
+            crowd_options.report = report;
+            AnimationTest crowd(app, crowd_options, true);
+            app.run(crowd);
+            return 0;
+        }
+        if (anim_compare) {
+            anim_compare_options.capture_path = options.capture_path;
+            anim_compare_options.run_seconds = options.run_seconds;
+            AnimCompare compare(app, anim_compare_options);
+            app.run(compare);
             return 0;
         }
         if (blender_compare) {

@@ -93,7 +93,9 @@ bool inspector_filter_matches(std::string_view filter, std::uint32_t entity_numb
 // - the asset browser: what the asset manager holds, by type, memory, users, state, a reload button;
 // - the inputs: every action with its bindings and state, the devices;
 // - the audio: device, voices, volumes by group, the last sound refused by a limit;
-// - the game states: the stacks being watched, from the bottom to the top.
+// - the game states: the stacks being watched, from the bottom to the top;
+// - the animation (milestone 5): an animated entity of the world, a timeline per clip it plays with
+//   its events, the weights, the last event and its tick.
 //
 // The Application creates it with the debug interface (ApplicationConfig::debug_ui), never without.
 // The game decides where its windows are opened (menu_items(), inside its own DEBUG menu) and
@@ -108,8 +110,8 @@ bool inspector_filter_matches(std::string_view filter, std::uint32_t entity_numb
 // anything (except the Hidden tag): the game keeps entities and expects their components.
 class DebugTools {
 public:
-    enum class Window { Inspector, Assets, Input, Audio, States };
-    static constexpr int kWindowCount = 5;
+    enum class Window { Inspector, Assets, Input, Audio, States, Animation };
+    static constexpr int kWindowCount = 6;
 
     explicit DebugTools(Application& app);
     ~DebugTools();
@@ -160,6 +162,7 @@ private:
     void draw_input();
     void draw_audio();
     void draw_states();
+    void draw_animation();
 
     Application& app_;
     ComponentInspectors components_;
@@ -172,6 +175,7 @@ private:
     char filter_[64] = {};
     bool named_only_ = false;
     std::vector<entt::entity> listed_;  // reused each frame
+    entt::entity animated_ = entt::null;  // shown by the animation window
 
     struct WatchedStack {
         StateStack* stack;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <glm/gtc/type_precision.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -13,8 +14,8 @@ namespace moteur {
 
 class Renderer;
 
-// One vertex of a 3D mesh, as the GPU reads it: 48 bytes. Skinning attributes (animation) will be
-// added by milestone 5.
+// One vertex of a 3D mesh, as the GPU reads it: 48 bytes. A skinned mesh adds a VertexSkin per
+// vertex, in a buffer of its own (milestone 5).
 struct Vertex3D {
     glm::vec3 position{0.0f};
     glm::vec3 normal{0.0f, 1.0f, 0.0f};
@@ -25,6 +26,17 @@ struct Vertex3D {
     glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
 };
 
+// How a vertex of a skinned mesh follows the skeleton: up to four joints (indices in its skin's
+// palette, see SkinData) and their weights, in 65535ths, which add up to exactly 65535. Unused
+// entries have a weight of 0.
+struct VertexSkin {
+    glm::u8vec4 joints{0};
+    glm::u16vec4 weights{65535, 0, 0, 0};
+
+    bool operator==(const VertexSkin&) const = default;
+};
+static_assert(sizeof(VertexSkin) == 12, "VertexSkin is uploaded as is: joints at 0, weights at 4");
+
 // A mesh on the CPU: plain data that can be built, tested and inspected without a GPU.
 //
 // World conventions (see milestone 3, part 2): right-handed, Y up, 1 unit = 1 metre. Triangles are
@@ -33,6 +45,7 @@ struct Vertex3D {
 struct MeshData {
     std::vector<Vertex3D> vertices;
     std::vector<std::uint32_t> indices;  // three per triangle
+    std::vector<VertexSkin> skin;        // one per vertex for a skinned mesh, else empty
 
     std::size_t triangle_count() const { return indices.size() / 3; }
     Aabb bounds() const;
@@ -56,13 +69,16 @@ MeshData make_sphere(float radius = 0.5f, int segments = 32, int rings = 16);
 struct Mesh {
     GpuBuffer vertices;
     GpuBuffer indices;       // 32-bit
+    GpuBuffer skin;          // one VertexSkin per vertex, for a skinned mesh (MeshData::skin)
     std::uint32_t index_count = 0;
     Aabb bounds;
-    std::size_t gpu_bytes = 0;  // vertices and indices
+    std::size_t gpu_bytes = 0;  // vertices, indices and skin
+
+    bool skinned() const { return static_cast<bool>(skin); }
 
     // Uploads `data` and waits for the GPU (loading time, not inside a frame). `name` labels the
-    // buffers for graphics debuggers. Throws std::invalid_argument for an empty mesh, and
-    // std::runtime_error if the GPU refuses the buffers.
+    // buffers for graphics debuggers. Throws std::invalid_argument for an empty mesh or a skin that
+    // does not have one entry per vertex, and std::runtime_error if the GPU refuses the buffers.
     static Mesh create(Renderer& renderer, const MeshData& data, const char* name = nullptr);
 };
 

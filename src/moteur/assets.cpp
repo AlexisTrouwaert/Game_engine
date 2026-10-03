@@ -161,7 +161,13 @@ Assets::Assets(Renderer& renderer, std::string root)
       atlases_("atlas", {}, [](const TextureAtlas& atlas) { return atlas.gpu_bytes(); }),
       animations_("animations"),
       sounds_("sound", [] { return placeholder_sound(); }, [](const Sound& sound) { return sound.bytes(); }),
-      musics_("music", [] { return Music{}; }, [](const Music& music) { return music.memory(); }) {}
+      musics_("music", [] { return Music{}; }, [](const Music& music) { return music.memory(); }),
+      // Players point to skeletons and clips: a reload keeps them where they are.
+      skeletons_("skeleton", {}, [](const Skeleton& skeleton) { return skeleton.bytes(); },
+                 [](Skeleton& current, Skeleton&& fresh) { current.replace_in_place(std::move(fresh)); }),
+      clips_("clips", {}, [](const ClipLibrary& clips) { return clips.bytes(); },
+             [](ClipLibrary& current, ClipLibrary&& fresh) { current.replace_in_place(std::move(fresh)); }),
+      animation_sets_("animation set") {}
 
 // The watcher goes first: its thread must not call into a half-destroyed manager.
 Assets::~Assets() {
@@ -274,6 +280,53 @@ Asset<Music> Assets::music(std::string_view path) {
     });
 }
 
+namespace {
+
+// A glTF file read for its skeleton and clips only.
+ModelData read_animation_file(const std::string& root, const std::string& key, std::vector<std::string>& files) {
+    GltfOptions options;
+    options.meshes = false;
+    ModelData data = load_gltf(root + key, options);
+    for (const std::string& file : data.files) {
+        files.push_back(normalize_asset_path(directory_of(key) + file));
+    }
+    if (data.skeleton.empty()) {
+        throw std::runtime_error("Model '" + key + "': no skeleton (no skin, no animated node)");
+    }
+    return data;
+}
+
+}  // namespace
+
+Asset<Skeleton> Assets::skeleton(std::string_view path) {
+    const std::string key = normalize_asset_path(path);
+    return skeletons_.get(key, [this, key](std::vector<std::string>& files) {
+        files.push_back(key);
+        check_asset_case(root_, key);
+        return Skeleton::create(read_animation_file(root_, key, files).skeleton, key);
+    });
+}
+
+Asset<ClipLibrary> Assets::clips(std::string_view path) {
+    const std::string key = normalize_asset_path(path);
+    return clips_.get(key, [this, key](std::vector<std::string>& files) {
+        files.push_back(key);
+        check_asset_case(root_, key);
+        const ModelData data = read_animation_file(root_, key, files);
+        return ClipLibrary::create(data.skeleton, data.clips, key);
+    });
+}
+
+Asset<AnimationSet> Assets::animation_set(std::string_view path) {
+    const std::string key = normalize_asset_path(path);
+    return animation_sets_.get(key, [this, key](std::vector<std::string>& files) {
+        files.push_back(key);
+        check_asset_case(root_, key);
+        const FileData file = read_file(root_ + key);
+        return AnimationSet::parse({static_cast<const char*>(file.data()), file.size()}, key);
+    });
+}
+
 std::size_t Assets::collect_garbage() {
     // Models first: they hold textures, which become free once the models are gone.
     std::size_t freed = models_.collect_garbage();
@@ -284,6 +337,9 @@ std::size_t Assets::collect_garbage() {
     freed += animations_.collect_garbage();
     freed += sounds_.collect_garbage();
     freed += musics_.collect_garbage();
+    freed += skeletons_.collect_garbage();
+    freed += clips_.collect_garbage();
+    freed += animation_sets_.collect_garbage();
     if (freed > 0) {
         SDL_Log("Assets: %zu freed", freed);
     }
@@ -351,6 +407,15 @@ void Assets::reload_file(const std::string& key) {
     for (const std::string& asset : musics_.keys_using(key)) {
         musics_.reload(asset);
     }
+    for (const std::string& asset : skeletons_.keys_using(key)) {
+        skeletons_.reload(asset);
+    }
+    for (const std::string& asset : clips_.keys_using(key)) {
+        clips_.reload(asset);
+    }
+    for (const std::string& asset : animation_sets_.keys_using(key)) {
+        animation_sets_.reload(asset);
+    }
 }
 
 namespace {
@@ -372,12 +437,14 @@ AssetTypeStats stats_of(const AssetCache<T>& cache) {
 
 std::vector<AssetTypeStats> Assets::stats() const {
     return {stats_of(textures_), stats_of(models_), stats_of(environments_),
-            stats_of(fonts_),    stats_of(atlases_), stats_of(animations_), stats_of(sounds_), stats_of(musics_)};
+            stats_of(fonts_),    stats_of(atlases_), stats_of(animations_), stats_of(sounds_), stats_of(musics_),
+            stats_of(skeletons_), stats_of(clips_), stats_of(animation_sets_)};
 }
 
 std::vector<std::vector<AssetInfo>> Assets::infos() const {
     return {textures_.infos(), models_.infos(), environments_.infos(),
-            fonts_.infos(),    atlases_.infos(), animations_.infos(), sounds_.infos(), musics_.infos()};
+            fonts_.infos(),    atlases_.infos(), animations_.infos(), sounds_.infos(), musics_.infos(),
+            skeletons_.infos(), clips_.infos(), animation_sets_.infos()};
 }
 
 bool Assets::reload(std::size_t type, const std::string& key) {
@@ -390,6 +457,9 @@ bool Assets::reload(std::size_t type, const std::string& key) {
         case 5: return false;
         case 6: return sounds_.reload(key);
         case 7: return musics_.reload(key);
+        case 8: return skeletons_.reload(key);
+        case 9: return clips_.reload(key);
+        case 10: return animation_sets_.reload(key);
         default: return false;
     }
 }

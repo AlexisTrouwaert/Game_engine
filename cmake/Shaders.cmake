@@ -3,7 +3,9 @@
 #   moteur_add_shaders(<target> SOURCES sprite.vert.hlsl sprite.frag.hlsl ...)
 #
 # Sources are HLSL files under shaders/, named <name>.<stage>.hlsl with stage in
-# {vert, frag, comp}. The result lands in <target output dir>/shaders/ where
+# {vert, frag, comp}. They may #include other files of shaders/ (a variant defines a macro and
+# includes its base, such as mesh_skinned.vert.hlsl): every shader is rebuilt when any file of
+# shaders/ changes, which costs little and never leaves one stale. The result lands in <target output dir>/shaders/ where
 # Renderer::load_shader() looks for it.
 #
 # Windows: compiled at build time to DXIL (Direct3D 12) with the `shadercross` tool from the
@@ -44,6 +46,7 @@ function(moteur_add_shaders target)
     get_target_property(binary_dir ${target} BINARY_DIR)
     set(out_dir "${binary_dir}/shaders")
 
+    file(GLOB shader_files CONFIGURE_DEPENDS "${MOTEUR_SHADER_SOURCE_DIR}/*.hlsl" "${MOTEUR_SHADER_SOURCE_DIR}/*.hlsli")
     set(outputs "")
     foreach(source IN LISTS ARG_SOURCES)
         set(input "${MOTEUR_SHADER_SOURCE_DIR}/${source}")
@@ -65,8 +68,8 @@ function(moteur_add_shaders target)
                 OUTPUT "${output}"
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${out_dir}"
                 COMMAND "${MOTEUR_SHADERCROSS_EXE}" "${input}"
-                        -s HLSL -d DXIL -t ${stage} -e main -o "${output}"
-                DEPENDS "${input}"
+                        -s HLSL -d DXIL -t ${stage} -e main -I "${MOTEUR_SHADER_SOURCE_DIR}" -o "${output}"
+                DEPENDS ${shader_files}
                 COMMENT "Compiling ${source} -> DXIL"
                 VERBATIM)
 
@@ -75,8 +78,8 @@ function(moteur_add_shaders target)
             add_custom_target(export_msl_${base}
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${MOTEUR_SHADER_MSL_DIR}"
                 COMMAND "${MOTEUR_SHADERCROSS_EXE}" "${input}"
-                        -s HLSL -d MSL -t ${stage} -e main -o "${msl}"
-                DEPENDS "${input}"
+                        -s HLSL -d MSL -t ${stage} -e main -I "${MOTEUR_SHADER_SOURCE_DIR}" -o "${msl}"
+                DEPENDS ${shader_files}
                 COMMENT "Exporting ${source} -> MSL"
                 VERBATIM)
             add_dependencies(export_msl_shaders export_msl_${base})

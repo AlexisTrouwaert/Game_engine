@@ -1,4 +1,5 @@
 find_package(EnTT CONFIG REQUIRED)
+find_package(ozz-animation CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
@@ -26,6 +27,11 @@ endif()
 
 add_library(moteur STATIC
     animation.cpp
+    animation_clock.cpp
+    animation_data.cpp
+    animation_debug.cpp
+    animation_set.cpp
+    animator.cpp
     application.cpp
     asset_cache.cpp
     assets.cpp
@@ -57,6 +63,7 @@ add_library(moteur STATIC
     renderer.cpp
     screenshot.cpp
     shadow.cpp
+    skeleton.cpp
     sound.cpp
     sprite_batcher.cpp
     sprite_region.cpp
@@ -74,7 +81,8 @@ add_library(moteur STATIC
 target_include_directories(moteur PUBLIC include)
 target_include_directories(moteur SYSTEM PRIVATE ${STB_INCLUDE_DIRS} ${CGLTF_INCLUDE_DIRS})
 target_link_libraries(moteur PUBLIC SDL3::SDL3 glm::glm imgui::imgui EnTT::EnTT
-                      PRIVATE nlohmann_json::nlohmann_json mikktspace::mikktspace efsw::efsw KTX::ktx moteur_miniaudio)
+                      PRIVATE nlohmann_json::nlohmann_json mikktspace::mikktspace efsw::efsw KTX::ktx moteur_miniaudio
+                              ozz::animation_offline ozz::animation)
 if(WIN32)
     target_link_libraries(moteur PRIVATE psapi)  # process_memory_bytes()
 endif()

@@ -88,11 +88,13 @@ Texture one_pixel(Renderer& renderer, std::uint8_t r, std::uint8_t g, std::uint8
 }
 
 // The vertex inputs of the mesh pipelines. Slot 0: the mesh's vertices. Slot 1: one MeshInstance
-// per instance.
+// per instance. Slot 2, for skinned meshes only: one VertexSkin per vertex (locations 13 and 14).
 struct MeshVertexInput {
     static constexpr int kInstanceAttributes = 9;  // locations 4 to 12: nine float4 (see MeshInstance)
-    SDL_GPUVertexBufferDescription buffers[2] = {};
-    SDL_GPUVertexAttribute attributes[4 + kInstanceAttributes] = {};
+    static constexpr int kAttributes = 4 + kInstanceAttributes;
+    static constexpr int kSkinnedAttributes = kAttributes + 2;
+    SDL_GPUVertexBufferDescription buffers[3] = {};
+    SDL_GPUVertexAttribute attributes[kSkinnedAttributes] = {};
 
     MeshVertexInput() {
         buffers[0].slot = 0;
@@ -120,8 +122,21 @@ struct MeshVertexInput {
             attribute.format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
             attribute.offset = static_cast<Uint32>(i * sizeof(glm::vec4));
         }
+        buffers[2].slot = 2;
+        buffers[2].pitch = sizeof(VertexSkin);
+        buffers[2].input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+        attributes[kAttributes].location = kAttributes;  // joints, TEXCOORD13: read as uint4
+        attributes[kAttributes].buffer_slot = 2;
+        attributes[kAttributes].format = SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4;
+        attributes[kAttributes].offset = offsetof(VertexSkin, joints);
+        attributes[kAttributes + 1].location = kAttributes + 1;  // weights, TEXCOORD14: 65535ths read as [0, 1]
+        attributes[kAttributes + 1].buffer_slot = 2;
+        attributes[kAttributes + 1].format = SDL_GPU_VERTEXELEMENTFORMAT_USHORT4_NORM;
+        attributes[kAttributes + 1].offset = offsetof(VertexSkin, weights);
     }
 };
+
+constexpr int kEmissiveAttribute = 4 + 8;  // the instance's emissive row: its w is the palette of a skinned one
 
 }  // namespace
 
@@ -137,6 +152,9 @@ MeshRenderer::MeshRenderer(Renderer& renderer, SDL_GPUTextureFormat color_format
 
     // Kept: the scene pipelines are made again when the number of samples changes (MSAA).
     vertex_shader_ = renderer.load_shader("mesh.vert", vertex_info);
+    ShaderInfo skinned_info = vertex_info;
+    skinned_info.storage_buffers = 1;  // the palettes
+    skinned_vertex_shader_ = renderer.load_shader("mesh_skinned.vert", skinned_info);
     fragment_shader_ = renderer.load_shader("mesh.frag", fragment_info);
     create_scene_pipelines(SDL_GPU_SAMPLECOUNT_1);
     const MeshVertexInput input;
@@ -225,6 +243,37 @@ MeshRenderer::MeshRenderer(Renderer& renderer, SDL_GPUTextureFormat color_format
         shadow.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
         shadow_double_sided_ = create_shadow("shadow pipeline (double sided)");
 
+        // Skinned: the palette (the instance's emissive row, location 4) and the vertex's joints and
+        // weights (5 and 6) as well, from the skin slot.
+        ShaderInfo skinned_shadow_info = shadow_vertex_info;
+        skinned_shadow_info.storage_buffers = 1;
+        const GpuShader shadow_skinned_vertex = renderer.load_shader("shadow_skinned.vert", skinned_shadow_info);
+        SDL_GPUVertexAttribute skinned_attributes[7] = {shadow_attributes[0], shadow_attributes[1], shadow_attributes[2],
+                                                        shadow_attributes[3], input.attributes[kEmissiveAttribute],
+                                                        input.attributes[MeshVertexInput::kAttributes],
+                                                        input.attributes[MeshVertexInput::kAttributes + 1]};
+        for (Uint32 i = 4; i < 7; ++i) {
+            skinned_attributes[i].location = i;
+        }
+        const auto create_skinned = [&](const GpuShader& vertex, const char* name) {
+            SDL_GPUGraphicsPipelineCreateInfo skinned = shadow;
+            skinned.vertex_shader = vertex.get();
+            skinned.vertex_input_state.num_vertex_buffers = 3;
+            skinned.vertex_input_state.vertex_attributes = skinned_attributes;
+            skinned.vertex_input_state.num_vertex_attributes = 7;
+            const NameProperty name_property(SDL_PROP_GPU_GRAPHICSPIPELINE_CREATE_NAME_STRING, name);
+            skinned.props = name_property.id();
+            SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device_, &skinned);
+            if (pipeline == nullptr) {
+                throw std::runtime_error(std::string("SDL_CreateGPUGraphicsPipeline (") + name + ") failed: " + SDL_GetError());
+            }
+            return GpuGraphicsPipeline(device_, pipeline);
+        };
+        shadow.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
+        shadow_skinned_single_sided_ = create_skinned(shadow_skinned_vertex, "shadow pipeline (skinned)");
+        shadow.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+        shadow_skinned_double_sided_ = create_skinned(shadow_skinned_vertex, "shadow pipeline (skinned, double sided)");
+
         // Point light shadows: the same inputs, but the depth written is the distance to the light
         // (point_shadow.frag.hlsl), so no slope bias: the bias is a length, applied when shading.
         ShaderInfo point_fragment_info;
@@ -241,6 +290,11 @@ MeshRenderer::MeshRenderer(Renderer& renderer, SDL_GPUTextureFormat color_format
         point_single_sided_ = create_shadow("point shadow pipeline");
         shadow.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
         point_double_sided_ = create_shadow("point shadow pipeline (double sided)");
+        const GpuShader point_skinned_vertex = renderer.load_shader("point_shadow_skinned.vert", skinned_shadow_info);
+        shadow.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
+        point_skinned_single_sided_ = create_skinned(point_skinned_vertex, "point shadow pipeline (skinned)");
+        shadow.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+        point_skinned_double_sided_ = create_skinned(point_skinned_vertex, "point shadow pipeline (skinned, double sided)");
 
         // Clearing one tile: a triangle at the far depth, no vertex input, always written.
         ShaderInfo clear_vertex_info;
@@ -326,6 +380,19 @@ void MeshRenderer::create_scene_pipelines(SDL_GPUSampleCount samples) {
     wireframe_double_sided_ = create("mesh pipeline (wireframe, double sided)");
     info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
     wireframe_single_sided_ = create("mesh pipeline (wireframe)");
+
+    // Skinned meshes: the skin slot and its two attributes, and the palettes.
+    info.vertex_shader = skinned_vertex_shader_.get();
+    info.vertex_input_state.num_vertex_buffers = 3;
+    info.vertex_input_state.num_vertex_attributes = MeshVertexInput::kSkinnedAttributes;
+    info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+    skinned_single_sided_ = create("mesh pipeline (skinned)");
+    info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+    skinned_double_sided_ = create("mesh pipeline (skinned, double sided)");
+    info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_LINE;
+    skinned_wireframe_double_sided_ = create("mesh pipeline (skinned, wireframe, double sided)");
+    info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
+    skinned_wireframe_single_sided_ = create("mesh pipeline (skinned, wireframe)");
 }
 
 void MeshRenderer::set_sun(glm::vec3 to_light, glm::vec3 color, float intensity) {
@@ -353,6 +420,29 @@ void MeshRenderer::draw(const Mesh& mesh, const glm::mat4& world, const Material
 
 void MeshRenderer::draw(const Mesh& mesh, const glm::mat4& world, const Material& material, const Aabb& bounds) {
     draws_.push_back({&mesh, world, material, bounds});
+}
+
+MeshRenderer::Palette MeshRenderer::add_palette(const std::vector<glm::mat4>& matrices) {
+    Palette palette;
+    palette.first = static_cast<std::int32_t>(palette_rows_.size() / 3);
+    palette.size = static_cast<std::uint32_t>(matrices.size());
+    // GLM stores columns: row r of m is (m[0][r], m[1][r], m[2][r], m[3][r]); the fourth row is 0, 0, 0, 1.
+    for (const glm::mat4& m : matrices) {
+        for (int r = 0; r < 3; ++r) {
+            palette_rows_.emplace_back(m[0][r], m[1][r], m[2][r], m[3][r]);
+        }
+    }
+    return palette;
+}
+
+void MeshRenderer::draw(const Mesh& mesh, const glm::mat4& world, const Material& material, const Aabb& bounds,
+                        Palette palette) {
+    MeshDraw draw{&mesh, world, material, bounds};
+    if (mesh.skinned() && palette.first >= 0) {
+        draw.palette = palette.first;
+        draw.palette_size = palette.size;
+    }
+    draws_.push_back(draw);
 }
 
 void MeshRenderer::draw(const Mesh& mesh, const glm::mat4& world, glm::vec4 color, const Texture* texture) {
@@ -417,6 +507,20 @@ void MeshRenderer::ensure_instance_capacity(std::size_t instances) {
     instance_capacity_ = capacity;
 }
 
+void MeshRenderer::ensure_palette_capacity(std::size_t rows) {
+    if (rows <= palette_capacity_) {
+        return;
+    }
+    std::size_t capacity = std::max<std::size_t>(palette_capacity_, 64 * 3);
+    while (capacity < rows) {
+        capacity *= 2;
+    }
+    const std::size_t bytes = capacity * sizeof(glm::vec4);
+    palette_buffer_ = renderer_.create_buffer(SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, bytes, "mesh.palettes");
+    palette_transfer_ = renderer_.create_transfer_buffer(bytes);
+    palette_capacity_ = capacity;
+}
+
 void MeshRenderer::prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats) {
     stats.dropped_lights += dropped_lights_;
     if (!has_work()) {
@@ -477,8 +581,25 @@ void MeshRenderer::prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats) {
     const SDL_GPUTransferBufferLocation source = {instance_transfer_.get(), 0};
     const SDL_GPUBufferRegion destination = {instance_buffer_.get(), 0, static_cast<Uint32>(bytes)};
     SDL_UploadToGPUBuffer(copy_pass, &source, &destination, true);
-    SDL_EndGPUCopyPass(copy_pass);
     stats.bytes_uploaded += bytes;
+
+    // The palettes of the skinned draws, the same for every pass.
+    if (!palette_rows_.empty()) {
+        ensure_palette_capacity(palette_rows_.size());
+        const std::size_t palette_bytes = palette_rows_.size() * sizeof(glm::vec4);
+        void* rows = SDL_MapGPUTransferBuffer(device_, palette_transfer_.get(), true);
+        if (rows == nullptr) {
+            SDL_EndGPUCopyPass(copy_pass);
+            throw std::runtime_error(std::string("SDL_MapGPUTransferBuffer (mesh palettes) failed: ") + SDL_GetError());
+        }
+        std::memcpy(rows, palette_rows_.data(), palette_bytes);
+        SDL_UnmapGPUTransferBuffer(device_, palette_transfer_.get());
+        const SDL_GPUTransferBufferLocation palette_source = {palette_transfer_.get(), 0};
+        const SDL_GPUBufferRegion palette_destination = {palette_buffer_.get(), 0, static_cast<Uint32>(palette_bytes)};
+        SDL_UploadToGPUBuffer(copy_pass, &palette_source, &palette_destination, true);
+        stats.bytes_uploaded += palette_bytes;
+    }
+    SDL_EndGPUCopyPass(copy_pass);
 }
 
 void MeshRenderer::prepare_point_shadows(RenderStats& stats) {
@@ -543,6 +664,10 @@ void MeshRenderer::prepare_point_shadows(RenderStats& stats) {
             hash_bytes(hash, &mesh, sizeof(mesh));
             hash_bytes(hash, &draw.world, sizeof(draw.world));
             hash_bytes(hash, &draw.material.double_sided, sizeof(bool));
+            if (draw.palette >= 0) {  // an animated character: its pose
+                hash_bytes(hash, &palette_rows_[static_cast<std::size_t>(draw.palette) * 3],
+                           static_cast<std::size_t>(draw.palette_size) * 3 * sizeof(glm::vec4));
+            }
         }
         signatures.push_back(hash);
     }
@@ -623,19 +748,13 @@ void MeshRenderer::render_point_shadows(SDL_GPUCommandBuffer* commands, SDL_GPUR
             const SDL_GPUGraphicsPipeline* bound_pipeline = nullptr;
             for (const MeshBatch& batch : batcher.batches()) {
                 SDL_GPUGraphicsPipeline* pipeline =
-                    batch.material->double_sided ? point_double_sided_.get() : point_single_sided_.get();
+                    batch.skinned ? (batch.material->double_sided ? point_skinned_double_sided_.get() : point_skinned_single_sided_.get())
+                                  : (batch.material->double_sided ? point_double_sided_.get() : point_single_sided_.get());
                 if (pipeline != bound_pipeline) {
                     SDL_BindGPUGraphicsPipeline(pass, pipeline);
                     bound_pipeline = pipeline;
                 }
-                const SDL_GPUBufferBinding buffers[2] = {
-                    {batch.mesh->vertices.get(), 0},
-                    {instance_buffer_.get(), static_cast<Uint32>((offset + batch.first_instance) * sizeof(MeshInstance))},
-                };
-                SDL_BindGPUVertexBuffers(pass, 0, buffers, 2);
-                const SDL_GPUBufferBinding indices = {batch.mesh->indices.get(), 0};
-                SDL_BindGPUIndexBuffer(pass, &indices, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-                SDL_DrawGPUIndexedPrimitives(pass, batch.mesh->index_count, batch.count, 0, 0, 0);
+                draw_batch(pass, batch, offset + batch.first_instance);
                 ++stats.draw_calls;
                 ++stats.point_shadow_draw_calls;
             }
@@ -653,21 +772,13 @@ void MeshRenderer::render_shadows(SDL_GPUCommandBuffer* commands, SDL_GPURenderP
     const SDL_GPUGraphicsPipeline* bound_pipeline = nullptr;
     for (const MeshBatch& batch : shadow_batcher_.batches()) {
         SDL_GPUGraphicsPipeline* pipeline =
-            batch.material->double_sided ? shadow_double_sided_.get() : shadow_single_sided_.get();
+            batch.skinned ? (batch.material->double_sided ? shadow_skinned_double_sided_.get() : shadow_skinned_single_sided_.get())
+                          : (batch.material->double_sided ? shadow_double_sided_.get() : shadow_single_sided_.get());
         if (pipeline != bound_pipeline) {
             SDL_BindGPUGraphicsPipeline(pass, pipeline);
             bound_pipeline = pipeline;
         }
-        // Each batch binds its own slice of the instance buffer: the instance index then starts at 0
-        // in the shader on every backend (first_instance is not reliable for that on all of them).
-        const SDL_GPUBufferBinding buffers[2] = {
-            {batch.mesh->vertices.get(), 0},
-            {instance_buffer_.get(), static_cast<Uint32>((base + batch.first_instance) * sizeof(MeshInstance))},
-        };
-        SDL_BindGPUVertexBuffers(pass, 0, buffers, 2);
-        const SDL_GPUBufferBinding indices = {batch.mesh->indices.get(), 0};
-        SDL_BindGPUIndexBuffer(pass, &indices, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-        SDL_DrawGPUIndexedPrimitives(pass, batch.mesh->index_count, batch.count, 0, 0, 0);
+        draw_batch(pass, batch, base + batch.first_instance);
         ++stats.draw_calls;
         ++stats.shadow_draw_calls;
     }
@@ -715,7 +826,11 @@ void MeshRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pas
                              shadow_options_.depth_bias);
     frame.debug_view = glm::vec4(static_cast<float>(view_), kDistanceViewRange, 0.0f, 0.0f);
     SDL_PushGPUFragmentUniformData(commands, 0, &frame, sizeof(frame));
-    SDL_PushGPUVertexUniformData(commands, 0, &view_projection_, sizeof(glm::mat4));
+    struct {
+        glm::mat4 view_projection;
+        glm::vec4 debug;
+    } vertex_frame{view_projection_, glm::vec4(static_cast<float>(weight_joint_), 0.0f, 0.0f, 0.0f)};
+    SDL_PushGPUVertexUniformData(commands, 0, &vertex_frame, sizeof(vertex_frame));
 
     // The shadow map is always bound (the shader ignores it when it was not drawn); it exists from
     // the first frame with 3D on (prepare() creates it when shadows are enabled).
@@ -734,9 +849,14 @@ void MeshRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pas
     const Texture* bound_textures[kMaterialTextures] = {};
     for (const MeshBatch& batch : main_batcher_.batches()) {
         const Material& material = *batch.material;
-        SDL_GPUGraphicsPipeline* pipeline = material.double_sided ? double_sided_.get() : single_sided_.get();
-        if (view_ == MeshView::Wireframe) {
-            pipeline = material.double_sided ? wireframe_double_sided_.get() : wireframe_single_sided_.get();
+        const bool wireframe = view_ == MeshView::Wireframe;
+        SDL_GPUGraphicsPipeline* pipeline = nullptr;
+        if (batch.skinned) {
+            pipeline = wireframe ? (material.double_sided ? skinned_wireframe_double_sided_ : skinned_wireframe_single_sided_).get()
+                                 : (material.double_sided ? skinned_double_sided_ : skinned_single_sided_).get();
+        } else {
+            pipeline = wireframe ? (material.double_sided ? wireframe_double_sided_ : wireframe_single_sided_).get()
+                                 : (material.double_sided ? double_sided_ : single_sided_).get();
         }
         if (pipeline != bound_pipeline) {
             // Bindings are not assumed to survive a pipeline change, on any backend: rebind everything.
@@ -767,19 +887,31 @@ void MeshRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pas
             }
             SDL_BindGPUFragmentSamplers(pass, 0, bindings, kMaterialTextures);
         }
-        const SDL_GPUBufferBinding buffers[2] = {
-            {batch.mesh->vertices.get(), 0},
-            {instance_buffer_.get(), static_cast<Uint32>(batch.first_instance * sizeof(MeshInstance))},
-        };
-        SDL_BindGPUVertexBuffers(pass, 0, buffers, 2);
-        const SDL_GPUBufferBinding indices = {batch.mesh->indices.get(), 0};
-        SDL_BindGPUIndexBuffer(pass, &indices, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-        SDL_DrawGPUIndexedPrimitives(pass, batch.mesh->index_count, batch.count, 0, 0, 0);
+        draw_batch(pass, batch, batch.first_instance);
         ++stats.draw_calls;
         ++stats.mesh_draw_calls;
     }
     stats.meshes += static_cast<int>(main_batcher_.visible());
     stats.triangles += main_batcher_.triangles();
+}
+
+void MeshRenderer::draw_batch(SDL_GPURenderPass* pass, const MeshBatch& batch, std::size_t first_instance) {
+    // Each batch binds its own slice of the instance buffer: the instance index then starts at 0 in
+    // the shader on every backend (first_instance is not reliable for that on all of them).
+    const SDL_GPUBufferBinding buffers[3] = {
+        {batch.mesh->vertices.get(), 0},
+        {instance_buffer_.get(), static_cast<Uint32>(first_instance * sizeof(MeshInstance))},
+        {batch.mesh->skin.get(), 0},
+    };
+    SDL_BindGPUVertexBuffers(pass, 0, buffers, batch.skinned ? 3 : 2);
+    if (batch.skinned) {
+        // Bound for every skinned batch: cheap, and no binding is assumed to survive a pipeline change.
+        SDL_GPUBuffer* palettes = palette_buffer_.get();
+        SDL_BindGPUVertexStorageBuffers(pass, 0, &palettes, 1);
+    }
+    const SDL_GPUBufferBinding indices = {batch.mesh->indices.get(), 0};
+    SDL_BindGPUIndexBuffer(pass, &indices, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+    SDL_DrawGPUIndexedPrimitives(pass, batch.mesh->index_count, batch.count, 0, 0, 0);
 }
 
 }  // namespace moteur

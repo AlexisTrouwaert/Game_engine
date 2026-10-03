@@ -40,7 +40,7 @@ cbuffer Frame : register(b0, space3) {
     float4x4 point_shadow_faces[MAX_SHADOWED_POINT_LIGHTS * 6];  // world -> each face, row * 6 + face
     float4 point_shadow_tiles;   // x, y: size of a tile in atlas coordinates; z: 1 / tile size in texels; w: normal offset (texels)
     float4 point_shadow_params;  // x, y: size of a texel in atlas coordinates; z: texel size per metre of distance; w: depth bias (m)
-    float4 debug_view;  // x: 0 lit, 1 wireframe (lit), 2 normals, 3 base color, 4 distance; y: distance shown black (m)
+    float4 debug_view;  // x: 0 lit, 1 wireframe (lit), 2 normals, 3 base color, 4 distance, 5 weights; y: distance shown black (m)
 };
 
 static const float PI = 3.14159265;
@@ -54,6 +54,7 @@ struct Input {
     nointerpolation float4 base_color : TEXCOORD4;  // linear
     nointerpolation float4 factors : TEXCOORD5;     // metallic, roughness, normal scale, occlusion strength
     nointerpolation float4 emissive : TEXCOORD6;    // rgb
+    float joint_weight : TEXCOORD7;                 // weights view (see mesh.vert.hlsl)
     bool front : SV_IsFrontFace;
 };
 
@@ -202,6 +203,15 @@ float4 main(Input input) : SV_Target0 {
     }
     if (view == 3) {
         return float4(base_color.rgb, 1.0);
+    }
+    if (view == 5) {
+        // A joint's weight: dark blue at 0, through green, to red at 1; grey where nothing is skinned.
+        if (input.joint_weight < 0.0) {
+            return float4(0.05, 0.05, 0.05, 1.0);
+        }
+        const float w = saturate(input.joint_weight);
+        const float3 heat = saturate(float3(2.0 * w - 1.0, 1.0 - abs(2.0 * w - 1.0), 1.0 - 2.0 * w)) * (0.15 + 0.85 * w) + float3(0.0, 0.0, 0.05);
+        return float4(pow(heat, 2.2), 1.0);
     }
     if (view == 4) {
         const float near = saturate(1.0 - length(eye.xyz - input.world_position) / debug_view.y);

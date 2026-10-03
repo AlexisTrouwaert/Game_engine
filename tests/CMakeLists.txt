@@ -3,6 +3,10 @@ find_package(doctest CONFIG REQUIRED)
 add_executable(moteur_tests
     main.cpp
     test_animation.cpp
+    test_animator.cpp
+    test_blending.cpp
+    test_attachment.cpp
+    test_animation_debug.cpp
     test_asset_cache.cpp
     test_anti_aliasing.cpp
     test_atlas_builder.cpp
@@ -23,7 +27,10 @@ add_executable(moteur_tests
     test_mesh.cpp
     test_mesh_batcher.cpp
     test_model.cpp
+    test_ozz.cpp
     test_shadow.cpp
+    test_skeleton.cpp
+    test_skinning.cpp
     test_sprite_batcher.cpp
     test_sprite_region.cpp
     test_state_stack.cpp
@@ -34,8 +41,13 @@ add_executable(moteur_tests
 )
 
 find_package(Ktx CONFIG REQUIRED)
+find_package(ozz-animation CONFIG REQUIRED)
 
-target_link_libraries(moteur_tests PRIVATE moteur doctest::doctest KTX::ktx)  # KTX: builds test files
+target_link_libraries(moteur_tests PRIVATE moteur doctest::doctest KTX::ktx  # KTX: builds test files
+                      ozz::animation_offline)                          # ozz: checks the library itself
+
+# Tests that read files of the source tree (the skinned reference model, the downloaded test characters).
+target_compile_definitions(moteur_tests PRIVATE MOTEUR_SOURCE_ASSETS="${CMAKE_SOURCE_DIR}/assets/")
 
 moteur_enable_warnings(moteur_tests)
 

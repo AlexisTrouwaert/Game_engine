@@ -55,6 +55,8 @@ public:
         // The playable slice (milestone 4, part 9): a character of its own (the hero), followed by
         // the camera, who strikes the creatures, with footsteps, impacts and an ambience. Off, the
         // demo of milestone 3 (a creature to choose and send), whose captures do not change.
+        // Milestone 5, part 11: the hero is the animated KayKit knight, sword in hand, and the
+        // creatures are animated KayKit skeletons (when tools/models/fetch_test_characters.py ran).
         bool hero = false;
     };
 
@@ -72,6 +74,15 @@ public:
         "audio/kenney_impact/impactMetal_light_002.ogg", "audio/kenney_impact/impactMetal_light_003.ogg",
         "audio/kenney_impact/impactMetal_light_004.ogg"};
     static constexpr const char* kAmbience = "audio/ambience/forgotten_tombs.mp3";
+    // The slice's animated characters (milestone 5): their models, skeletons and clips are in the
+    // same files; the description of their animations is shared (the KayKit rig).
+    static constexpr const char* kKnight = "models/characters/kaykit_adventurers/Knight.glb";
+    static constexpr const char* kSword = "models/characters/kaykit_adventurers/sword_1handed.gltf";
+    static constexpr const char* kSkeletons[2] = {"models/characters/kaykit_skeletons/Skeleton_Warrior.glb",
+                                                  "models/characters/kaykit_skeletons/Skeleton_Minion.glb"};
+    static constexpr const char* kAnimationSet = "animations/kaykit.json";
+    // Whether the slice has its animated characters (else the bodies of primitives of milestone 4).
+    static bool characters_available(moteur::Assets& assets);
 
     // Declares the demo's actions, and the menus' (menu_up, menu_down, menu_confirm), and reads their
     // bindings (assets/input/demo3d.json, then the player's file). The constructor does it; the
@@ -112,6 +123,20 @@ private:
     void spawn_hero();
     // The hero hits a creature: an impact where it is, a quarter of its health.
     void strike(entt::entity creature);
+    // The hero starts a blow at `target` (null: in the air): with an animated hero, the blow lands
+    // on the attack's "impact" event, on the target if it is still within reach then, or else on
+    // the nearest creature within reach; a blow already under way is not started again. Without
+    // animation, at once, as in milestone 4.
+    void attack(entt::entity target);
+    // The animated characters: they face where they go, their clips follow their speed, then their
+    // clocks advance and their events (footsteps, impacts) are acted on.
+    void animate_characters(float dt);
+    // An animated character of the slice (a model, its Animator), placed at `foot`, `height` metres tall.
+    entt::entity spawn_animated(const char* path, const moteur::Transform& foot, float height,
+                                const std::vector<std::string>& hidden_nodes);
+    // How high the top of a character is (its bar goes a little above): its Stature, or the height
+    // of the bodies of primitives.
+    float top_of(entt::entity entity) const;
     // The creature nearest to the hero within reach, or null.
     entt::entity creature_in_reach() const;
     bool in_reach(entt::entity creature) const;
@@ -200,7 +225,10 @@ private:
     // The slice (Options::hero).
     entt::entity hero_ = entt::null;
     bool pressed_on_creature_ = false;  // the click began on a creature: holding it does not walk
-    float step_distance_ = 0.0f;        // walked since the last footstep
+    float step_distance_ = 0.0f;        // walked since the last footstep (hero without animation)
+    bool animated_ = false;             // the slice has its animated characters
+    entt::entity attack_target_ = entt::null;  // the blow under way lands on it at its impact
+    std::vector<moteur::AnimatorEvent> events_;  // of the last tick
     int hits_ = 0;
     std::vector<moteur::Asset<moteur::Sound>> steps_;
     std::vector<moteur::Asset<moteur::Sound>> impacts_;

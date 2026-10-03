@@ -377,6 +377,78 @@ Avant : `python3 tools/audio/fetch_test_sounds.py` (sons de test, hors de Git).
 - [ ] `--states-cycles 100` : stable, comme en partie 6 (la tranche charge maintenant des sons en plus).
 - [ ] En Debug, la tranche rejouée sans message de la couche de validation Metal.
 
+## Jalon 5 : Animation 3D
+
+Détails dans [JALON_5_ANIMATION_3D.md](JALON_5_ANIMATION_3D.md).
+
+**Partie 2 : bibliothèque et modèles de test**
+
+- [ ] À la configuration, vcpkg construit **ozz-animation** 0.17.0 depuis le port du projet (`ports/ozz-animation/`, déclaré par `vcpkg-configuration.json`) pour `arm64-osx`, sans erreur. Il demande CMake 3.30 ou plus (vcpkg fournit le sien).
+- [ ] Tests unitaires : **274** cas en Debug et en Release, dont les deux de `test_ozz.cpp` (sur ARM, ozz prend son implémentation scalaire : les résultats doivent être les mêmes).
+- [ ] `python3 tools/models/fetch_test_characters.py` : 15 fichiers dans `assets/models/characters/`, SHA-256 vérifiés ; un second lancement ne télécharge rien.
+- [ ] `python3 tools/models/make_skinned_reference_model.py` réécrit `assets/models/skinned_reference.glb` sans changement (`git status` propre).
+- [ ] **Aide > À propos** : ozz-animation dans les bibliothèques, les packs KayKit et les quatre modèles Khronos dans les modèles.
+
+**Partie 3 : squelettes et clips glTF**
+
+- [ ] Tests unitaires : **285** cas en Debug et en Release (`test_skeleton` : les positions du modèle de référence retrouvées par ozz, en implémentation scalaire sur ARM ; les cas KayKit et Khronos demandent `fetch_test_characters.py`, sinon ils sont sautés avec un message).
+- [ ] DEBUG > Tests moteur > **Animation** (`--menu-test 10`) : six personnages côte à côte, leur squelette animé par-dessus (les maillages restent en pose de repos jusqu'à la partie 5), RiggedFigure debout, l'épée et le bouclier du chevalier qui suivent ses mains ; aucune erreur Metal en Debug.
+- [ ] Rechargement à chaud : réécrire `assets/models/skinned_reference.glb` (`python3 tools/models/make_skinned_reference_model.py`) pendant que la scène tourne : `model`, `skeleton` et `clips` « reloaded » dans le log.
+- [ ] Captures de référence de la tranche et de la démo 3D inchangées par rapport aux relevés Mac du jalon 4.
+
+**Partie 4 : lecture des clips au tick**
+
+- [ ] Tests unitaires : **291** cas en Debug et en Release (`test_animator`).
+- [ ] Démo 2D (`--demo --seed 42 --freeze-after 30 --no-input --capture`) : même image qu'avant la partie (l'`AnimationPlayer` passe par la nouvelle horloge ; deux lancements, même hachage).
+- [ ] Scène « Animation » sur l'écran du Mac (ProMotion 120 Hz si c'est le cas) : les squelettes bougent sans saccade ; avec `--fixed-hz 10`, décocher « Interpolation » fait sauter le mouvement dix fois par seconde, la recocher le rend fluide.
+- [ ] DEBUG > Inspecteur d'entités, monde « Animation » : l'`Animator` d'un personnage (clip, temps en ticks, vitesse modifiable).
+
+**Partie 5 : skinning sur le GPU**
+
+- [ ] Les MSL exportés sous Windows sont là : `shaders/generated/msl/mesh_skinned.vert.msl`, `shadow_skinned.vert.msl`, `point_shadow_skinned.vert.msl` (la configuration s'arrête sinon).
+- [ ] Tests unitaires : **295** cas en Debug et en Release (`test_skinning`, dont la comparaison du chevalier avec Blender si les personnages sont téléchargés).
+- [ ] Scène « Animation » : les personnages **déformés** suivent leur squelette (bras baissés du chevalier au repos, marche, course, colonne pliée), avec leurs ombres du soleil et de la torche ; aucune erreur Metal en Debug (validation Metal active), avec `--aa none`, `fxaa`, `msaa2`, `msaa4`, et `--view wireframe`.
+- [ ] Captures de la tranche et de la démo 3D : mêmes images qu'avant la partie (les maillages fixes n'ont pas changé de chemin).
+- [ ] `--report` sur la scène « Animation » : noter le CPU par image (Windows : 1,52 ms) et les ombres ponctuelles redessinées (1 par image).
+
+**Partie 6 : mélanges et transitions**
+
+- [ ] Tests unitaires : **307** cas en Debug et en Release (`test_blending` : les poids sont des entiers, ils doivent être identiques ; les mesures de dérive du pied du chevalier peuvent différer de très peu, sous les seuils).
+- [ ] Scène « Animation », chevalier des mélanges : du repos à la course au curseur sans à-coup, dérive du pied affichée proche de 0 (Windows : +0,05 m/s en marchant), « Frapper » pendant la marche (le haut du corps attaque, les jambes marchent) ; aucune erreur Metal en Debug.
+- [ ] Rechargement à chaud : modifier `assets/animations/kaykit.json` (un fondu) pendant que la scène tourne : « animation set ... reloaded » dans le log.
+- [ ] Captures de la tranche et des démos 2D et 3D : mêmes images qu'avant la partie.
+
+**Partie 11 : personnages animés dans la tranche**
+
+- [ ] Capture de référence : `--states --replay-input tests/data/slice_replay.json --freeze-after 340 --run-seconds 9 --pixel-size 1280 720 --capture slice.png` donne `fe8d57ceb2cc` sous Windows (profil de touches par défaut, personnages téléchargés) ; deux lancements, même hachage sur le Mac.
+- [ ] Jouer la tranche du titre au retour au titre : le chevalier marche et court selon sa vitesse, épée en main, pas au bon moment ; le coup porte à l'impact, les squelettes réagissent au coup et tombent à la mort, les barres restent au-dessus des personnages ; la pause fige tout ; aucune erreur Metal en Debug.
+- [ ] `--states --replay-input tests/data/slice_replay.json --run-seconds 9 --report --no-vsync` : noter le CPU par image et le chargement (Windows : 1,10 ms, 770 ms).
+
+**Partie 10 : performances**
+
+- [ ] Tests unitaires : **323** cas en Debug et en Release.
+- [ ] En Release, `--skinned N --report --gpu-timing --run-seconds 8` pour N = 200, 400, 800, 1600 (et 800 avec `--no-shadows`) : noter pour chacun l'enregistrement, l'échantillonnage, les palettes, le temps de l'image et le GPU ; le **plafond à 60 images par seconde** (Windows : environ 1 600) et le coût de la cible de 200 (Windows : 1,06 ms d'enregistrement).
+- [ ] `--skinned 800 --skinned-zoom 3 --report` : moins de poses échantillonnées que de personnages (Windows : 400 sur 800).
+- [ ] `--demo3d --seed 42 --run-seconds 8 --report --no-vsync` : le CPU par image reste celui du jalon 4 sur le Mac.
+
+**Partie 9 : outils de debug et scène « Animation »**
+
+- [ ] Les MSL exportés sous Windows sont à jour (`mesh.vert.msl`, `mesh_skinned.vert.msl`, `mesh.frag.msl` : la variable `joint_weight`).
+- [ ] Tests unitaires : **322** cas en Debug et en Release (`test_animation_debug`).
+- [ ] `--animation` : Tick suivant en pause, Axes des os, Pose de liaison, un os choisi et « Vue des poids » (dégradé bleu, vert, rouge), aucune erreur Metal en Debug ; DEBUG > Animation montre les lignes de temps et les événements.
+- [ ] `--anim-compare 1H_Melee_Attack_Chop 0.4 --pixel-size 1280 720 --aa msaa4 --run-seconds 2 --capture engine.png`, puis `compare_pose.py` dans Blender et `compare_pose_images.py` : recouvrement vers 0,99 comme sous Windows (0,9920).
+
+**Partie 8 : attaches aux os**
+
+- [ ] Tests unitaires : **319** cas en Debug et en Release (`test_attachment`, dont l'épée sur `right_hand` confondue avec celle du fichier du chevalier).
+- [ ] Scène « Animation » : l'épée (« Épée attachée ») reste dans la main en marchant, en courant et pendant « Frapper » ; décocher la case ne la fait pas bouger (l'épée du fichier est au même endroit) ; la torche suit la main gauche et éclaire ; aucune erreur Metal en Debug.
+
+**Partie 7 : événements d'animation**
+
+- [ ] Tests unitaires : **313** cas en Debug et en Release (les événements sont calculés en entiers : mêmes ticks que sous Windows).
+- [ ] Scène « Animation » : les pas du chevalier des mélanges tombent sur ses pieds, en marchant et en courant, et « Frapper » sonne au moment du coup ; la liste des événements montre un pas tous les 32 ticks en marchant (comme sous Windows).
+- [ ] Captures de la tranche et des démos 2D et 3D : mêmes images qu'avant la partie.
+
 ## Après le Mac : les tests qui restent à faire
 
 - [x] **Casque débranché sous Windows** (jalon 4, partie 7) *(fait le 2026-09-25 : pas de plantage)* : débrancher et rebrancher le casque pendant la scène « Audio » ; pas de plantage, le son suit (log `Audio: now playing on ...` ou `sound device started again`).

@@ -16,11 +16,15 @@ namespace moteur {
 struct Mesh;
 
 // One recorded draw: a mesh placed in the world with its material, and its box in the world.
+// A skinned draw also names its palette: the skinning matrices of its pose, recorded for the frame
+// (MeshRenderer::add_palette); its vertices are first moved by them, then by `world`.
 struct MeshDraw {
     const Mesh* mesh = nullptr;
     glm::mat4 world{1.0f};
     Material material;
-    Aabb bounds;  // the mesh's box moved by `world` (transform_box)
+    Aabb bounds;  // where the mesh is in the world (for a skinned one: in its pose)
+    std::int32_t palette = -1;       // first matrix in the frame's palettes; -1: not skinned
+    std::uint32_t palette_size = 0;  // matrices
 };
 
 // What one instance sends to the GPU, laid out exactly as the per-instance vertex attributes of
@@ -31,7 +35,7 @@ struct MeshInstance {
     glm::vec4 normal_matrix[3];  // rows of its inverse transpose (xyz used)
     glm::vec4 base_color;        // linear
     glm::vec4 factors;           // metallic, roughness, normal scale, occlusion strength
-    glm::vec4 emissive;          // rgb
+    glm::vec4 emissive;          // rgb; w: first palette matrix of a skinned draw (see skinning.hlsli)
 };
 static_assert(sizeof(MeshInstance) == 144, "MeshInstance is uploaded as is: keep it tightly packed");
 
@@ -43,6 +47,7 @@ struct MeshBatch {
     const Material* material = nullptr;
     std::uint32_t first_instance = 0;  // in instances()
     std::uint32_t count = 0;
+    bool skinned = false;  // its draws have palettes (a skinned mesh drawn without one is a still mesh)
 };
 
 // Turns the draws of a frame into what one pass needs: the visible ones, grouped into batches, and
@@ -83,6 +88,7 @@ private:
     struct Key {
         const void* pointers[6];  // the mesh, then the five material textures
         bool double_sided;
+        bool skinned;
         bool operator==(const Key& other) const;
     };
     struct KeyHash {

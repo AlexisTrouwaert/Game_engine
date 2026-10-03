@@ -21,3 +21,6 @@ assets/models/polyhaven/
 assets/environments/
 # Test sounds and musics downloaded by tools/audio/fetch_test_sounds.py (CC0, about 11 MB)
 assets/audio/
+# Animated test characters downloaded by tools/models/fetch_test_characters.py (CC0 and CC-BY 4.0,
+# about 14 MB)
+assets/models/characters/

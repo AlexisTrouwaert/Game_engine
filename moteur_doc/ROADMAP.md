@@ -11,7 +11,8 @@ Moteur de jeu maison, pensé pour supporter un ARPG : monde en **3D** vu par une
 - Maths : GLM
 - ECS : EnTT
 - UI de debug : Dear ImGui (intégré)
-- Modèles 3D : glTF 2.0 (bibliothèque à choisir au jalon 3)
+- Modèles 3D : glTF 2.0 (cgltf)
+- Animation squelettique : ozz-animation (port vcpkg du projet, dossier `ports/`)
 - Données : JSON (nlohmann/json)
 - Assets : cache et poignées d'EnTT (`entt::resource_cache`), surveillance des fichiers avec efsw, textures KTX2 avec libktx (KTX-Software)
 - IDE : CLion
@@ -71,11 +72,13 @@ Documentation détaillée : [Jalon 4 - Systèmes de base](JALON_4_SYSTEMES_DE_BA
 ### 5. Animation 3D
 Documentation détaillée : [Jalon 5 - Animation 3D](JALON_5_ANIMATION_3D.md)
 
-- [ ] Squelettes et animations glTF
-- [ ] Skinning sur le GPU
-- [ ] Mélange et transitions entre animations
-- [ ] Événements d'animation (réutilise l'`AnimationPlayer` du jalon 2 : ticks entiers, événements exactement une fois)
-- [ ] Attacher des objets à un os (arme dans la main)
+- [x] Squelettes et animations glTF *(ozz-animation, construits au chargement depuis cgltf ; lecture au tick, dessin entre deux ticks)*
+- [x] Skinning sur le GPU *(palettes en storage buffer, second tampon de sommets ; ombres comprises ; comparé à Blender)*
+- [x] Mélange et transitions entre animations *(fondus en ticks, blend space 1D en phase, vitesse accordée au sol, couche du haut du corps masquée ; `AnimationSet` en JSON)*
+- [x] Événements d'animation (réutilise l'`AnimationPlayer` du jalon 2 : ticks entiers, événements exactement une fois) *(`ClipClock` commun ; événements dans le fichier de description, règle du poids ≥ 0,5 pendant les mélanges)*
+- [x] Attacher des objets à un os (arme dans la main) *(`BoneAttachment`, points d'attache nommés, au dessin sans l'échelle de l'os)*
+- [x] Performances de l'animation *(`--skinned N` : 200 personnages pour environ 1 ms de CPU, plafond vers 1 600 à 60 images par seconde sous Windows ; pas de multithreading)*
+- [x] Outils de debug de l'animation *(squelette et axes, pose de liaison, vue des poids, fenêtre DEBUG > Animation, scène « Animation », pose comparée à Blender)*
 
 ### 6. Monde et déplacement
 - [ ] Collisions sur le plan du sol (`TileMap`, formes simples)

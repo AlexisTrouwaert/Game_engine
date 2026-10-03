@@ -23,6 +23,8 @@ moteur/
   CMakeLists.txt                      racine du build
   CMakePresets.json                   configurations Windows / macOS
   vcpkg.json                          dépendances
+  vcpkg-configuration.json            dossier des ports ajoutés (overlay ports)
+  ports/ozz-animation/                port vcpkg d'ozz-animation (absent du registre)
   cmake/
     Warnings.cmake                    règle des avertissements du compilateur
     Shaders.cmake                     chaîne de compilation des shaders
@@ -52,6 +54,12 @@ moteur/
       include/moteur/model.hpp        en-tête public : modèles glTF (CPU et GPU)
       include/moteur/tilemap.hpp      en-tête public : carte de tuiles et types de tuiles (sans GPU)
       include/moteur/animation.hpp    en-tête public : clips et lecteur d'animation (sans GPU)
+      include/moteur/animation_data.hpp   en-tête public : squelettes et clips lus d'un glTF (sans GPU)
+      include/moteur/animation_clock.hpp  en-tête public : temps d'un clip en ticks (sprites et squelettes)
+      include/moteur/animator.hpp     en-tête public : composant Animator (couches, fondus, blend spaces) et son système
+      include/moteur/animation_set.hpp    en-tête public : description des animations d'un personnage (JSON)
+      include/moteur/animation_debug.hpp  en-tête public : squelette en lignes de debug
+      include/moteur/skeleton.hpp     en-tête public : squelettes et clips prêts à jouer (ozz)
       include/moteur/atlas_builder.hpp    en-tête public : empaquetage d'atlas (sans GPU)
       include/moteur/sprite_region.hpp    en-tête public : région d'atlas et placement
       include/moteur/texture_atlas.hpp    en-tête public : lecture d'un atlas
@@ -162,6 +170,13 @@ moteur/
     test_animation.cpp                tests des animations
     test_asset_cache.cpp              tests du cache d'assets
     test_ktx_texture.cpp              tests du décodage KTX2
+    test_ozz.cpp                      tests d'intégration d'ozz-animation
+    test_skeleton.cpp                 tests des squelettes, poids et clips glTF
+    test_animator.cpp                 tests de l'horloge des clips, de l'Animator et des modèles animés
+    test_blending.cpp                 tests des fondus, blend spaces, vitesses au sol, couches et événements
+    test_attachment.cpp               tests des objets attachés aux os et des points d'attache
+    test_animation_debug.cpp          tests des outils de debug de l'animation (squelette, pose de liaison)
+    test_skinning.cpp                 tests du skinning (formule, lots, comparaison avec Blender)
     test_input.cpp                    tests des entrées (actions, profils, rejeu)
     test_world.cpp                    tests des systèmes du monde (registre sans GPU)
     test_state_stack.cpp              tests de la pile d'états et de l'état de chargement
@@ -176,6 +191,7 @@ moteur/
     sprite.vert.hlsl                  sources HLSL : sprites
     sprite.frag.hlsl
     mesh.vert.hlsl, mesh.frag.hlsl    maillages 3D (PBR)
+    skinning.hlsli, *_skinned.vert.hlsl    skinning (maillages déformés par un squelette)
     tonemap.vert.hlsl, tonemap.frag.hlsl    passe de composition (tone mapping)
     fxaa.frag.hlsl                    anticrénelage FXAA
     shadow.vert.hlsl, shadow.frag.hlsl      ombre du soleil
@@ -283,9 +299,19 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 | `name` | Nom du paquet, en minuscules. |
 | `version-string` | Version du projet. Libre, sans effet sur les dépendances. |
 | `builtin-baseline` | Identifiant d'un commit du dépôt vcpkg. Il **épingle les versions** de tous les ports : deux machines avec la même baseline compilent la même version de SDL3. Valeur actuelle : `5f96cd15fd745122cf27e0524606d6c1efc5fd07`. |
-| `dependencies` | Liste des bibliothèques : `sdl3`, `glm` (mathématiques : matrices et vecteurs), `stb` (décodage des PNG), `doctest` (tests unitaires), `nlohmann-json` (description des atlas et des animations), `cgltf` (lecture des modèles glTF), `entt` (cache et poignées d'assets, puis l'ECS), `efsw` (surveillance des fichiers pour le rechargement à chaud), `ktx` avec la fonctionnalité `tools` (lecture et transcodage des textures KTX2, et l'outil `ktx` qui les encode), `imgui` avec les fonctionnalités `sdl3-binding` et `sdlgpu3-binding` (interface de debug ; ses shaders sont précompilés pour chaque backend, donc rien à ajouter à la chaîne des shaders), et `sdl3-shadercross` **uniquement sur Windows** (`"platform": "windows"`). Ce dernier apporte l'outil `shadercross`, le compilateur DirectX (DXC) et SPIRV-Cross. Il impose aussi la fonctionnalité `vulkan` de SDL3, sans effet sur le backend choisi. Enfin `winpixevent`, **uniquement sur Windows** : la DLL `WinPixEventRuntime.dll` de Microsoft (MIT), copiée à côté de l'exécutable, grâce à laquelle SDL nomme les passes dans les captures RenderDoc et PIX sous Direct3D 12 (sans elle, rien ne change sauf ces noms). |
+| `dependencies` | Liste des bibliothèques : `sdl3`, `glm` (mathématiques : matrices et vecteurs), `stb` (décodage des PNG), `doctest` (tests unitaires), `nlohmann-json` (description des atlas et des animations), `cgltf` (lecture des modèles glTF), `entt` (cache et poignées d'assets, puis l'ECS), `efsw` (surveillance des fichiers pour le rechargement à chaud), `ozz-animation` (animation squelettique : échantillonnage, mélanges, passage local → modèle ; port du dossier `ports/`, voir plus bas), `ktx` avec la fonctionnalité `tools` (lecture et transcodage des textures KTX2, et l'outil `ktx` qui les encode), `imgui` avec les fonctionnalités `sdl3-binding` et `sdlgpu3-binding` (interface de debug ; ses shaders sont précompilés pour chaque backend, donc rien à ajouter à la chaîne des shaders), et `sdl3-shadercross` **uniquement sur Windows** (`"platform": "windows"`). Ce dernier apporte l'outil `shadercross`, le compilateur DirectX (DXC) et SPIRV-Cross. Il impose aussi la fonctionnalité `vulkan` de SDL3, sans effet sur le backend choisi. Enfin `winpixevent`, **uniquement sur Windows** : la DLL `WinPixEventRuntime.dll` de Microsoft (MIT), copiée à côté de l'exécutable, grâce à laquelle SDL nomme les passes dans les captures RenderDoc et PIX sous Direct3D 12 (sans elle, rien ne change sauf ces noms). |
 
 **Quand le modifier** : ajouter une bibliothèque (GLM, EnTT, Dear ImGui, nlohmann-json, etc.) ou mettre à jour la baseline.
+
+### `vcpkg-configuration.json` et `ports/ozz-animation/`
+
+**Rôle** : ajouter à vcpkg une bibliothèque qu'il ne connaît pas. `vcpkg-configuration.json` déclare le dossier `ports/` comme **overlay ports** : vcpkg y cherche les ports avant son registre, sur toutes les machines (CLion, presets, Windows et Mac), sans réglage de plus.
+
+`ports/ozz-animation/` (jalon 5) : `vcpkg.json` (version 0.17.0, MIT), `portfile.cmake` (source GitHub épinglée par son SHA-512 ; seules les bibliothèques `ozz_base`, `ozz_animation`, `ozz_animation_offline`, `ozz_geometry` et `ozz_options` sont construites, en statique, sans outils, exemples, tests ni importeurs glTF / FBX ; runtime MSVC suivant le triplet ; avertissements d'ozz non bloquants, parce qu'ozz les traite en erreurs et qu'un compilateur plus récent que le sien ne doit pas casser le build), `ozz-animationConfig.cmake` (ozz installe ses bibliothèques mais aucun paquet CMake : ce fichier déclare les cibles `ozz::base`, `ozz::animation`, `ozz::animation_offline`, `ozz::geometry`, en Debug et Release) et `usage`.
+
+**Quand le modifier** : changer de version d'ozz (`version` dans `vcpkg.json`, puis le SHA-512 de l'archive dans `portfile.cmake`) ; ajouter un autre port absent du registre (un dossier de plus dans `ports/`).
+
+**Piège** : vcpkg réutilise un port déjà construit tant que son contenu ne change pas (hachage du port) ; modifier le port suffit à le reconstruire, pas besoin de vider les dossiers de build.
 
 **Piège** : sans baseline, chaque machine peut résoudre une version différente. Ne jamais la retirer.
 
@@ -317,6 +343,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 | Dossier `shader_tools/` | Au configure, copie `shadercross.exe`, `dxcompiler.dll` et `dxil.dll` dans `build/shader_tools/`, pour que l'outil trouve les bibliothèques dont il dépend. |
 | `moteur_add_shaders(cible SOURCES ...)` | Pour chaque fichier `<nom>.vert\|frag\|comp.hlsl` de `shaders/`, déduit l'étage du nom de fichier et ajoute une commande de compilation. La cible dépend de ces sorties, donc un shader modifié est recompilé et une erreur fait échouer le build. |
 | Windows | HLSL vers **DXIL**, écrit dans `<dossier de la cible>/shaders/<nom>.dxil`. |
+| Inclusions | Un shader peut inclure un fichier de `shaders/` (`-I shaders/`) : une variante définit une macro et inclut son shader de base (`mesh_skinned.vert.hlsl`). Tout shader est recompilé quand un fichier de `shaders/` change. |
 | Cible `export_msl_shaders` | Manuelle, hors build normal. HLSL vers **MSL**, écrit dans `shaders/generated/msl/`. À lancer après toute modification d'un shader, puis à versionner. |
 | macOS | Ne compile rien : copie `shaders/generated/msl/<nom>.msl` vers `<dossier de la cible>/shaders/`. Arrête la configuration si le fichier MSL est absent. |
 
@@ -763,6 +790,10 @@ La caméra **ne tourne pas**.
 
 **Rôle** : les crédits affichés par la fenêtre « À propos » du bac à sable. Quatre listes : `libraries` (nom, version, licence, copyright, site, fichier de licence), `fonts` (même chose), `models` et `environments` (nom, auteurs, licence, source, site, fichier). Une entrée avec `"platform": "windows"` (ou `"macos"`) n'est affichée que sur cet OS. Les chemins sont relatifs au dossier de l'exécutable. **Chaque bibliothèque ou asset ajouté au projet doit y être ajouté.**
 
+### `shaders/skinning.hlsli` et `shaders/*_skinned.vert.hlsl`
+
+**Rôle** (jalon 5) : le skinning linéaire. `skinning.hlsli` lit les palettes de l'image (un storage buffer, `t0` en `space0` : trois lignes `float4` par matrice) et fait la somme pondérée des quatre matrices d'un sommet. `mesh.vert.hlsl`, `shadow.vert.hlsl` et `point_shadow.vert.hlsl` ont une partie `#ifdef SKINNED` (poids en `TEXCOORD13` / `14` pour la scène, `5` / `6` pour les ombres, début de la palette dans le `w` de la ligne émissive de l'instance) ; `mesh_skinned.vert.hlsl`, `shadow_skinned.vert.hlsl` et `point_shadow_skinned.vert.hlsl` définissent `SKINNED` et incluent leur shader de base. MSL exporté comme les autres.
+
 ### `shaders/mesh.vert.hlsl` et `shaders/mesh.frag.hlsl`
 
 **Rôle** : les shaders des maillages 3D. Le vertex shader, instancié, reçoit les attributs du sommet (`TEXCOORD0` à `3`) et ceux de l'instance (`TEXCOORD4` à `12` : matrices, couleur, facteurs, émissif) ; il passe la position, la normale et la tangente en espace monde, et le matériau sans interpolation (`nointerpolation`). Le fragment shader fait le **rendu PBR** (voir `mesh_renderer`) : cinq textures de matériau, l'environnement, la carte d'ombre du soleil et l'atlas des ombres ponctuelles (`t0` à `t7`, `space2` ; les deux ombres avec un échantillonneur à comparaison), uniforms de la frame (`b0`, `space3` : entre autres les 48 matrices des faces et, dans `light_color[i].w`, la ligne de l'atlas de chaque lumière, ou −1). Ombres en PCF 3×3 avec décalage le long de la normale. Leur MSL est exporté dans `shaders/generated/msl/` pour le Mac.
@@ -1000,6 +1031,8 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 - **Systèmes** : `begin_tick()` (premier système d'un pas fixe : `PreviousTransform` ← `Transform`) ; `collect(WorldSink&, alpha, CollectOptions)` et `submit(Renderer&, alpha, options)` : maillages, modèles, lumières (les `max_lights` plus proches de `light_focus`) et billboards, interpolés, dans l'ordre de création ; `world_matrix` / `world_position` (à travers les parents) ; `destroy` (avec les entités attachées) ; `entity_count`, `cached`.
 - **Cache des entités fixes** : une entité sans `PreviousTransform` ni `Parent` garde sa matrice et ses boîtes (celles de chaque partie d'un modèle comprises). Les signaux d'EnTT l'effacent quand son `Transform` (par `patch` / `replace`), son `Parent`, son maillage ou `Hidden` changent.
 
+
+- **Objets sur les os** (jalon 5, partie 8) : `BoneAttachment { point }`, avec un `Parent` animé, accroche l'entité à un point d'attache (ou un os) de la pose de l'image, sans l'échelle de l'os ; `attach_point_matrix()` ; les poses sont calculées une fois par collecte, à la première demande.
 ### `src/moteur/include/moteur/state_stack.hpp` et `state_stack.cpp`
 
 **Rôle** : les écrans du jeu (titre, chargement, jeu, pause) en **pile d'états** (jalon 4, partie 6).
@@ -1036,6 +1069,54 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 ### `src/moteur/miniaudio.c`
 
 **Rôle** : l'implémentation de miniaudio, avec `stb_vorbis` pour l'OGG (le montage que miniaudio documente), compilée en C dans la bibliothèque `moteur_miniaudio`, sans les avertissements du projet (code tiers).
+
+### `tools/models/fetch_test_characters.py` et `assets/models/characters/`
+
+**Rôle** (jalon 5) : télécharger les personnages animés de test dans `assets/models/characters/` (14 Mo, **hors de Git**) : le chevalier du pack KayKit *Adventurers* et le guerrier et le sbire du pack KayKit *Skeletons* (CC0, un même squelette de 41 os, environ 80 clips chacun), une arme de chaque pack dans son propre fichier, les `LICENSE.txt` des packs, et quatre modèles de test de Khronos (`SimpleSkin`, `InterpolationTest`, `RiggedFigure`, `Fox`). Sources épinglées à un commit, taille et SHA-256 de chaque fichier vérifiés ; ce qui est déjà là n'est pas retéléchargé. Crédits dans `assets/credits.json` (section `models`) : `RiggedFigure` et le squelette de `Fox` sont en CC-BY 4.0, leur mention est obligatoire.
+
+### `tools/models/make_skinned_reference_model.py` et `assets/models/skinned_reference.glb`
+
+**Rôle** (jalon 5) : le **modèle de référence animé**, aux valeurs connues d'avance, pour les tests du chargement des squelettes et de la lecture des clips. Script Python sans dépendance (il reprend `Builder` de `make_reference_model.py`), sortie déterministe (8 Ko, versionnée) : une colonne skinnée sur trois os (avec un nœud d'armature qui n'est pas un os, des nœuds listés enfants d'abord, un ordre de `skin.joints` différent de celui des nœuds, une translation du nœud du maillage à ignorer, `JOINTS_0` en 16 bits), un cube rigide accroché à un os, et cinq clips : `Bend` (qui ne commence pas à 0), `Step` (`STEP`), `Cubic` (`CUBICSPLINE`), `Flip` (quaternions de signes opposés) et `Scale`. La docstring donne les positions attendues ; elles ont été vérifiées dans Blender 5.2.
+
+### `src/moteur/include/moteur/animation_data.hpp` et `animation_data.cpp`
+
+**Rôle** (jalon 5) : les squelettes et les clips **tels que le glTF les donne**, en données simples, sans ozz ni GPU : `JointPose` (TRS), `JointData` et `SkeletonData` (os parents d'abord ; `find`, `rest_model_matrices`, `mismatch` qui nomme la première différence entre deux squelettes), `SkinData` (palette et matrices de liaison inverses), `KeyTrack`, `JointTrack` et `ClipData` (clés linéaires depuis 0, une piste par os). `parse_gltf` les remplit (`ModelData::skeleton`, `skins`, `clips`) ; les poids des sommets sont des `VertexSkin` (`mesh.hpp`).
+
+### `src/moteur/include/moteur/skeleton.hpp` et `skeleton.cpp`
+
+**Rôle** (jalon 5) : les squelettes et les clips **prêts à jouer**, construits pour ozz-animation au chargement ; ozz reste dans le `.cpp`. `Skeleton` (vérifie qu'ozz range les os comme `SkeletonData`), `SkeletalClip` (adresse fixe, même après un rechargement), `ClipLibrary` (tous les clips d'un fichier, `clip(nom)`, `mismatch(squelette)`, `replace_in_place`), `PoseSampler` (`sample`, `rest`, et `blend` : plusieurs clips pondérés, avec des poids par os, par le `BlendingJob` d'ozz ; `palette`), `measure_stride` (vitesse au sol d'un clip sur place et instants où les pieds se posent) et `sample_model_pose` (une pose en espace modèle, pour les tests et les outils). Assets : `assets.skeleton(chemin)` et `assets.clips(chemin)`.
+
+### `src/moteur/include/moteur/animation_clock.hpp` et `animation_clock.cpp`
+
+**Rôle** (jalon 5) : `ClipClock`, le temps d'un clip joué, commun à l'`AnimationPlayer` des sprites et à l'`Animator` des squelettes : cycle en ticks, temps et vitesse en millièmes (entiers), lecture unique ou en boucle, marques franchies exactement une fois (les événements).
+
+### `src/moteur/include/moteur/animator.hpp` et `animator.cpp`
+
+**Rôle** (jalon 5) : le composant **`Animator`** (squelette, clips, description ; deux couches, corps entier et haut du corps masqué, qui jouent des clips ou des blend spaces avec des fondus en ticks ; poids en millièmes entiers ; `create`, `play(nom, PlayOptions)`, `stop`, `set_move_speed`, `set_speed`, `clip_name`, `finished`, `playing`, `pose(alpha, requête)` pour le dessin ; les événements des clips en marques de leur horloge), le système **`advance_animators(registry, ticks, &événements)`** (une fois par `update()` ; il liste les **`AnimatorEvent`** franchis, avec la règle du poids), et **`AnimationPose`**, la pose calculée au dessin par `World::collect` (seulement pour les entités visibles, `CollectOptions::view`) et lue par les outils.
+
+### `src/moteur/include/moteur/animation_debug.hpp` et `animation_debug.cpp`
+
+**Rôle** (jalon 5, partie 9) : `draw_skeleton(lignes, monde, squelette, pose, options)`, un squelette en lignes de debug (segments, sphères, axes des os, un os mis en valeur), sur la pose que le monde a dessinée à l'image.
+
+### `apps/bac_a_sable/anim_compare.hpp` et `anim_compare.cpp`
+
+**Rôle** (jalon 5, partie 9) : la scène `--anim-compare [clip secondes]` : le chevalier KayKit seul, dans un clip à un moment, en couleur de base sur fond vert ; avec `--capture`, une image et un JSON pour `tools/blender/compare_pose.py`.
+
+### `tools/blender/compare_pose.py` et `compare_pose_images.py`
+
+**Rôle** (jalon 5, partie 9) : `blender -b --factory-startup --python tools/blender/compare_pose.py -- capture.png.json blender.png` pose le même fichier dans Blender (son import glTF et son animation) et le rend en Workbench avec la même caméra ; `python tools/blender/compare_pose_images.py capture.png blender.png préfixe` compare les silhouettes (recouvrement, pixels d'un seul côté, image de superposition) et les couleurs moyennes.
+
+### `src/moteur/include/moteur/animation_set.hpp` et `animation_set.cpp`
+
+**Rôle** (jalon 5, partie 6) : **`AnimationSet`**, la description des animations d'un personnage lue d'un JSON versionné (format en commentaire dans l'en-tête) : fondu par défaut, réglages par clip (vitesse au sol, fondu, phase, événements), points d'attache (`AttachPoint` : os, position, rotation), blend spaces (triés par vitesse au sol), masques, masque de la couche du haut. Asset : `assets.animation_set(chemin)`, rechargé à chaud.
+
+### `assets/animations/kaykit.json`
+
+**Rôle** (jalon 5, partie 6) : la description des clips KayKit (chevalier, squelettes : même squelette, mêmes clips) : vitesses au sol de `Walking_A` / `_B` et `Running_A` / `_B` mesurées par `measure_stride`, phase de `Running_A` pour que les pieds se posent avec ceux de la marche, fondus (12 ticks par défaut, 6 pour les attaques), événements (pas là où les pieds se posent, impacts des attaques à une main, `death_ground`), blend space `locomotion` (`Idle`, `Walking_A`, `Running_A`), masque `upper_body` (depuis `spine`, rampe de 2). Un test vérifie que les vitesses et les phases correspondent aux clips.
+
+### `apps/bac_a_sable/animation_test.hpp` et `animation_test.cpp`
+
+**Rôle** (jalon 5) : la scène de test « Animation » (DEBUG > Tests moteur ; `--menu-test 10`) : les personnages de test côte à côte, entités d'un `World` avec un `Animator` chacune, jouant un clip de leur fichier au tick et dessinées entre deux ticks, le squelette en lignes de debug, les parties rigides sur leur os ; lecture, **tick suivant** en pause, vitesse, clip, temps en ticks, pose de repos, **pose de liaison**, **axes des os**, un **os** choisi et la **vue de ses poids**, interpolation (à comparer avec `--fixed-hz 10`). Lancée aussi par `--animation`. Avec `--skinned N` (partie 10), un test de charge à la place : N personnages KayKit en grille, mouvements, phases et fondus variés, coût de l'animation affiché et, avec `--report`, imprimé (`--skinned-zoom F`, `--no-shadows`). Devant la rangée, le **chevalier des mélanges** (partie 6) fait le tour d'une ellipse : vitesse de déplacement (blend space `locomotion`), marche sur place pour comparer, fondus vers n'importe quel clip, attaque du haut du corps, poids affichés, dérive du pied posé mesurée ; ses pas et ses coups sonnent sur les événements (partie 7), listés dans le panneau ; il tient une épée d'un fichier à part et une torche qui éclaire sur les points d'attache de ses mains, et deux repères montrent où irait une barre de vie (partie 8).
 
 ### `tools/audio/fetch_test_sounds.py`
 
@@ -1099,7 +1180,7 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 
 **Rôle** : la scène de démonstration du jalon 3 (partie 11), dans le menu (« Démo 3D ») ou avec `--demo3d`.
 
-**Contenu** : la carte 100×100 de la démo 2D construite en 3D (sol fusionné par blocs de 10×10, murs de 1,5 m, un brasero-torche par pièce), le décor (rochers, arbres, caisses, tonneaux glTF), les créatures de la démo 2D (demi-tour devant les murs) avec barres de vie, le soleil et les torches avec ombres, la caméra (déplacement, zoom, suivi). Commandes : les actions de `assets/input/demo3d.json` (profils « clic » et « zqsd », manette). Depuis la partie 5 du jalon 4, le monde est une `moteur::World` : sol, murs et décor sont des entités fixes, chaque créature une entité qui bouge (`Walker` et `Health`, composants propres à la démo) avec un corps et une tête attachés, chaque torche une entité (flamme, lumière, halo), l'anneau de sélection est attaché à la créature choisie, et la marque de destination est cachée (`Hidden`) quand il n'y en a pas. Réglages, tableau des passes et temps de collecte du monde dans le panneau du menu (`draw_controls()`) ; `world collection` en fin de ligne de commande. Options : `--seed`, `--map`, `--creatures`, `--decor`, `--tile-floor`, `--point-shadows`, et celles des captures. `Demo3D::declare_actions()` déclare les actions (et celles des menus) et lit les touches, pour la démo et pour les états qui l'entourent. `Options::hero` (la tranche jouable, jalon 4 partie 9) : un héros à lui, suivi par la caméra, qui frappe les créatures (clic sur une créature à portée, ou compétence 1), avec pas, impacts et ambiance.
+**Contenu** : la carte 100×100 de la démo 2D construite en 3D (sol fusionné par blocs de 10×10, murs de 1,5 m, un brasero-torche par pièce), le décor (rochers, arbres, caisses, tonneaux glTF), les créatures de la démo 2D (demi-tour devant les murs) avec barres de vie, le soleil et les torches avec ombres, la caméra (déplacement, zoom, suivi). Commandes : les actions de `assets/input/demo3d.json` (profils « clic » et « zqsd », manette). Depuis la partie 5 du jalon 4, le monde est une `moteur::World` : sol, murs et décor sont des entités fixes, chaque créature une entité qui bouge (`Walker` et `Health`, composants propres à la démo) avec un corps et une tête attachés, chaque torche une entité (flamme, lumière, halo), l'anneau de sélection est attaché à la créature choisie, et la marque de destination est cachée (`Hidden`) quand il n'y en a pas. Réglages, tableau des passes et temps de collecte du monde dans le panneau du menu (`draw_controls()`) ; `world collection` en fin de ligne de commande. Options : `--seed`, `--map`, `--creatures`, `--decor`, `--tile-floor`, `--point-shadows`, et celles des captures. `Demo3D::declare_actions()` déclare les actions (et celles des menus) et lit les touches, pour la démo et pour les états qui l'entourent. `Options::hero` (la tranche jouable, jalon 4 partie 9) : un héros à lui, suivi par la caméra, qui frappe les créatures (clic sur une créature à portée, ou compétence 1), avec pas, impacts et ambiance. Depuis la partie 11 du jalon 5, si les personnages de test sont là : le héros est le chevalier KayKit animé (locomotion à sa vitesse, épée d'un fichier à part sur `right_hand`, attaque sur la couche du haut, dégâts à l'événement `impact`, pas aux événements), les créatures des squelettes KayKit animés (touché sur la couche du haut, mort au sol), les barres au-dessus de la boîte de chacun (`Stature`).
 
 ### `apps/bac_a_sable/states_demo.hpp` et `states_demo.cpp`
 
@@ -1146,6 +1227,7 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 - Option `--capture chemin.png` (partie 9) : avec `--freeze-after N`, écrit la première frame gelée en PNG (`Renderer::request_capture()`), pour une comparaison de pixels automatique et reproductible. Fonctionne sur n'importe quelle scène du bac à sable, pas seulement `--demo`.
 - Option `--run-seconds N` : le programme se ferme seul après N secondes de simulation. Elle sert de test automatique.
 - Option `--no-vsync` : désactive le VSync, pour mesurer les FPS sans être limité par l'écran.
+- Option `--fixed-hz N` (jalon 5) : fréquence de la logique (60 par défaut) ; à 10, l'interpolation entre deux ticks se voit dans la scène « Animation ».
 - Option `--still` : le sprite reste immobile au centre, pour mesurer les pixels à l'écran.
 - Option `--report` : écrit à la fermeture un résumé des temps CPU par frame (moyenne, percentile 99, maximum, phases).
 - Affiche la version de SDL, puis un résumé (temps simulé, ticks, frames) à la fermeture.
@@ -1285,4 +1367,4 @@ Ils seront ajoutés au fil des jalons.
 | Fichier / dossier | Quand | Rôle |
 |---|---|---|
 | `src/moteur/core/`, `platform/`, `renderer/` | Quand le nombre de fichiers le justifiera | Sous-dossiers pour ranger la boucle de jeu, la fenêtre et les entrées, le rendu (les fichiers sont pour l'instant à plat dans `src/moteur/`) |
-| `third_party/` | Si besoin | Dépendances absentes de vcpkg |
+| `third_party/` | Si besoin | Code tiers qu'on ne peut pas construire par un port vcpkg (les bibliothèques absentes du registre passent par `ports/`, comme ozz-animation) |

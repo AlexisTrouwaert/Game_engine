@@ -1,0 +1,91 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_StructuredBuffer_v4float
+{
+    float4 _m0[1];
+};
+
+struct type_Frame
+{
+    float4x4 view_projection;
+    float4 debug;
+};
+
+struct main0_out
+{
+    float3 out_var_TEXCOORD0 [[user(locn0)]];
+    float3 out_var_TEXCOORD1 [[user(locn1)]];
+    float4 out_var_TEXCOORD2 [[user(locn2)]];
+    float2 out_var_TEXCOORD3 [[user(locn3)]];
+    float4 out_var_TEXCOORD4 [[user(locn4)]];
+    float4 out_var_TEXCOORD5 [[user(locn5)]];
+    float4 out_var_TEXCOORD6 [[user(locn6)]];
+    float out_var_TEXCOORD7 [[user(locn7)]];
+    float4 gl_Position [[position]];
+};
+
+struct main0_in
+{
+    float3 in_var_TEXCOORD0 [[attribute(0)]];
+    float3 in_var_TEXCOORD1 [[attribute(1)]];
+    float2 in_var_TEXCOORD2 [[attribute(2)]];
+    float4 in_var_TEXCOORD3 [[attribute(3)]];
+    float4 in_var_TEXCOORD4 [[attribute(4)]];
+    float4 in_var_TEXCOORD5 [[attribute(5)]];
+    float4 in_var_TEXCOORD6 [[attribute(6)]];
+    float4 in_var_TEXCOORD7 [[attribute(7)]];
+    float4 in_var_TEXCOORD8 [[attribute(8)]];
+    float4 in_var_TEXCOORD9 [[attribute(9)]];
+    float4 in_var_TEXCOORD10 [[attribute(10)]];
+    float4 in_var_TEXCOORD11 [[attribute(11)]];
+    float4 in_var_TEXCOORD12 [[attribute(12)]];
+    uint4 in_var_TEXCOORD13 [[attribute(13)]];
+    float4 in_var_TEXCOORD14 [[attribute(14)]];
+};
+
+vertex main0_out main0(main0_in in [[stage_in]], constant type_Frame& Frame [[buffer(0)]], const device type_StructuredBuffer_v4float& palettes [[buffer(1)]])
+{
+    main0_out out = {};
+    uint _89 = uint(in.in_var_TEXCOORD12.w);
+    uint _93 = (_89 + in.in_var_TEXCOORD13.x) * 3u;
+    float3x4 _105 = float3x4(palettes._m0[_93], palettes._m0[_93 + 1u], palettes._m0[_93 + 2u]) * in.in_var_TEXCOORD14.x;
+    uint _109 = (_89 + in.in_var_TEXCOORD13.y) * 3u;
+    float3x4 _121 = float3x4(palettes._m0[_109], palettes._m0[_109 + 1u], palettes._m0[_109 + 2u]) * in.in_var_TEXCOORD14.y;
+    uint _134 = (_89 + in.in_var_TEXCOORD13.z) * 3u;
+    float3x4 _146 = float3x4(palettes._m0[_134], palettes._m0[_134 + 1u], palettes._m0[_134 + 2u]) * in.in_var_TEXCOORD14.z;
+    uint _156 = (_89 + in.in_var_TEXCOORD13.w) * 3u;
+    float3x4 _168 = float3x4(palettes._m0[_156], palettes._m0[_156 + 1u], palettes._m0[_156 + 2u]) * in.in_var_TEXCOORD14.w;
+    float4 _170 = ((_105[0] + _121[0]) + _146[0]) + _168[0];
+    float4 _172 = ((_105[1] + _121[1]) + _146[1]) + _168[1];
+    float4 _174 = ((_105[2] + _121[2]) + _146[2]) + _168[2];
+    float3x3 _184 = float3x3(_170.xyz, _172.xyz, _174.xyz);
+    float3 _185 = in.in_var_TEXCOORD1 * _184;
+    float3 _187 = in.in_var_TEXCOORD3.xyz * _184;
+    float _200;
+    if (Frame.debug.x < 0.0)
+    {
+        _200 = 0.0;
+    }
+    else
+    {
+        _200 = dot(in.in_var_TEXCOORD14, float4(in.in_var_TEXCOORD13 == uint4(uint(int(Frame.debug.x)))));
+    }
+    float4 _204 = float4(float4(in.in_var_TEXCOORD0, 1.0) * float3x4(_170, _172, _174), 1.0);
+    float _205 = dot(in.in_var_TEXCOORD4, _204);
+    float _206 = dot(in.in_var_TEXCOORD5, _204);
+    float _207 = dot(in.in_var_TEXCOORD6, _204);
+    out.out_var_TEXCOORD0 = float3(_205, _206, _207);
+    out.out_var_TEXCOORD1 = float3(dot(in.in_var_TEXCOORD7.xyz, _185), dot(in.in_var_TEXCOORD8.xyz, _185), dot(in.in_var_TEXCOORD9.xyz, _185));
+    out.out_var_TEXCOORD2 = float4(dot(in.in_var_TEXCOORD4.xyz, _187), dot(in.in_var_TEXCOORD5.xyz, _187), dot(in.in_var_TEXCOORD6.xyz, _187), in.in_var_TEXCOORD3.w);
+    out.out_var_TEXCOORD3 = in.in_var_TEXCOORD2;
+    out.out_var_TEXCOORD4 = in.in_var_TEXCOORD10;
+    out.out_var_TEXCOORD5 = in.in_var_TEXCOORD11;
+    out.out_var_TEXCOORD6 = in.in_var_TEXCOORD12;
+    out.out_var_TEXCOORD7 = _200;
+    out.gl_Position = Frame.view_projection * float4(_205, _206, _207, 1.0);
+    return out;
+}
+

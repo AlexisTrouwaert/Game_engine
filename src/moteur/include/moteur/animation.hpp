@@ -6,6 +6,8 @@
 #include <string_view>
 #include <vector>
 
+#include "moteur/animation_clock.hpp"
+
 namespace moteur {
 
 class TextureAtlas;
@@ -49,6 +51,7 @@ public:
     int step_count() const { return static_cast<int>(step_starts_.size()); }
     int step_frame(int step) const;
     int step_start(int step) const { return step_starts_[static_cast<std::size_t>(step)]; }
+    const std::vector<int>& step_starts() const { return step_starts_; }
 
 private:
     std::string name_;
@@ -60,7 +63,8 @@ private:
 };
 
 // Plays one clip: the state of one animated thing. Plain data with no link to rendering, so it
-// can become an ECS component. The clip must outlive the player.
+// can become an ECS component. The clip must outlive the player. Its time is a ClipClock, the
+// clock the skeletal animations of milestone 5 use too.
 //
 //   player.play(library.clip("attack"));
 //   player.set_speed(1.5);                      // attack speed +50 %
@@ -71,7 +75,7 @@ private:
 class AnimationPlayer {
 public:
     // Speed is stored in thousandths: 1000 means x1. Integers keep playback exact on every OS.
-    static constexpr std::int64_t kSpeedOne = 1000;
+    static constexpr std::int64_t kSpeedOne = ClipClock::kOne;
 
     AnimationPlayer() = default;
     explicit AnimationPlayer(const AnimationClip& clip) { play(clip); }
@@ -84,7 +88,7 @@ public:
     // Multiplier of the playback speed, rounded to a thousandth. 0 pauses. Throws
     // std::invalid_argument if negative.
     void set_speed(double multiplier);
-    double speed() const { return static_cast<double>(speed_) / static_cast<double>(kSpeedOne); }
+    double speed() const { return clock_.speed(); }
 
     // Moves the playback forward by `ticks` simulation steps (scaled by the speed). The events of
     // every frame reached are appended to `fired`, in order, each exactly once, even when a big
@@ -101,17 +105,14 @@ public:
 
     // Time since play(), in thousandths of a tick. Can be copied to another player to put it
     // at the same point, for example to vary the phase of many identical animations.
-    std::int64_t time() const { return time_; }
-    void set_time(std::int64_t time);
+    std::int64_t time() const { return clock_.time(); }
+    void set_time(std::int64_t time) { clock_.set_time(time); }
 
 private:
-    std::int64_t cycle_length() const { return static_cast<std::int64_t>(clip_->cycle_ticks()) * kSpeedOne; }
     int step_at(std::int64_t time) const;
 
     const AnimationClip* clip_ = nullptr;
-    std::int64_t time_ = 0;
-    std::int64_t speed_ = kSpeedOne;
-    bool started_ = false;  // false until the first frame's events have been fired
+    ClipClock clock_;  // a clip's cycle: PingPong's way back is part of it
 };
 
 // The clips of a JSON file:

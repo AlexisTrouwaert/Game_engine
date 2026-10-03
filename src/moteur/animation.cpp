@@ -60,73 +60,40 @@ int AnimationClip::step_frame(int step) const {
 
 void AnimationPlayer::play(const AnimationClip& clip) {
     clip_ = &clip;
-    restart();
+    const std::int64_t speed = clock_.speed_thousandths();  // kept from clip to clip
+    clock_ = ClipClock(clip.cycle_ticks(), clip.mode() == PlayMode::Once);
+    clock_.set_speed_thousandths(speed);
 }
 
 void AnimationPlayer::restart() {
-    time_ = 0;
-    started_ = false;
+    clock_.restart();
 }
 
 void AnimationPlayer::set_speed(double multiplier) {
-    if (!(multiplier >= 0.0)) {  // also rejects NaN
-        throw std::invalid_argument("animation speed must be zero or positive, got " + std::to_string(multiplier));
-    }
-    speed_ = std::llround(multiplier * static_cast<double>(kSpeedOne));
-}
-
-void AnimationPlayer::set_time(std::int64_t time) {
-    time_ = std::max<std::int64_t>(time, 0);
-    if (clip_ != nullptr && clip_->mode() == PlayMode::Once) {
-        time_ = std::min(time_, cycle_length());
-    }
-    started_ = true;  // the frame showing at this time is not "reached": its events do not fire
+    clock_.set_speed(multiplier);
 }
 
 void AnimationPlayer::advance(int ticks, std::vector<const AnimationEvent*>* fired) {
     if (clip_ == nullptr) {
         return;
     }
-    const std::int64_t previous = time_;
-    const std::int64_t cycle = cycle_length();
-    time_ += static_cast<std::int64_t>(std::max(ticks, 0)) * speed_;
-    const bool once = clip_->mode() == PlayMode::Once;
-    if (once) {
-        time_ = std::min(time_, cycle);
-    }
-    const bool include_previous = !started_;
-    started_ = true;
     if (fired == nullptr || clip_->events().empty()) {
+        clock_.advance(ticks);
         return;
     }
-
-    // Every step that starts in (previous, time_], or [previous, time_] right after play(): the
-    // intervals of successive advances touch without overlapping, so each start is seen once.
-    for (std::int64_t cycle_index = previous / cycle;; ++cycle_index) {
-        const std::int64_t cycle_start = cycle_index * cycle;
-        if ((once && cycle_index > 0) || cycle_start > time_) {
-            return;
-        }
-        for (int step = 0; step < clip_->step_count(); ++step) {
-            const std::int64_t start = cycle_start + static_cast<std::int64_t>(clip_->step_start(step)) * kSpeedOne;
-            if (start > time_) {
-                return;
-            }
-            if (start < previous || (start == previous && !include_previous)) {
-                continue;
-            }
-            const int frame = clip_->step_frame(step);
-            for (const AnimationEvent& event : clip_->events()) {
-                if (event.frame == frame) {
-                    fired->push_back(&event);
-                }
+    // A mark per step (frame shown): the events of the frame fire when its step starts.
+    clock_.advance(ticks, clip_->step_starts(), [this, fired](std::size_t step) {
+        const int frame = clip_->step_frame(static_cast<int>(step));
+        for (const AnimationEvent& event : clip_->events()) {
+            if (event.frame == frame) {
+                fired->push_back(&event);
             }
         }
-    }
+    });
 }
 
 int AnimationPlayer::step_at(std::int64_t time) const {
-    const std::int64_t cycle = cycle_length();
+    const std::int64_t cycle = clock_.cycle_length();
     if (clip_->mode() == PlayMode::Once && time >= cycle) {
         return clip_->step_count() - 1;
     }
@@ -140,7 +107,7 @@ int AnimationPlayer::step_at(std::int64_t time) const {
 }
 
 int AnimationPlayer::frame_index() const {
-    return clip_->step_frame(step_at(time_));
+    return clip_->step_frame(step_at(clock_.time()));
 }
 
 const std::string& AnimationPlayer::region() const {
@@ -148,7 +115,7 @@ const std::string& AnimationPlayer::region() const {
 }
 
 bool AnimationPlayer::finished() const {
-    return clip_ != nullptr && clip_->mode() == PlayMode::Once && time_ >= cycle_length();
+    return clip_ != nullptr && clock_.finished();
 }
 
 AnimationLibrary AnimationLibrary::parse(std::string_view json_text, const std::string& source) {
