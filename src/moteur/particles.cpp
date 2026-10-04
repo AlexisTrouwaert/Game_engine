@@ -1,5 +1,7 @@
 #include "moteur/particles.hpp"
 
+#include "moteur/profiler.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -149,6 +151,10 @@ ParticleEffect ParticleEffect::parse(std::string_view json_text, const std::stri
                                           source);
             d.spin = range_of(e, "spin", {0.0f, 0.0f});
             d.additive = e.value("additive", false);
+            d.soft = e.value("soft", 0.0f);
+            if (d.soft < 0.0f) {
+                fail(source, "\"soft\" is negative");
+            }
             const std::string facing = e.value("facing", std::string("camera"));
             if (facing == "camera") d.facing = BillboardFacing::Camera;
             else if (facing == "upright") d.facing = BillboardFacing::Upright;
@@ -320,6 +326,7 @@ void ParticleSystem::emit(Effect& effect, std::uint32_t index, std::size_t emitt
 }
 
 void ParticleSystem::update(float seconds) {
+    MOTEUR_PROFILE("particules : simulation");
     const float dt = std::clamp(seconds, 0.0f, 0.1f);
     // Emission.
     for (std::uint32_t index = 0; index < effects_.size(); ++index) {
@@ -412,6 +419,7 @@ const Texture* ParticleSystem::texture(const std::string& path, Assets& assets) 
 }
 
 void ParticleSystem::draw(BillboardRenderer& billboards, Assets& assets, const Frustum* view) {
+    MOTEUR_PROFILE("particules : dessin");
     std::vector<std::uint8_t> shown(effects_.size(), 1);
     if (view != nullptr) {
         for (std::size_t i = 0; i < effects_.size(); ++i) {
@@ -439,6 +447,7 @@ void ParticleSystem::draw(BillboardRenderer& billboards, Assets& assets, const F
         options.color = d.color.at(t);
         options.additive = d.additive;
         options.facing = d.facing;
+        options.soft = d.soft;
         options.rotation = d.facing == BillboardFacing::Upright ? 0.0f : p.rotation;
         int frame = p.frame;
         if (d.animate) {

@@ -1,5 +1,7 @@
 #include "moteur/world.hpp"
 
+#include "moteur/profiler.hpp"
+
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
@@ -436,6 +438,7 @@ private:
 }  // namespace
 
 void World::submit(Renderer& renderer, float alpha, const CollectOptions& options) {
+    MOTEUR_PROFILE("monde : collecte");
     RendererSink sink(renderer);
     collect(sink, alpha, options);
 }

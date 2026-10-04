@@ -461,6 +461,31 @@ Détails dans [JALON_6_MONDE_ET_DEPLACEMENT.md](JALON_6_MONDE_ET_DEPLACEMENT.md)
 - [ ] Charge : `--world-crowd 500 --world-map arene --run-seconds 10 --report` (Windows : 0,43 ms de logique par tick), `--world-fires 800 --world-map arene --run-seconds 8 --report` (Windows : 3,6 ms de CPU par image pour 19 000 particules, 23 draw calls).
 - [ ] Jouer la tranche : salles noires jusqu'à leur découverte, squelettes qui repèrent le héros, le poursuivent et frappent, étincelles et fumée, flammes des braseros.
 
+## Jalon 7 : Outils et données
+
+Détails dans [JALON_7_OUTILS_ET_DONNEES.md](JALON_7_OUTILS_ET_DONNEES.md).
+
+**Partie 2 : tables de données**
+
+- [ ] Tests unitaires : **356** cas en Debug et en Release (`test_data_table` écrit ses tables dans le dossier temporaire du système : vérifier qu'il en a le droit).
+- [ ] `bac_a_sable --check-data` : « données valides », code de sortie 0 ; une erreur volontaire dans `assets/data/personnages/tranche.json` donne le chemin `fichier > ligne > champ` et le code 1.
+- [ ] `--compile-data /tmp/donnees` puis la tranche avec `--compiled-data /tmp/donnees` : même capture que la tranche lue en JSON (Windows : `f5421305c50a`) ; le fichier `personnages.mdat` a la même taille que sous Windows (984 octets) et le même contenu (`cmp`).
+- [ ] Rechargement à chaud : modifier la vitesse d'un squelette pendant la tranche : « table 'personnages' reloaded » et les créatures changent d'allure ; une valeur invalide est refusée, l'ancienne version reste.
+- [ ] DEBUG > Données : la table, ses lignes, une ligne après héritage, le bouton Recharger.
+
+**Parties 3 à 11 : console, profiler, sauvegardes, éditeur de cartes, graphe d'animation, particules douces**
+
+- [ ] Tests unitaires : **389** cas en Debug et en Release (les nouveaux tests écrivent dans le dossier temporaire).
+- [ ] **MSL** : les shaders `mesh.frag` (seconde cible : la distance), `billboard.vert` et `billboard.frag` (particules douces) viennent du MSL exporté sous Windows ; aucune erreur Metal en sans anticrénelage, FXAA, MSAA 2x et 4x (`--aa`). Vérifier que le format `R16_FLOAT` est accepté comme cible multiéchantillonnée (sinon `supports()` grise les modes MSAA : le noter).
+- [ ] **Références** : `python3 tools/tests/check_references.py build/macos-release --record` la première fois (le Mac n'a pas encore de références : comparer les images à celles de Windows à l'œil), puis sans `--record` : tout correspond ; le **test d'exactitude** (A = B = C) doit passer sans référence.
+- [ ] **Console** (touche ² : sur un clavier Mac, la touche à gauche du 1, par position) : `help`, complétion (Tab), historique ; dans la tranche `god`, `spawn squelette_sbire 5`, `tp 20 20`, `kill all`, `heal`, `fog off`, `set time.scale 0.5`, `save`, `load`. Journal dans `~/Library/Application Support/moteur/bac_a_sable/journal.txt`.
+- [ ] **Profiler** : fenêtre DEBUG > Profiler pendant un combat (zones `tranche : …`) ; `profile start` / `profile stop /tmp/p.json` s'ouvre dans ui.perfetto.dev.
+- [ ] **Sauvegardes** : pause > Sauvegarder (emplacement 1, vignette visible), retour au titre, Continuer : même partie ; Charger liste les emplacements ; `save.auto 10` puis jouer : deux sauvegardes automatiques tour à tour ; un fichier `.sav` tronqué à la main est marqué illisible et sa copie de secours se charge. Les écritures atomiques (`rename` après `fsync`) sous APFS : aucune erreur.
+- [ ] **Éditeur** : `editeur tranche`, puis `editeur salle_portes --self-test` (réussi) ; peindre, annuler, poser un arbre, enregistrer (le fichier des sources change d'une ligne), modifier le fichier dans un autre éditeur pendant que l'éditeur est ouvert : avertissement, pas d'écrasement ; F5 : la scène « Monde » sur la carte, Échap revient ; vue de dessus (T).
+- [ ] **Graphe d'animation** : la tranche joue attaques, coups reçus et chutes comme sous Windows ; fenêtre Animation : états, paramètres, dernières transitions ; un seuil changé dans `animations/kaykit.json` pendant le jeu est pris aussitôt.
+- [ ] **Particules douces** : la fumée de mort et la poussière des pas ne coupent plus net contre le sol.
+- [ ] **Chemins** : un dossier de préférences avec un accent (nom d'utilisateur) ne gêne ni le journal, ni les sauvegardes, ni les vignettes.
+
 ## Après le Mac : les tests qui restent à faire
 
 - [x] **Casque débranché sous Windows** (jalon 4, partie 7) *(fait le 2026-09-25 : pas de plantage)* : débrancher et rebrancher le casque pendant la scène « Audio » ; pas de plantage, le son suit (log `Audio: now playing on ...` ou `sound device started again`).

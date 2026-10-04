@@ -93,16 +93,6 @@ double seconds_since(Uint64 start) {
     return static_cast<double>(SDL_GetPerformanceCounter() - start) / static_cast<double>(SDL_GetPerformanceFrequency());
 }
 
-// A square on the ground around a cell, `inset` metres inside its edges.
-void cell_square(moteur::DebugLineBuffer& lines, glm::ivec2 cell, float inset, glm::vec4 color, float height = 0.03f) {
-    const float x0 = static_cast<float>(cell.x) + inset, x1 = static_cast<float>(cell.x + 1) - inset;
-    const float z0 = static_cast<float>(cell.y) + inset, z1 = static_cast<float>(cell.y + 1) - inset;
-    lines.line({x0, height, z0}, {x1, height, z0}, color);
-    lines.line({x1, height, z0}, {x1, height, z1}, color);
-    lines.line({x1, height, z1}, {x0, height, z1}, color);
-    lines.line({x0, height, z1}, {x0, height, z0}, color);
-}
-
 }  // namespace
 
 std::vector<std::string> WorldTest::map_names(const moteur::Assets& assets) {
@@ -115,6 +105,7 @@ WorldTest::WorldTest(moteur::Application& app, const Options& options, bool stan
     cube_ = moteur::make_asset(moteur::Mesh::create(renderer, moteur::make_cube(), "world.cube"));
     tile_ = moteur::make_asset(moteur::Mesh::create(renderer, moteur::make_plane(), "world.tile"));
     sky_ = moteur::Environment::create(renderer, moteur::make_sky(256, 128), "world.sky");
+    object_meshes_ = make_object_meshes(app);
 
     moteur::Input& input = app.input();
     input.clear_actions();
@@ -144,15 +135,26 @@ WorldTest::WorldTest(moteur::Application& app, const Options& options, bool stan
         effect_choice_ = 0;
     }
 
+    debug_flags_ = moteur::WorldDebugFlags::declare(app.console().variables());
     names_ = map_names(app.assets());
     if (names_.empty()) {
         throw std::runtime_error("Monde : aucune carte dans assets/maps");
     }
-    const auto found = std::find(names_.begin(), names_.end(), options_.map);
-    if (found == names_.end()) {
-        throw std::runtime_error("Monde : pas de carte « " + options_.map + " » dans assets/maps");
+    if (options_.data) {
+        map_ = moteur::make_asset(moteur::MapData(*options_.data));
+        chosen_ = -1;
+        reset_tiles();
+        camera_.set_visible_height(16.0f);
+        const glm::vec2 hero = hero_position();
+        camera_.set_target({hero.x, 0.0f, hero.y});
+        camera_.begin_update();
+    } else {
+        const auto found = std::find(names_.begin(), names_.end(), options_.map);
+        if (found == names_.end()) {
+            throw std::runtime_error("Monde : pas de carte « " + options_.map + " » dans assets/maps");
+        }
+        load_map(*found);
     }
-    load_map(*found);
     if (!error_.empty()) {
         throw std::runtime_error(error_);
     }
@@ -225,8 +227,17 @@ void WorldTest::reset_tiles() {
 
     const moteur::MapData& map = *map_;
     const std::vector<glm::ivec2>& start = map.points("depart");
-    spawn_hero(start.empty() ? glm::vec2(map.width(), map.height()) * 0.5f : moteur::cell_centre(start.front()));
+    if (options_.start) {
+        spawn_hero(*options_.start);
+    } else {
+        spawn_hero(start.empty() ? glm::vec2(map.width(), map.height()) * 0.5f : moteur::cell_centre(start.front()));
+    }
     start_fires();
+    for (const moteur::MapObject& object : map.objects()) {
+        if (object.type == "monstre") {
+            spawn_monster({object.position.x, object.position.z}, object.scale >= 1.5f);  // a big one when scaled up
+        }
+    }
     if (options_.autopilot) {
         for (const glm::ivec2 cell : map.points("monstres")) {
             spawn_group(moteur::cell_centre(cell), 3, false);
@@ -364,6 +375,15 @@ void WorldTest::build_decor() {
             add_static(tile_, place({c.x, 0.01f, c.y}, glm::vec3(0.6f)), glowing(point_color(name) * 1.5f));
         }
     }
+
+    // The map's objects (decor, lights, markers); monsters and effects are spawned with the characters.
+    for (const moteur::MapObject& object : map.objects()) {
+        try {
+            build_object(world_, object, object_meshes_);
+        } catch (const std::exception& e) {  // a property of the wrong kind: the object is left out
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Monde : objet %s (%s) ignoré : %s", object.id.c_str(), object.type.c_str(), e.what());
+        }
+    }
 }
 
 void WorldTest::spawn_hero(glm::vec2 at) {
@@ -429,6 +449,16 @@ void WorldTest::start_fires() {
     for (const glm::ivec2 cell : map_->points("but")) {
         const glm::vec2 c = moteur::cell_centre(cell);
         fires_.push_back(particles_.play(fire, {c.x, 0.05f, c.y}));
+    }
+    for (const moteur::MapObject& object : map_->objects()) {
+        if (object.type != "effet") {
+            continue;
+        }
+        const nlohmann::json& effect = object.props.contains("effet") ? object.props.at("effet") : nlohmann::json();
+        const std::string path = effect.is_string() ? effect.get<std::string>() : std::string("effects/fire.json");
+        if (app_.assets().exists(path)) {
+            fires_.push_back(particles_.play(app_.assets().particle_effect(path), object.position + glm::vec3(0.0f, 0.05f, 0.0f)));
+        }
     }
 }
 
@@ -802,67 +832,14 @@ void WorldTest::draw_overlays(moteur::Renderer& renderer, const moteur::Camera3D
     moteur::DebugLineBuffer& lines = renderer.debug_lines().lines();
     const entt::registry& registry = world_.registry();
     // Only the cells around what the camera looks at.
-    const glm::vec3 target = camera.target();
-    const int reach = static_cast<int>(camera.visible_height() * 1.1f) + 2;
-    const glm::ivec2 low = glm::max(moteur::cell_at({target.x, target.z}) - reach, glm::ivec2(0));
-    const glm::ivec2 high = glm::min(moteur::cell_at({target.x, target.z}) + reach, glm::ivec2(grid_.width() - 1, grid_.height() - 1));
-
-    if (show_grid_ || show_clearance_ || show_view_) {
-        for (int j = low.y; j <= high.y; ++j) {
-            for (int i = low.x; i <= high.x; ++i) {
-                const glm::ivec2 cell(i, j);
-                if (show_grid_ && !grid_.walkable(cell)) {
-                    cell_square(lines, cell, 0.05f, grid_.opaque(cell) ? glm::vec4(1, 0.2f, 0.2f, 1) : glm::vec4(1, 0.6f, 0.1f, 1), 1.6f);
-                }
-                if (show_clearance_ && grid_.walkable(cell)) {
-                    const float c = clearance_.clearance(cell) / moteur::ClearanceMap::kMaxClearance;
-                    cell_square(lines, cell, 0.45f - 0.4f * c, glm::vec4(1.0f - c, c, 0.2f, 1));
-                }
-                if (show_view_ && view_.visible(cell)) {
-                    cell_square(lines, cell, 0.15f, glm::vec4(0.3f, 1.0f, 0.4f, 1), 0.04f);
-                }
-            }
-        }
-    }
-    if (show_field_ && fields_[0].valid()) {
-        for (int j = low.y; j <= high.y; ++j) {
-            for (int i = low.x; i <= high.x; ++i) {
-                const glm::ivec2 next = fields_[0].next({i, j});
-                if (next.x < 0 || next == glm::ivec2(i, j)) {
-                    continue;
-                }
-                const glm::vec2 a = moteur::cell_centre({i, j});
-                const glm::vec2 b = a + (moteur::cell_centre(next) - a) * 0.4f;
-                lines.line({a.x, 0.05f, a.y}, {b.x, 0.05f, b.y}, {0.3f, 0.7f, 1.0f, 1});
-                lines.circle({b.x, 0.05f, b.y}, {0, 1, 0}, 0.04f, {0.3f, 0.7f, 1.0f, 1}, 6);
-            }
-        }
-    }
-    if (show_colliders_) {
-        for (auto [entity, collider] : registry.view<moteur::Collider>().each()) {
-            if (registry.all_of<moteur::Hidden>(entity)) {
-                continue;
-            }
-            const glm::vec3 p = world_.world_position(entity, alpha);
-            const glm::vec4 color = entity == hero_ ? glm::vec4(1.0f) : (collider.push_weight == 0 ? glm::vec4(1, 0.9f, 0.2f, 1) : glm::vec4(1, 0.35f, 0.3f, 1));
-            lines.circle({p.x, 0.05f, p.z}, {0, 1, 0}, collider.radius, color, 24, true);
-        }
-    }
-    if (show_paths_) {
-        for (auto [entity, mover] : registry.view<moteur::Mover>().each()) {
-            if (mover.mode != moteur::MoveMode::ToPoint || mover.next_point >= mover.path.size()) {
-                continue;
-            }
-            const glm::vec3 p = world_.world_position(entity, alpha);
-            glm::vec3 from(p.x, 0.08f, p.z);
-            for (std::size_t i = mover.next_point; i < mover.path.size(); ++i) {
-                const glm::vec3 to(mover.path[i].x, 0.08f, mover.path[i].y);
-                lines.line(from, to, {0.2f, 1.0f, 1.0f, 1}, true);
-                lines.circle(to, {0, 1, 0}, 0.08f, {0.2f, 1.0f, 1.0f, 1}, 8, true);
-                from = to;
-            }
-        }
-    }
+    moteur::WorldDebugSources sources;
+    sources.world = &world_;
+    sources.grid = &grid_;
+    sources.clearance = &clearance_;
+    sources.field = &fields_[0];
+    sources.view = &view_;
+    sources.highlight = hero_;
+    moteur::draw_world_debug(lines, debug_flags_, sources, camera.target(), camera.visible_height() * 1.1f, alpha);
     if (hero_ != entt::null && (show_query_ || show_ray_)) {
         const glm::vec3 hp = world_.world_position(hero_, alpha);
         const glm::vec2 facing = registry.get<moteur::Mover>(hero_).facing;
@@ -925,7 +902,7 @@ void WorldTest::draw_overlays(moteur::Renderer& renderer, const moteur::Camera3D
 }
 
 void WorldTest::draw_controls() {
-    if (ImGui::BeginCombo("Carte", names_[static_cast<std::size_t>(chosen_)].c_str())) {
+    if (ImGui::BeginCombo("Carte", chosen_ >= 0 ? names_[static_cast<std::size_t>(chosen_)].c_str() : "(carte de l'éditeur)")) {
         for (std::size_t i = 0; i < names_.size(); ++i) {
             if (ImGui::Selectable(names_[i].c_str(), static_cast<int>(i) == chosen_)) {
                 load_map(names_[i]);
@@ -960,16 +937,26 @@ void WorldTest::draw_controls() {
     }
     ImGui::SameLine();
     ImGui::Checkbox("Traînée", &trail_on_);
-    ImGui::Checkbox("Grille", &show_grid_);
+    // The overlays are console variables ("set debug.paths 1" does the same).
+    const auto variable_box = [](const char* label, moteur::Variable* variable) {
+        bool value = variable->as_bool();
+        if (ImGui::Checkbox(label, &value)) {
+            variable->set_bool(value);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", variable->name().c_str());
+        }
+    };
+    variable_box("Grille", debug_flags_.grid);
     ImGui::SameLine();
-    ImGui::Checkbox("Dégagement", &show_clearance_);
+    variable_box("Dégagement", debug_flags_.clearance);
     ImGui::SameLine();
-    ImGui::Checkbox("Cercles", &show_colliders_);
+    variable_box("Cercles", debug_flags_.colliders);
     ImGui::SameLine();
-    ImGui::Checkbox("Chemins", &show_paths_);
-    ImGui::Checkbox("Flow field", &show_field_);
+    variable_box("Chemins", debug_flags_.paths);
+    variable_box("Flow field", debug_flags_.field);
     ImGui::SameLine();
-    ImGui::Checkbox("Champ de vision", &show_view_);
+    variable_box("Champ de vision", debug_flags_.view);
     ImGui::SameLine();
     ImGui::Checkbox("Cône", &show_query_);
     ImGui::SameLine();

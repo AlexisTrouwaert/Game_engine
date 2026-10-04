@@ -1,5 +1,7 @@
 #include "moteur/visibility.hpp"
 
+#include "moteur/profiler.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -109,6 +111,7 @@ void FieldOfView::mark(glm::ivec2 cell) {
 }
 
 void FieldOfView::compute(const NavGrid& grid, glm::ivec2 origin, int radius) {
+    MOTEUR_PROFILE("champ de vision");
     origin_ = origin;
     radius_ = std::max(radius, 0);
     version_ = grid.version();
@@ -187,6 +190,19 @@ int ExploredMap::add(const FieldOfView& view) {
     }
     count_ += added;
     return added;
+}
+
+bool ExploredMap::mark(glm::ivec2 cell) {
+    if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_) {
+        return false;
+    }
+    std::uint8_t& seen = cells_[static_cast<std::size_t>(cell.y * width_ + cell.x)];
+    if (seen) {
+        return false;
+    }
+    seen = 1;
+    ++count_;
+    return true;
 }
 
 bool ExploredMap::explored(glm::ivec2 cell) const {

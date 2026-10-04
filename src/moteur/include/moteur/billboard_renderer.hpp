@@ -19,6 +19,9 @@ struct BillboardOptions {
     BillboardFacing facing = BillboardFacing::Camera;
     glm::vec4 uv_rect{0.0f, 0.0f, 1.0f, 1.0f};
     float rotation = 0.0f;    // radians, in its own plane
+    // Soft particle (milestone 7): fades over this many metres as it nears the surface behind it
+    // (smoke on the ground, fire against a wall). 0: a hard edge, and nothing more to compute.
+    float soft = 0.0f;
 };
 
 // Sprites in the 3D world (milestone 3, part 10): textured rectangles turned towards the camera,
@@ -66,6 +69,7 @@ private:
     GpuShader fragment_shader_;
     GpuGraphicsPipeline pipeline_;
     GpuSampler sampler_;
+    GpuSampler depth_sampler_;  // the scene's distances: the nearest texel
     GpuBuffer index_buffer_;
     GpuBuffer vertex_buffer_;
     GpuTransferBuffer transfer_buffer_;

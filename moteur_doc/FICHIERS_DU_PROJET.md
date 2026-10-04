@@ -61,6 +61,8 @@ moteur/
       include/moteur/movement.hpp     en-tête public : composant Mover et systèmes de déplacement (sans GPU)
       include/moteur/visibility.hpp   en-tête public : rayons, lignes de vue, champ de vision, exploration (sans GPU)
       include/moteur/particles.hpp    en-tête public : effets de particules (description JSON, système)
+      include/moteur/data_reader.hpp  en-tête public : lecture typée des données, problèmes, références (sans GPU)
+      include/moteur/data_table.hpp   en-tête public : tables de données, liaison, rechargement, forme binaire (sans GPU)
       include/moteur/animation.hpp    en-tête public : clips et lecteur d'animation (sans GPU)
       include/moteur/animation_data.hpp   en-tête public : squelettes et clips lus d'un glTF (sans GPU)
       include/moteur/animation_clock.hpp  en-tête public : temps d'un clip en ticks (sprites et squelettes)
@@ -178,6 +180,14 @@ moteur/
     test_map_data.cpp                 tests des cartes en fichier et de la grille de jeu
     test_world_grid.cpp               tests des collisions, chemins, requêtes, vision et déplacements (et mesures)
     test_particles.cpp                tests des effets de particules
+    test_data_table.cpp               tests des tables de données (lecture, héritage, références, rechargement, binaire)
+    test_console.cpp                  tests de la console et des variables
+    test_profiler.cpp                 tests du profiler
+    test_save_file.cpp                tests des fichiers de sauvegarde et de l'écriture sûre
+    test_world_save.cpp               tests de la sauvegarde de l'état du monde
+    test_map_document.cpp             tests de la carte en cours d'édition (outils, annuler, écriture)
+    test_animation_graph.cpp          tests du graphe d'animation en données
+    test_robustness.cpp               tests des fichiers abîmés
     test_animation.cpp                tests des animations
     test_asset_cache.cpp              tests du cache d'assets
     test_ktx_texture.cpp              tests du décodage KTX2
@@ -393,7 +403,7 @@ Le premier build est long à cause de la compilation de SDL3 par vcpkg. Les suiv
 
 ### `apps/bac_a_sable/CMakeLists.txt`
 
-**Rôle** : définit l'**exécutable** de test, séparé de la bibliothèque.
+**Rôle** : définit l'**exécutable** de test, séparé de la bibliothèque ; depuis le jalon 7, une bibliothèque **`bac_a_sable_commun`** (tables, types d'objets, scène « Monde », éditeur de cartes) liée par `bac_a_sable` et par le programme **`editeur`**, qui partage ses shaders et ses assets (même dossier de sortie).
 
 **Contenu** : `add_executable(bac_a_sable main.cpp)`, liaison `PRIVATE` avec `moteur`, avertissements, `moteur_add_shaders(...)` avec la liste des shaders de l'exécutable, `moteur_add_assets(...)` pour copier les assets, et `moteur_add_atlas(...)` (une fois par atlas) pour empaqueter les sprites. SDL3 arrive automatiquement par la liaison `PUBLIC` de la bibliothèque.
 
@@ -1173,6 +1183,70 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 
 **Rôle** (jalon 6) : la scène de test « Monde » (DEBUG > Tests moteur ; `--world [carte]`, `--menu-test 11`) : une carte de `assets/maps/` en 3D, un héros (chemins, glissement), des monstres (vue, flow fields, collisions, coups), le brouillard, les murs tramés, les effets, les overlays (grille, dégagement, cercles, chemins, flow field, champ de vision, cône, rayon), les temps des systèmes ; un mur posé ou retiré au clic droit, la carte rechargée à chaud. Sans menu : `--world-auto`, `--world-crowd N`, `--world-fires N`, `--world-map nom` (avec `--report`, `--capture`, `--freeze-after`).
 
+### `src/moteur/include/moteur/data_reader.hpp` et `data_reader.cpp`
+
+**Rôle** (jalon 7, partie 2) : **`DataReader`**, la lecture typée d'un objet JSON par le jeu (champs obligatoires ou par défaut, bornes, choix, couleurs, listes, objets imbriqués, références) ; **`DataIssues`** / **`DataIssue`** : les problèmes avec leur chemin `fichier > ligne > champ`, erreurs et avertissements (champs inconnus) ; **`DataRef<T>`** : une référence vers une ligne, par identifiant, résolue à la liaison.
+
+### `src/moteur/include/moteur/data_table.hpp` et `data_table.cpp`
+
+**Rôle** (jalon 7, partie 2) : **`DataTable<T>`** (une table : dossier de JSON, défauts, héritage à un parent, lignes à indices stables, `sorted()`, `find`, `at`, `ref`), **`DataLinker`** (résolution des références), **`DataTables`** (`Application::data()` : enregistrement, `load_all`, rechargement d'un fichier ou d'une table refusé en cas d'erreur ou de ligne retirée, `compile` en `.mdat` CBOR, source JSON ou compilée). Format en commentaire dans l'en-tête.
+
+### `apps/bac_a_sable/sandbox_data.hpp` et `sandbox_data.cpp`, `assets/data/`
+
+**Rôle** (jalon 7) : les tables du bac à sable : `personnages` (`CharacterData` : héros et créatures de la tranche), enregistrées par `register_sandbox_tables` ; leurs fichiers dans `assets/data/<table>/`. `--check-data`, `--compile-data DOSSIER`, `--compiled-data DOSSIER` (voir `main.cpp`).
+
+### `src/moteur/include/moteur/console.hpp` et `console.cpp`
+
+**Rôle** (jalon 7, partie 3) : la **console** : commandes d'**outil** (immédiates) et de **jeu** (en file, exécutées au début du tick suivant et enregistrées dans les rejeux), découpage des lignes, historique, complétion, sortie colorée, lignes du journal reçues de tous les fils ; commandes intégrées (`help`, `set`, `get`, `reset`, `toggle`, `vars`, `echo`, `clear`). Les scènes enregistrent les leurs (`add`) et les retirent (`remove`).
+
+### `src/moteur/include/moteur/variables.hpp` et `variables.cpp`
+
+**Rôle** (jalon 7, partie 3) : les **variables** nommées (`fog.enabled`, `time.scale`) : types, bornes, défaut, aide ; `Archive` (gardées dans `variables.cfg` si elles diffèrent du défaut), `Logic` (changées par la file des commandes de jeu) ; valeurs lues avant leur déclaration appliquées à celle-ci.
+
+### `src/moteur/include/moteur/log_file.hpp` et `log_file.cpp`
+
+**Rôle** (jalon 7, partie 3) : le **journal** `journal.txt` des préférences (heure, niveau, texte ; vidé à chaque ligne ; précédent gardé ; rotation à la taille) et la recopie de chaque message dans la console.
+
+### `src/moteur/include/moteur/profiler.hpp` et `profiler.cpp`
+
+**Rôle** (jalon 7, partie 4) : le **profiler** maison : `MOTEUR_PROFILE("zone")`, arbre des zones par image, historique, résumé et totaux, image figée, capture Chrome Trace (`profile start` / `stop`), éteint par `profile.enabled 0` ; avec `MOTEUR_TRACY`, les mêmes zones vont aussi à Tracy.
+
+### `src/moteur/include/moteur/world_debug.hpp` et `world_debug.cpp`
+
+**Rôle** (jalon 7, partie 4) : les **overlays du monde** commandés par des variables (`debug.grid`, `debug.clearance`, `debug.colliders`, `debug.paths`, `debug.flowfield`, `debug.view`), dessinés par toute scène qui donne ses sources.
+
+### `src/moteur/include/moteur/file_io.hpp` et `file_io.cpp`
+
+**Rôle** (jalon 7, partie 5) : **écriture atomique** (`write_file_atomic` : temporaire vidé sur disque puis remplacement, copie `.bak` sur demande, chemins UTF-8), lecture d'un fichier entier, existence, `file_time` (date de modification en ticks de l'horloge des fichiers : un changement d'un autre programme se voit, même dans la seconde), `crc32`.
+
+### `src/moteur/include/moteur/save_file.hpp` et `save_file.cpp`
+
+**Rôle** (jalon 7, partie 5) : **`SaveGame`** (fichier MSAV : en-tête, sections versionnées, JSON ou CBOR, CRC-32, fichier abîmé refusé), **`SaveMigrations`** (passages de version en chaîne), **`SaveSlots`** (emplacements d'un dossier, liste par date, copie de secours, vignettes).
+
+### `src/moteur/include/moteur/world_save.hpp` et `world_save.cpp`
+
+**Rôle** (jalon 7, partie 6) : **`PersistentId`** et **`ComponentSerializers`** (registre des composants à sauvegarder, ceux du moteur, sauvegarde dans l'ordre des identifiants, chargement par une fonction du jeu, composants oubliés signalés), aides JSON (`to_json_value`, `vec3_from_json`…). L'état d'un `Animator` est dans `animator_state.cpp`.
+
+### `src/moteur/include/moteur/map_document.hpp` et `map_document.cpp`
+
+**Rôle** (jalon 7, parties 7 et 8) : **`MapDocument`**, la carte en cours d'édition (tuiles par calque, types, légende, points, objets, connecteurs), ses outils (ligne, rectangle, remplissage, redimensionnement), ses **actions** pour annuler et refaire, ses vérifications et son **écriture stable** au format v2. Sans GPU, testé.
+
+### `src/moteur/include/moteur/animation_graph.hpp` et `animation_graph.cpp`, `src/moteur/animator_graph.cpp`
+
+**Rôle** (jalon 7, partie 9) : le **graphe d'animation** en données (paramètres, couches, états, transitions à conditions structurées), lu dans la clé `graph` d'un `AnimationSet` ; `animator_graph.cpp` : son état et son évaluation dans l'`Animator` (`start_graph`, `set_parameter`, `fire`, `graph_state`, historique), rechargement à chaud par les noms.
+
+### `apps/bac_a_sable/map_objects.hpp` et `map_objects.cpp`
+
+**Rôle** (jalon 7, partie 8) : les **types d'objets** des cartes du bac à sable (rocher, arbre, caisse, tonneau, monstre, lumière, effet, marqueur), leurs propriétés typées et leurs défauts, et `build_object` qui en fait des entités (scène « Monde », éditeur).
+
+### `apps/bac_a_sable/map_editor.hpp` et `map_editor.cpp`, `apps/bac_a_sable/editeur_main.cpp`
+
+**Rôle** (jalon 7, parties 7 et 8) : l'**éditeur de cartes**, scène du bac à sable (DEBUG > Tests moteur > Éditeur de cartes, `--editeur [carte]`) et programme `editeur` (`editeur_main.cpp` : `editeur [carte | --new] [--top] [--run-seconds S] [--capture F] [--self-test] [--no-vsync]`). Vue 3D, outils de tuiles, points, objets et connecteurs, palette, types, vérifications, annuler / refaire, enregistrement atomique dans les sources avec détection d'un fichier changé ailleurs, copie de récupération, « Essayer » dans la scène « Monde », auto-test.
+
+### `tools/tests/check_references.py` et `tests/data/references.json`
+
+**Rôle** (jalon 7, partie 11) : les **vérifications de référence** en une commande (`python tools/tests/check_references.py [build] [--record] [--quick]`) : captures de référence comparées à `references.json` (par plateforme), **test d'exactitude** des sauvegardes (A = B = C), auto-test de l'éditeur. `--record` écrit les hachages trouvés comme références de la plateforme, une fois le changement expliqué.
+
 ### `apps/bac_a_sable/animation_test.hpp` et `animation_test.cpp`
 
 **Rôle** (jalon 5) : la scène de test « Animation » (DEBUG > Tests moteur ; `--menu-test 10`) : les personnages de test côte à côte, entités d'un `World` avec un `Animator` chacune, jouant un clip de leur fichier au tick et dessinées entre deux ticks, le squelette en lignes de debug, les parties rigides sur leur os ; lecture, **tick suivant** en pause, vitesse, clip, temps en ticks, pose de repos, **pose de liaison**, **axes des os**, un **os** choisi et la **vue de ses poids**, interpolation (à comparer avec `--fixed-hz 10`). Lancée aussi par `--animation`. Avec `--skinned N` (partie 10), un test de charge à la place : N personnages KayKit en grille, mouvements, phases et fondus variés, coût de l'animation affiché et, avec `--report`, imprimé (`--skinned-zoom F`, `--no-shadows`). Devant la rangée, le **chevalier des mélanges** (partie 6) fait le tour d'une ellipse : vitesse de déplacement (blend space `locomotion`), marche sur place pour comparer, fondus vers n'importe quel clip, attaque du haut du corps, poids affichés, dérive du pied posé mesurée ; ses pas et ses coups sonnent sur les événements (partie 7), listés dans le panneau ; il tient une épée d'un fichier à part et une torche qui éclaire sur les points d'attache de ses mains, et deux repères montrent où irait une barre de vie (partie 8).
@@ -1312,6 +1386,13 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 - `test_image.cpp` : alpha pré-multiplié (pixels opaques inchangés, transparents mis à zéro, arrondi au plus proche, image vide).
 - `test_camera.cpp` : la position au centre de la fenêtre, zoom, sens de l'axe Y, aller-retour monde / écran / monde (avec et sans alignement), alignement sur les pixels (y compris avec une fenêtre de taille impaire), rectangle visible, redimensionnement, interpolation, coins de la fenêtre en espace de découpage, accord entre la matrice et `world_to_screen`, zoom invalide, conversion points / pixels.
 - `test_tilemap.cpp` : numérotation du `Tileset`, calques indépendants, `fill`, refus des cases hors de la carte, `clip` d'une plage à l'intérieur, à cheval ou hors de la carte, plage visible d'une caméra dans un coin, `walkable` sur plusieurs calques.
+- `test_console.cpp` (jalon 7) : découpage des lignes et guillemets, complétion, types et bornes des variables, archive, file des commandes de jeu, rejeu d'une commande.
+- `test_profiler.cpp` (jalon 7) : zones imbriquées, cumul, image figée, profiler éteint (même les zones posées à la main), Chrome Trace.
+- `test_save_file.cpp` (jalon 7) : écriture atomique et copie de secours, date de modification plus fine que la seconde, aller-retour JSON et CBOR, coupures, migrations, version future, emplacements.
+- `test_world_save.cpp` (jalon 7) : sérialiseurs du moteur, références entre entités, composants oubliés.
+- `test_map_document.cpp` (jalon 7) : outils, actions et annuler / refaire, redimensionnement, écriture stable de toutes les cartes de `assets/maps`, vérifications, description et morceau enregistrés.
+- `test_animation_graph.cpp` (jalon 7) : fichier vérifié, conditions, priorité, déclencheurs, fin de clip, interruption, « depuis n'importe où », même suite d'états, sauvegarde, rechargement.
+- `test_robustness.cpp` (jalon 7) : cartes, descriptions d'animation et effets abîmés nommés, type d'objet inconnu gardé, sauvegardes coupées ou modifiées refusées.
 - `test_input.cpp` : sources lues et réécrites, appui bref vu par un seul tick, appui maintenu, appuis accumulés sans tick, action à deux sources, répétition du système ignorée, crans de molette, diagonales unitaires, zone morte et sens du stick, gâchette comme bouton, profils (et changement qui relâche), fichier du joueur (profil, liaison changée, relu après écriture, profil inconnu ignoré), fichiers invalides nommés, entrées coupées, perte du focus, rejeu par nom d'action et au-delà de sa fin.
 - `test_ktx_texture.cpp` : KTX2 fabriqués en mémoire avec libktx : identifiant, UASTC couleur en BC7 (sRGB ou non) avec ses quatre niveaux et leurs tailles de blocs, repli RGBA8 à 12 niveaux au plus de la source, taille non multiple de 4 en RGBA8, carte de normales à deux canaux en BC5 ou avec x et y en rouge et vert, RGBA8 brut pris tel quel, fichiers invalides ou tronqués nommés dans l'erreur.
 - `test_asset_cache.cpp` : normalisation des chemins (séparateurs, `.`, `..`, refus des chemins absolus ou qui sortent), casse vérifiée sur un vrai dossier temporaire, un chargement par clé, libération de ce que personne ne tient (et rechargement ensuite), remplacement en cas d'échec ou exception sans remplacement, rechargement en place (même objet) et échec qui garde l'ancien contenu, placeholder réparé par un rechargement, fonction de remplacement qui refuse, fichiers d'un asset, mesure de la mémoire.

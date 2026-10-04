@@ -1,6 +1,7 @@
 #pragma once
 
 #include <entt/entity/fwd.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <array>
 #include <cstdint>
@@ -192,6 +193,43 @@ public:
     // joint if the skeleton does not have it.
     static std::vector<float> mask_weights(const SkeletonData& skeleton, const MaskData& mask);
 
+    // --- The set's animation graph (milestone 7, part 9; see AnimationGraph) ---
+    // The game sets parameters; the graph picks the motions. It is evaluated when a parameter
+    // changes value, when a trigger fires, and at the start of each advance(): always at a tick,
+    // in a defined order, so a replay takes the same transitions.
+
+    // Starts the graph: each layer enters its start state at once. Without it the graph is
+    // ignored and the game calls play() itself. Throws std::runtime_error naming the file if the
+    // set has no graph or a state names a motion the clips and blend spaces do not have.
+    void start_graph();
+    bool graph_active() const { return graph_.active; }
+    // Sets a parameter (a bool as 0 or 1, an int rounded). False if the graph has no such
+    // parameter: a file edited while the game runs never stops it (graph_error() says why).
+    bool set_parameter(const std::string& name, double value);
+    bool set_parameter(const std::string& name, bool value) { return set_parameter(name, value ? 1.0 : 0.0); }
+    bool set_parameter(const std::string& name, int value) { return set_parameter(name, static_cast<double>(value)); }
+    double parameter(const std::string& name) const;  // 0 if none
+    // Fires a trigger and evaluates the graph at once: true if a transition took it. A trigger no
+    // transition takes is dropped (it does not wait for a later tick).
+    bool fire(const std::string& name);
+    // The state of a layer ("" without graph, or for a layer the graph does not drive).
+    const std::string& graph_state(int layer) const;
+    struct GraphChange {
+        int layer = 0;
+        std::string from, to;
+        std::int64_t tick = 0;
+    };
+    const std::vector<GraphChange>& graph_history() const { return graph_.history; }  // the last ones, oldest first
+    const std::string& graph_error() const { return graph_.error; }
+
+    // The whole state of the Animator (saves, milestone 7, part 6): what plays on each layer, the
+    // clocks, weights and crossfades, speeds, ticks; never the pose. load_state() expects an
+    // Animator created with the same skeleton, clips and description (the game recreates the
+    // character from its definition, then gives it its state back). Throws std::runtime_error if
+    // the state names a clip the library does not have.
+    nlohmann::json save_state() const;
+    void load_state(const nlohmann::json& state);
+
 private:
     Motion* dominant_motion(int layer);
     Motion make_motion(const std::string& name, const PlayOptions& options) const;
@@ -200,6 +238,26 @@ private:
     static void set_marks(Motion& motion, std::vector<std::pair<int, MotionEvent>> marks);
     // A blend space's clock speed and weights for the current move speed.
     void pace(Motion& motion) const;
+    // The graph: evaluated with `fired` (a trigger's index, or -1); true if the trigger was taken.
+    bool evaluate_graph(int fired);
+    // After a reload of the set: the parameters and states found again by name. False if the graph
+    // cannot be used (graph_.error says why): the motions playing go on.
+    bool sync_graph();
+    void enter_state(int layer, int state, int fade_ticks, bool restart);
+    bool layer_ended(int layer) const;
+    std::string check_graph_motions(const AnimationGraph& graph) const;  // empty if every motion exists
+
+    struct GraphRuntime {
+        bool active = false;
+        std::uint64_t id = 0;                // the graph the indices are for
+        std::vector<std::string> names;      // its parameters
+        std::vector<double> values;          // their values (triggers: always 0 here)
+        std::array<int, kLayers> state{-1, -1};
+        std::array<std::string, kLayers> state_names;
+        std::vector<GraphChange> history;
+        std::string error;
+    };
+    GraphRuntime graph_;
 
     std::array<Layer, kLayers> layers_;
     std::int64_t speed_ = kWeightOne;

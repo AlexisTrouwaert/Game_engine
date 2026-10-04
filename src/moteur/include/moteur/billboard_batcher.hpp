@@ -13,8 +13,9 @@ struct BillboardVertex {
     float x, y, z;       // world position, metres
     float u, v;
     float r, g, b, a;    // premultiplied, linear; may exceed 1 (glow); a = 0 adds light (see BillboardDesc)
+    float soft;          // metres of fade before the surface behind (soft particles); 0: hard
 };
-static_assert(sizeof(BillboardVertex) == 36, "BillboardVertex is uploaded as is: keep it tightly packed");
+static_assert(sizeof(BillboardVertex) == 40, "BillboardVertex is uploaded as is: keep it tightly packed");
 
 // Which way a billboard turns.
 enum class BillboardFacing {
@@ -33,6 +34,7 @@ struct BillboardDesc {
     bool additive = false;          // adds its light to what is behind instead of covering it (fire, sparks)
     BillboardFacing facing = BillboardFacing::Camera;
     float rotation = 0.0f;          // radians, in its own plane (smoke that turns)
+    float soft = 0.0f;              // metres over which it fades as it nears the surface behind it; 0: hard
 };
 
 // Where the camera is and which way it looks, for turning billboards (see Camera3D).

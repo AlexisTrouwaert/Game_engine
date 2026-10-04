@@ -114,6 +114,11 @@ AnimationSet AnimationSet::parse(std::string_view json_text, const std::string& 
                 set.blend_spaces_[name] = std::move(data);
             }
         }
+        if (doc.contains("graph")) {
+            set.graph_ = AnimationGraph::parse(doc.at("graph"));
+            // Every motion of a state is a clip (any name: the library is checked when it plays) or a
+            // blend space of this file; a blend space's name is only known here.
+        }
     } catch (const nlohmann::json::exception& e) {
         throw std::runtime_error("Animation set '" + source + "' is not valid: " + e.what());
     } catch (const std::runtime_error& e) {

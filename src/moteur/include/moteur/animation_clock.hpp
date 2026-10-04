@@ -55,6 +55,23 @@ public:
     bool finished() const { return once_ && time_ >= cycle_length(); }
     bool started() const { return started_; }
 
+    // Everything the clock is (saves, milestone 7): written and given back exactly.
+    struct State {
+        int cycle_ticks = 1;
+        bool once = false;
+        std::int64_t time = 0;
+        std::int64_t speed = kOne;
+        bool started = false;
+    };
+    State state() const { return {cycle_ticks_, once_, time_, speed_, started_}; }
+    void set_state(const State& state) {
+        cycle_ticks_ = state.cycle_ticks > 0 ? state.cycle_ticks : 1;
+        once_ = state.once;
+        time_ = state.time;
+        speed_ = state.speed < 0 ? 0 : state.speed;
+        started_ = state.started;
+    }
+
 private:
     int cycle_ticks_ = 1;
     bool once_ = false;

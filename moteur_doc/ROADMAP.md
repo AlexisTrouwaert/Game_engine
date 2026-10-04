@@ -90,10 +90,12 @@ Documentation détaillée : [Jalon 6 - Monde et déplacement](JALON_6_MONDE_ET_D
 - [x] Brouillard de guerre / visibilité (propriété `opaque` de la `TileMap`) *(shadowcasting symétrique, cases explorées, murs tramés devant le héros)*
 
 ### 7. Outils et données
-- [ ] Chargement de données JSON (hot reload)
-- [ ] Sauvegarde / chargement de l'état
-- [ ] Outils de debug (console, profiler, overlays)
-- [ ] Éditeur de cartes minimal
+Documentation détaillée : [Jalon 7 - Outils et données](JALON_7_OUTILS_ET_DONNEES.md)
+
+- [x] Chargement de données JSON (hot reload) *(tables en dossiers, lecture typée en C++, héritage, références vérifiées, forme binaire CBOR ; graphe d'animation en données)*
+- [x] Sauvegarde / chargement de l'état *(fichiers versionnés, atomiques, JSON ou CBOR ; emplacements, vignettes, sauvegarde automatique ; partie chargée identique au tick près, test automatisé)*
+- [x] Outils de debug (console, profiler, overlays) *(console et variables, journal, profiler maison et Tracy, overlays en variables ; particules douces)*
+- [x] Éditeur de cartes minimal *(éditeur de production : tuiles, points, objets, morceaux et connecteurs, annuler, vérifier, essayer ; programme `editeur` ; retouche de la tranche à la main à faire)*
 
 ### 8. Consolidation
 - [ ] Profilage et optimisation

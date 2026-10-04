@@ -16,6 +16,8 @@
 #include "moteur/collision.hpp"
 #include "moteur/debug_lines.hpp"
 #include "moteur/movement.hpp"
+#include "moteur/process_memory.hpp"
+#include "moteur/variables.hpp"
 #include "moteur/state_stack.hpp"
 #include "moteur/world.hpp"
 
@@ -332,6 +334,9 @@ const char* DebugTools::window_key(Window window) {
         case Window::Audio: return "Audio";
         case Window::States: return "States";
         case Window::Animation: return "Animation";
+        case Window::Data: return "Data";
+        case Window::Console: return "Console";
+        case Window::Profiler: return "Profiler";
     }
     return "";
 }
@@ -400,7 +405,7 @@ void DebugTools::forget(StateStack& stack) {
 
 void DebugTools::menu_items() {
     static constexpr const char* kLabels[kWindowCount] = {"Inspecteur d'entités", "Assets", "Entrées", "Audio", "États de jeu",
-                                                          "Animation"};
+                                                          "Animation", "Données", "Console", "Profiler"};
     for (int i = 0; i < kWindowCount; ++i) {
         if (ImGui::MenuItem(kLabels[i], nullptr, open_[i])) {
             set_open(static_cast<Window>(i), !open_[i]);
@@ -415,6 +420,12 @@ void DebugTools::between_frames() {
         reload_request_.reset();
         last_reload_ = app_.assets().reload(type, key) ? "« " + key + " » rechargé"
                                                        : "« " + key + " » non rechargé (voir le journal)";
+    }
+    if (!data_reload_.empty()) {
+        const std::string name = std::move(data_reload_);
+        data_reload_.clear();
+        last_reload_ = app_.data().reload(app_.assets().root(), name) ? "table « " + name + " » rechargée"
+                                                                      : "table « " + name + " » non rechargée (voir les problèmes)";
     }
     if (collect_request_) {
         collect_request_ = false;
@@ -435,6 +446,342 @@ void DebugTools::draw() {
     window(Window::Audio, &DebugTools::draw_audio);
     window(Window::States, &DebugTools::draw_states);
     window(Window::Animation, &DebugTools::draw_animation);
+    window(Window::Data, &DebugTools::draw_data);
+    window(Window::Console, &DebugTools::draw_console);
+    window(Window::Profiler, &DebugTools::draw_profiler);
+    draw_stats_bar();
+}
+
+void DebugTools::draw_stats_bar() {
+    if (stats_bar_ == nullptr) {
+        stats_bar_ = &app_.console().variables().add_bool("debug.stats", false,
+                                                          "barre de statistiques (images, CPU, logique, mémoire, entités)",
+                                                          Variable::Archive);
+    }
+    if (!stats_bar_->as_bool()) {
+        return;
+    }
+    const auto& history = app_.profiler().history();
+    double cpu = 0.0, logic = 0.0;
+    if (!history.empty()) {
+        const Profiler::Frame& frame = history.back();
+        cpu = Profiler::milliseconds(frame.end - frame.start);
+        for (const Profiler::Zone& zone : frame.zones) {
+            if (std::string_view(zone.name) == "logique") {
+                logic = Profiler::milliseconds(zone.end - zone.start);
+            }
+            if (std::string_view(zone.name) == "attente de l'affichage") {
+                cpu -= Profiler::milliseconds(zone.end - zone.start);  // waiting is not work
+            }
+        }
+    }
+    char text[256];
+    std::snprintf(text, sizeof(text), "%.0f images/s  |  CPU %.2f ms (logique %.2f)  |  mémoire %.0f Mo  |  %zu entités",
+                  static_cast<double>(ImGui::GetIO().Framerate), cpu, logic,
+                  static_cast<double>(process_memory_bytes()) / (1024.0 * 1024.0), world_ != nullptr ? world_->entity_count() : 0);
+    ImDrawList* draw = ImGui::GetForegroundDrawList();
+    const ImVec2 size = ImGui::CalcTextSize(text);
+    const ImVec2 corner(ImGui::GetIO().DisplaySize.x - size.x - 16.0f, 28.0f);
+    draw->AddRectFilled({corner.x - 6.0f, corner.y - 3.0f}, {corner.x + size.x + 6.0f, corner.y + size.y + 3.0f}, IM_COL32(0, 0, 0, 170), 4.0f);
+    draw->AddText(corner, IM_COL32(230, 230, 230, 255), text);
+    // The last frame times, as a small graph under the bar (16.7 ms: the line).
+    const ImVec2 graph(corner.x - 6.0f, corner.y + size.y + 6.0f);
+    const float width = size.x + 12.0f, height = 36.0f;
+    draw->AddRectFilled(graph, {graph.x + width, graph.y + height}, IM_COL32(0, 0, 0, 140), 4.0f);
+    const std::size_t count = std::min<std::size_t>(history.size(), 240);
+    for (std::size_t i = 0; i < count; ++i) {
+        const Profiler::Frame& frame = history[history.size() - count + i];
+        const float ms = static_cast<float>(Profiler::milliseconds(frame.end - frame.start));
+        const float x = graph.x + width * static_cast<float>(i) / 240.0f;
+        const float h = std::min(ms / 33.3f, 1.0f) * height;
+        draw->AddLine({x, graph.y + height}, {x, graph.y + height - h}, ms > 16.7f ? IM_COL32(255, 110, 90, 255) : IM_COL32(120, 200, 255, 255));
+    }
+    const float limit = graph.y + height - height * 16.7f / 33.3f;
+    draw->AddLine({graph.x, limit}, {graph.x + width, limit}, IM_COL32(255, 255, 255, 80));
+}
+
+void DebugTools::draw_profiler() {
+    if (!begin_window("Profiler", Window::Profiler, 760.0f, 520.0f)) {
+        return;
+    }
+    Profiler& profiler = app_.profiler();
+    bool frozen = profiler.frozen();
+    if (ImGui::Checkbox("Figer", &frozen)) {
+        profiler.set_frozen(frozen);
+    }
+    ImGui::SameLine();
+    bool enabled = profiler.enabled();
+    if (ImGui::Checkbox("Mesurer", &enabled)) {
+        profiler.set_enabled(enabled);
+    }
+    ImGui::SameLine();
+    if (!profiler.capturing()) {
+        if (ImGui::Button("Capturer")) {
+            profiler.start_capture();
+        }
+    } else if (ImGui::Button("Arrêter et écrire")) {
+        const std::string path = app_.preferences_directory() + "profils/profil.json";
+        last_reload_ = profiler.stop_capture(path) ? "profil écrit : " + path : "écriture impossible";
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", profiler.capturing() ? "capture en cours" : last_reload_.c_str());
+
+    const auto& history = profiler.history();
+    if (history.empty()) {
+        ImGui::TextDisabled("Aucune image mesurée.");
+        ImGui::End();
+        return;
+    }
+    // The frame times: a bar per frame; a click picks one (otherwise the last).
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x, height = 90.0f;
+    ImGui::InvisibleButton("graphe", {width, height});
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(origin, {origin.x + width, origin.y + height}, IM_COL32(20, 20, 24, 255));
+    const std::size_t count = history.size();
+    const float bar = width / static_cast<float>(Profiler::kHistory);
+    for (std::size_t i = 0; i < count; ++i) {
+        const Profiler::Frame& frame = history[i];
+        const float ms = static_cast<float>(Profiler::milliseconds(frame.end - frame.start));
+        const float x = origin.x + bar * static_cast<float>(i + Profiler::kHistory - count);
+        const float h = std::min(ms / 33.3f, 1.0f) * height;
+        const ImU32 color = frame.index == profiler_frame_ ? IM_COL32(255, 255, 255, 255)
+                            : ms > 16.7f                   ? IM_COL32(255, 110, 90, 255)
+                                                           : IM_COL32(120, 200, 255, 255);
+        draw->AddRectFilled({x, origin.y + height - h}, {x + std::max(bar - 0.5f, 1.0f), origin.y + height}, color);
+    }
+    const float limit = origin.y + height - height * 16.7f / 33.3f;
+    draw->AddLine({origin.x, limit}, {origin.x + width, limit}, IM_COL32(255, 255, 255, 70));
+    if (ImGui::IsItemClicked()) {
+        const float rel = (ImGui::GetIO().MousePos.x - origin.x) / bar - static_cast<float>(Profiler::kHistory - count);
+        const auto i = static_cast<std::size_t>(std::clamp(rel, 0.0f, static_cast<float>(count - 1)));
+        profiler_frame_ = history[i].index;
+        profiler.set_frozen(true);  // to look at it
+    }
+    const Profiler::Frame* shown = &history.back();
+    for (const Profiler::Frame& frame : history) {
+        if (frame.index == profiler_frame_) {
+            shown = &frame;
+        }
+    }
+    ImGui::Text("Image %llu : %.3f ms (cliquer une barre pour la choisir ; 16,7 ms : la ligne)",
+                static_cast<unsigned long long>(shown->index), Profiler::milliseconds(shown->end - shown->start));
+
+    if (ImGui::BeginTable("zones", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                          {0.0f, 200.0f})) {
+        ImGui::TableSetupColumn("Zone");
+        ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableHeadersRow();
+        for (const Profiler::Zone& zone : shown->zones) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Indent(static_cast<float>(zone.depth) * 14.0f);
+            ImGui::TextUnformatted(zone.name);
+            ImGui::Unindent(static_cast<float>(zone.depth) * 14.0f);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.3f", Profiler::milliseconds(zone.end - zone.start));
+        }
+        ImGui::EndTable();
+    }
+
+    // Statistics over the history (recomputed twice a second: it walks every frame).
+    if (++profiler_summary_age_ >= 30) {
+        profiler_summary_ = profiler.summary();
+        profiler_summary_age_ = 0;
+    }
+    if (ImGui::BeginTable("stats", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupColumn("Zone (sur les dernières images)");
+        ImGui::TableSetupColumn("moyenne", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("p99", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("max", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("par image", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableHeadersRow();
+        for (const Profiler::Summary& zone : profiler_summary_) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(zone.name.c_str());
+            ImGui::TableNextColumn();
+            ImGui::Text("%.3f", zone.mean_ms);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.3f", zone.p99_ms);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.3f", zone.max_ms);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.1f", zone.calls);
+        }
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
+
+void DebugTools::toggle_console() {
+    set_open(Window::Console, !open(Window::Console));
+    console_focus_ = open(Window::Console);
+}
+
+void DebugTools::draw_console() {
+    ImGui::SetNextWindowSize({720.0f, 360.0f}, ImGuiCond_FirstUseEver);
+    if (!begin_window("Console", Window::Console, 720.0f, 360.0f)) {
+        return;
+    }
+    Console& console = app_.console();
+    const float footer = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing() * 2.0f;
+    if (ImGui::BeginChild("sortie", {0.0f, -footer}, ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar)) {
+        for (const Console::Line& line : console.lines()) {
+            ImVec4 color(0.85f, 0.85f, 0.85f, 1.0f);
+            switch (line.level) {
+                case Console::Level::Warning: color = {1.0f, 0.8f, 0.3f, 1.0f}; break;
+                case Console::Level::Error: color = {1.0f, 0.45f, 0.4f, 1.0f}; break;
+                case Console::Level::Input: color = {0.55f, 0.8f, 1.0f, 1.0f}; break;
+                default: break;
+            }
+            ImGui::TextColored(color, "%s", line.text.c_str());
+        }
+        if (console.line_count() != console_seen_) {
+            ImGui::SetScrollHereY(1.0f);  // follow the new lines
+            console_seen_ = console.line_count();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::Separator();
+    if (!console_candidates_.empty()) {
+        std::string list;
+        for (const std::string& candidate : console_candidates_) {
+            list += candidate + "  ";
+        }
+        ImGui::TextDisabled("%s", list.c_str());
+    } else {
+        ImGui::TextDisabled("Tab : compléter ; flèches : historique ; help : les commandes ; ² : fermer");
+    }
+    const auto callback = [](ImGuiInputTextCallbackData* data) -> int {
+        auto* tools = static_cast<DebugTools*>(data->UserData);
+        Console& c = tools->app_.console();
+        if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion) {
+            const std::string line(data->Buf, static_cast<std::size_t>(data->BufTextLen));
+            tools->console_candidates_ = c.complete(line);
+            const std::string completed = c.complete_line(line);
+            data->DeleteChars(0, data->BufTextLen);
+            data->InsertChars(0, completed.c_str());
+        } else if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory) {
+            const auto& history = c.history();
+            if (history.empty()) {
+                return 0;
+            }
+            int& at = tools->console_history_;
+            if (data->EventKey == ImGuiKey_UpArrow) {
+                at = at < 0 ? static_cast<int>(history.size()) - 1 : std::max(0, at - 1);
+            } else if (data->EventKey == ImGuiKey_DownArrow && at >= 0) {
+                at = at + 1 >= static_cast<int>(history.size()) ? -1 : at + 1;
+            }
+            data->DeleteChars(0, data->BufTextLen);
+            if (at >= 0) {
+                data->InsertChars(0, history[static_cast<std::size_t>(at)].c_str());
+            }
+        }
+        return 0;
+    };
+    ImGui::PushItemWidth(-1.0f);
+    if (console_focus_) {
+        ImGui::SetKeyboardFocusHere();
+        console_focus_ = false;
+    }
+    const ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackCompletion |
+                                      ImGuiInputTextFlags_CallbackHistory;
+    if (ImGui::InputText("##ligne", console_input_, sizeof(console_input_), flags, callback, this)) {
+        console.submit(console_input_);
+        console_input_[0] = '\0';
+        console_history_ = -1;
+        console_candidates_.clear();
+        ImGui::SetKeyboardFocusHere(-1);  // keep typing
+    }
+    ImGui::PopItemWidth();
+    ImGui::End();
+}
+
+void DebugTools::draw_data() {
+    if (!begin_window("Données", Window::Data, 640.0f, 460.0f)) {
+        return;
+    }
+    DataTables& data = app_.data();
+    ImGui::Text("%zu table(s), source : %s", data.tables().size(),
+                data.source() == DataSource::Json ? "JSON (rechargement à chaud)" : "compilée");
+    if (!last_reload_.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", last_reload_.c_str());
+    }
+    if (ImGui::BeginTable("tables", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Table");
+        ImGui::TableSetupColumn("Lignes");
+        ImGui::TableSetupColumn("Rechargée");
+        ImGui::TableSetupColumn("");
+        ImGui::TableHeadersRow();
+        for (const auto& table : data.tables()) {
+            ImGui::PushID(table.get());
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (ImGui::Selectable(table->name().c_str(), data_table_ == table->name(), ImGuiSelectableFlags_SpanAllColumns |
+                                                                                           ImGuiSelectableFlags_AllowOverlap)) {
+                data_table_ = table->name();
+                data_row_.clear();
+            }
+            ImGui::TableNextColumn();
+            ImGui::Text("%zu%s", table->size(), table->loaded() ? "" : " (non chargée)");
+            ImGui::TableNextColumn();
+            ImGui::Text("%llu fois", static_cast<unsigned long long>(table->revision()));
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(data.source() != DataSource::Json);
+            if (ImGui::SmallButton("Recharger")) {
+                data_reload_ = table->name();
+            }
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    const DataIssues& issues = data.last_issues();
+    if (!issues.all().empty() && ImGui::CollapsingHeader("Problèmes du dernier chargement", ImGuiTreeNodeFlags_DefaultOpen)) {
+        for (const DataIssue& issue : issues.all()) {
+            const bool error = issue.level == DataIssue::Level::Error;
+            ImGui::TextColored(error ? ImVec4(1.0f, 0.45f, 0.4f, 1.0f) : ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s : %s",
+                               issue.where.c_str(), issue.message.c_str());
+        }
+    }
+
+    DataTableBase* table = data.find(data_table_);
+    if (table == nullptr) {
+        ImGui::TextDisabled("Choisir une table.");
+        ImGui::End();
+        return;
+    }
+    ImGui::SeparatorText(table->name().c_str());
+    ImGui::TextDisabled("%s/ : %zu fichier(s)", table->directory().c_str(), table->files().size());
+    ImGui::InputTextWithHint("##filtre", "filtrer les lignes", data_filter_, sizeof(data_filter_));
+    if (ImGui::BeginChild("lignes", {220.0f, 0.0f}, ImGuiChildFlags_Borders)) {
+        for (const std::uint32_t index : table->sorted()) {  // in the order of the identifiers
+            const std::string& id = table->id(index);
+            if (data_filter_[0] != '\0' && id.find(data_filter_) == std::string::npos) {
+                continue;
+            }
+            if (ImGui::Selectable(id.c_str(), id == data_row_)) {
+                data_row_ = id;
+            }
+        }
+    }
+    ImGui::EndChild();
+    ImGui::SameLine();
+    if (ImGui::BeginChild("ligne", {0.0f, 0.0f}, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+        if (const auto index = table->index_of(data_row_)) {
+            ImGui::TextDisabled("%s, index %u", table->row_file(*index).c_str(), *index);
+            ImGui::TextDisabled("Après défauts et héritage, telle que le jeu la lit :");
+            const std::string text = table->resolved(*index).dump(2);
+            ImGui::TextUnformatted(text.c_str(), text.c_str() + text.size());
+        } else {
+            ImGui::TextDisabled("Choisir une ligne.");
+        }
+    }
+    ImGui::EndChild();
+    ImGui::End();
 }
 
 void DebugTools::draw_animation() {
@@ -481,6 +828,33 @@ void DebugTools::draw_animation() {
                     static_cast<long long>(last.tick), static_cast<long long>(animator.ticks() - last.tick));
     } else {
         ImGui::TextDisabled("Aucun événement encore");
+    }
+    // The graph (milestone 7, part 9): the state of each layer, the parameters, the last transitions.
+    if (animator.graph_active()) {
+        ImGui::SeparatorText("Graphe d'animation");
+        if (!animator.graph_error().empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", animator.graph_error().c_str());
+        }
+        ImGui::Text("Corps : %s ; haut du corps : %s", animator.graph_state(0).c_str(),
+                    animator.graph_state(1).empty() ? "-" : animator.graph_state(1).c_str());
+        if (animator.set) {
+            for (const GraphParameter& p : animator.set->graph().parameters) {
+                if (p.type == GraphParameter::Type::Trigger) {
+                    ImGui::BulletText("%s (déclencheur)", p.name.c_str());
+                } else {
+                    ImGui::BulletText("%s = %g", p.name.c_str(), animator.parameter(p.name));
+                }
+            }
+        }
+        const auto& history = animator.graph_history();
+        if (!history.empty() && ImGui::TreeNode("Dernières transitions")) {
+            for (auto it = history.rbegin(); it != history.rend(); ++it) {
+                ImGui::Text("tick %lld, %s : %s -> %s (il y a %lld ticks)", static_cast<long long>(it->tick),
+                            it->layer == 0 ? "corps" : "haut", it->from.c_str(), it->to.c_str(),
+                            static_cast<long long>(animator.ticks() - it->tick));
+            }
+            ImGui::TreePop();
+        }
     }
     for (int l = 0; l < Animator::kLayers; ++l) {
         const Animator::Layer& layer = animator.layer(l);

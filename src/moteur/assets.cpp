@@ -172,7 +172,8 @@ Assets::Assets(Renderer& renderer, std::string root)
           fresh.set_revision(current.revision() + 1);
           current = std::move(fresh);
       }),
-      effects_("particle effect") {}
+      // A broken effect is only missing from the screen: an effect without emitters stands in.
+      effects_("particle effect", [] { return ParticleEffect{}; }) {}
 
 // The watcher goes first: its thread must not call into a half-destroyed manager.
 Assets::~Assets() {
@@ -410,6 +411,9 @@ void Assets::update() {
             continue;  // a directory, or a file already gone again
         }
         reload_file(key);
+        for (const auto& listener : file_listeners_) {
+            listener(key);
+        }
     }
 }
 

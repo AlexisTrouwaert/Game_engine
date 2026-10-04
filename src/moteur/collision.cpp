@@ -1,5 +1,7 @@
 #include "moteur/collision.hpp"
 
+#include "moteur/profiler.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -218,6 +220,7 @@ glm::vec2 plane_position(const entt::registry& registry, entt::entity entity) {
 
 CollisionStats separate_colliders(entt::registry& registry, const NavGrid& grid, SpatialHash& hash,
                                   const SeparationSettings& settings) {
+    MOTEUR_PROFILE("collisions");
     struct Item {
         entt::entity entity;
         glm::vec2 position;

@@ -15,11 +15,18 @@
 #include "moteur/billboard_renderer.hpp"
 #include "moteur/debug_tools.hpp"
 #include "moteur/color.hpp"
+#include "moteur/debug_lines.hpp"
+#include "moteur/file_io.hpp"
+#include "moteur/map_document.hpp"
 #include "moteur/fixed_timestep.hpp"
 #include "moteur/image.hpp"
 #include "moteur/mesh_renderer.hpp"
 #include "moteur/paths.hpp"
+#include "moteur/profiler.hpp"
 #include "moteur/sprite_renderer.hpp"
+
+#include "map_objects.hpp"
+#include "sandbox_data.hpp"
 
 namespace {
 
@@ -68,6 +75,11 @@ struct Health {
 struct Stature {  // an animated character: how tall it stands (its bar goes above)
     float height;  // metres
 };
+struct Archetype {  // what a character of the slice is: its row of the "personnages" table
+    moteur::DataRef<CharacterData> data;
+    float pace = 1.0f;  // its own pace: multiplies the row's speed
+};
+struct HeroTag {};  // the hero of the slice (saves tell it from the creatures)
 struct Hunter {  // a creature of the slice (milestone 6): wanders, sees the hero, chases, strikes
     glm::vec2 wander{0.0f};  // its way while it does not chase (turned back when blocked)
     bool chasing = false;
@@ -76,19 +88,13 @@ struct Hunter {  // a creature of the slice (milestone 6): wanders, sees the her
 };
 
 constexpr float kCharacterRadius = 0.35f;  // metres: the hero and the creatures, as circles
-constexpr float kHunterSight = 9.0f;       // metres: how far a creature sees the hero
 constexpr int kHeroSight = 14;             // cells: the hero's field of view
 const char* const kSliceMap = "maps/tranche.json";
-const char* const kSparks = "effects/sparks.json";
-const char* const kBlood = "effects/blood.json";
-const char* const kDeathSmoke = "effects/death_smoke.json";
 const char* const kDust = "effects/dust.json";
 const char* const kBrazierFire = "effects/brazier_fire.json";
 
-constexpr float kHeroHeight = 1.8f;      // metres: the knight, scaled to it
-constexpr float kCreatureHeight = 1.5f;  // the skeletons
+constexpr float kCreatureHeight = 1.5f;  // the skeletons of the demo without the slice (the slice reads its table)
 constexpr float kBodyTop = 1.6f;         // the bodies of primitives (the demo of milestone 3)
-const char* const kAttack = "1H_Melee_Attack_Chop";
 // The knight carries every weapon of its pack in its file: its shield stays, the sword is a file
 // of its own held on its right hand (see spawn_hero()), the others go.
 const std::vector<std::string> kKnightHidden = {"1H_Sword", "1H_Sword_Offhand", "2H_Sword", "Badge_Shield",
@@ -144,17 +150,56 @@ Demo3D::Demo3D(moteur::Application& app, const Options& options, bool standalone
     white.pixels = {255, 255, 255, 255};
     white_ = renderer.create_texture(white, "demo.white");
 
+    debug_flags_ = moteur::WorldDebugFlags::declare(app.console().variables());
+    effects_on_ = &app.console().variables().add_bool("effects.enabled", true, "effets de particules de la tranche (purement visuels)");
+    setup_serializers();
+    if (options_.hero) {
+        register_commands();
+    }
     animated_ = options_.hero && characters_available(app.assets());
     if (options_.hero && !animated_) {
         SDL_Log("Slice: no animated characters (python tools/models/fetch_test_characters.py): bodies of primitives");
     }
+    std::vector<moteur::MapObject> recorded;
+    if (options_.hero && !options_.export_objects_path.empty()) {
+        recording_ = &recorded;
+    }
     build_map();
     build_floor();
     build_decor();
-    spawn_creatures();
+    // A saved slice: its characters come from the save, not from a new draw.
+    std::optional<moteur::SaveGame> saved;
+    Uint64 load_start = 0;
+    double decode_ms = 0.0;
+    if (options_.hero && options_.saved_game) {
+        load_start = SDL_GetPerformanceCounter();
+        saved = *options_.saved_game;
+    } else if (options_.hero && !options_.load_path.empty()) {
+        std::string error;
+        load_start = SDL_GetPerformanceCounter();
+        const auto bytes = moteur::read_file_bytes(options_.load_path);
+        saved = bytes ? moteur::SaveGame::decode(*bytes, error) : std::nullopt;
+        decode_ms = static_cast<double>(SDL_GetPerformanceCounter() - load_start) * 1000.0 /
+                    static_cast<double>(SDL_GetPerformanceFrequency());
+        if (!saved) {
+            throw std::runtime_error("Tranche : sauvegarde « " + options_.load_path + " » illisible : " +
+                                     (bytes ? error : std::string("fichier absent")));
+        }
+    }
+    if (!saved) {
+        spawn_creatures();
+    }
     light_braziers();
     if (options_.hero) {
-        spawn_hero();
+        if (saved) {
+            const Uint64 apply_start = SDL_GetPerformanceCounter();
+            load(*saved);
+            SDL_Log("Save: read and decoded in %.2f ms, the world given back in %.2f ms", decode_ms,
+                    static_cast<double>(SDL_GetPerformanceCounter() - apply_start) * 1000.0 /
+                        static_cast<double>(SDL_GetPerformanceFrequency()));
+        } else {
+            spawn_hero();
+        }
         moteur::Assets& assets = app.assets();
         if (assets.exists(kAmbience)) {
             for (const char* path : kSteps) {
@@ -173,6 +218,22 @@ Demo3D::Demo3D(moteur::Application& app, const Options& options, bool standalone
         }
     }
 
+    // The export of the draws as the slice map's objects (milestone 7, part 8).
+    if (recording_ != nullptr) {
+        recording_ = nullptr;
+        moteur::MapDocument document = moteur::MapDocument::from(*slice_map_);
+        for (moteur::MapObject& object : recorded) {
+            document.add_object(std::move(object));
+        }
+        std::string error;
+        if (moteur::write_file_atomic(options_.export_objects_path, document.to_json(), error)) {
+            SDL_Log("Slice: %zu objects written into '%s'", document.objects().size(), options_.export_objects_path.c_str());
+        } else {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Slice: %s", error.c_str());
+        }
+        stop_after_export_ = true;  // at the first update (the loop is not running yet)
+    }
+
     // The engine's defaults, whatever an earlier test changed.
     moteur::ShadowOptions shadows;
     if (options_.point_budget >= 0) {
@@ -184,8 +245,10 @@ Demo3D::Demo3D(moteur::Application& app, const Options& options, bool standalone
     renderer.set_exposure(1.0f);
 
     const auto middle = static_cast<float>(options_.map_size) * 0.5f;
-    camera_.set_target({middle, 0.0f, middle});
-    if (hero_ != entt::null) {
+    if (!saved) {  // a loaded slice has its camera from the save
+        camera_.set_target({middle, 0.0f, middle});
+    }
+    if (hero_ != entt::null && !saved) {
         const glm::vec2 start = cell_position(hero_);
         camera_.set_target({start.x, 0.0f, start.y});
         follow_ = true;
@@ -278,6 +341,9 @@ std::string Demo3D::user_bindings_path() const {
 }
 
 Demo3D::~Demo3D() {
+    for (const char* name : {"god", "heal", "tp", "spawn", "kill", "fog"}) {
+        app_.console().remove(name);
+    }
     app_.renderer().meshes().set_fog({});
     app_.renderer().meshes().set_cutout({});
     if (moteur::DebugTools* tools = app_.debug_tools()) {
@@ -412,6 +478,51 @@ void Demo3D::build_decor() {
     moteur::Material bark_fading = bark;  // the slice: trees before the hero fade too
     moteur::Material leaves_fading = leaves;
     bark_fading.fades = leaves_fading.fades = options_.hero;
+    // One piece of decor, the same whether it was drawn below or read from the map's objects (the
+    // slice, milestone 7, part 8; types of map_objects.hpp).
+    const auto place_decor = [&](const std::string& type, glm::vec3 spot, float yaw, const nlohmann::json& props) {
+        if (type == "rocher") {
+            const glm::vec3 scale = moteur::vec3_from_json(props.at("echelle"));
+            add_static(rock_, place(spot + glm::vec3(0.0f, scale.y * 0.3f, 0.0f), scale, yaw), rock);
+        } else if (type == "arbre") {
+            const float height = props.at("hauteur").get<float>();
+            add_static(cube_, place(spot + glm::vec3(0.0f, height * 0.5f, 0.0f), {0.16f, height, 0.16f}, yaw), bark_fading);
+            const float crown = props.at("couronne").get<float>();
+            add_static(sphere_, place(spot + glm::vec3(0.0f, height + crown * 0.3f, 0.0f), glm::vec3(crown, crown * 0.85f, crown)), leaves_fading);
+        } else if (type == "caisse" || (type == "tonneau" && !barrel_)) {
+            const float edge = props.at("arete").get<float>();
+            add_static(cube_, place(spot + glm::vec3(0.0f, edge * 0.5f, 0.0f), glm::vec3(edge), yaw), wood);
+        } else if (type == "tonneau") {
+            entt::registry& registry = world_.registry();
+            const entt::entity barrel = registry.create();
+            registry.emplace<moteur::Transform>(barrel, place(spot, glm::vec3(1.0f), yaw));
+            registry.emplace<moteur::ModelComponent>(barrel, barrel_);
+            static_draws_ += barrel_->parts.size();
+        }
+    };
+    if (from_objects()) {
+        // A broken object of the map (unknown type, property of the wrong kind) is left out with a
+        // message: the map is data, it never stops the game (milestone 7, part 10).
+        std::vector<std::string> unknown;
+        for (const moteur::MapObject& object : slice_map_->objects()) {
+            const ObjectType* type = find_object_type(object.type);
+            if (type == nullptr) {
+                if (std::find(unknown.begin(), unknown.end(), object.type) == unknown.end()) {
+                    unknown.push_back(object.type);
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Tranche : type d'objet inconnu « %s » (objet %s...) : ignoré",
+                                object.type.c_str(), object.id.c_str());
+                }
+                continue;
+            }
+            try {
+                place_decor(object.type, object.position, glm::radians(object.rotation), object_props(*type, object.props));
+            } catch (const std::exception& e) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Tranche : objet %s (%s) ignoré : %s", object.id.c_str(),
+                            object.type.c_str(), e.what());
+            }
+        }
+        return;
+    }
     for (int k = 0; k < options_.decor; ++k) {
         glm::ivec2 cell(0);
         do {
@@ -422,25 +533,28 @@ void Demo3D::build_decor() {
         const float yaw = random.next() * glm::two_pi<float>();
         const float kind = random.next();
         const float size = random.next();
+        std::string type;
+        nlohmann::json props;
         if (kind < 0.4f) {
             const glm::vec3 scale = (0.3f + 0.5f * size) * glm::vec3(1.0f, 0.55f + 0.3f * random.next(), 0.8f + 0.4f * random.next());
-            add_static(rock_, place(spot + glm::vec3(0.0f, scale.y * 0.3f, 0.0f), scale, yaw), rock);
+            type = "rocher";
+            props = {{"echelle", moteur::to_json_value(scale)}};
         } else if (kind < 0.65f) {
-            const float height = 1.0f + 0.8f * size;
-            add_static(cube_, place(spot + glm::vec3(0.0f, height * 0.5f, 0.0f), {0.16f, height, 0.16f}, yaw), bark_fading);
-            const float crown = 0.9f + 0.7f * size;
-            add_static(sphere_, place(spot + glm::vec3(0.0f, height + crown * 0.3f, 0.0f), glm::vec3(crown, crown * 0.85f, crown)), leaves_fading);
-        } else if (kind < 0.9f || !barrel_) {
-            const float edge = 0.45f + 0.35f * size;
-            add_static(cube_, place(spot + glm::vec3(0.0f, edge * 0.5f, 0.0f), glm::vec3(edge), yaw), wood);
+            type = "arbre";
+            props = {{"hauteur", 1.0f + 0.8f * size}, {"couronne", 0.9f + 0.7f * size}};
         } else {
-            entt::registry& registry = world_.registry();
-            const entt::entity barrel = registry.create();
-            registry.emplace<moteur::Transform>(barrel, place(spot, glm::vec3(1.0f), yaw));
-            registry.emplace<moteur::ModelComponent>(barrel, barrel_);
-            static_draws_ += barrel_->parts.size();
+            type = kind < 0.9f ? "caisse" : "tonneau";
+            props = {{"arete", 0.45f + 0.35f * size}};
+        }
+        place_decor(type, spot, yaw, props);
+        if (recording_ != nullptr) {
+            recording_->push_back({"", type, spot, glm::degrees(yaw), 1.0f, props});
         }
     }
+}
+
+bool Demo3D::from_objects() const {
+    return options_.hero && slice_map_ && !slice_map_->objects().empty();
 }
 
 void Demo3D::spawn_creatures() {
@@ -450,6 +564,64 @@ void Demo3D::spawn_creatures() {
     };
     Random random(options_.seed);
     const auto n = static_cast<float>(options_.map_size);
+    std::vector<CreatureSpawn> spawns;
+    if (from_objects()) {
+        for (const moteur::MapObject& object : slice_map_->objects()) {
+            if (object.type != "monstre") {
+                continue;
+            }
+            try {
+                const nlohmann::json props = object_props(*find_object_type("monstre"), object.props);
+                const std::string character = props.at("personnage").get<std::string>();
+                if (options_.hero && app_.data().get<CharacterData>().find(character) == nullptr) {
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                "Tranche : monstre %s ignoré : le personnage « %s » n'est pas dans la table personnages",
+                                object.id.c_str(), character.c_str());
+                    continue;
+                }
+                spawns.push_back({{object.position.x, object.position.z}, moteur::vec2_from_json(props.at("direction")),
+                                  props.at("rythme").get<float>(), moteur::vec3_from_json(props.at("couleur")),
+                                  props.at("vie").get<float>(), character});
+            } catch (const std::exception& e) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Tranche : monstre %s ignoré : %s", object.id.c_str(), e.what());
+            }
+        }
+    } else {
+        for (int k = 0; k < options_.creatures; ++k) {
+            glm::vec2 position(0.0f);
+            do {
+                position = {1.0f + random.next() * (n - 2.0f), 1.0f + random.next() * (n - 2.0f)};
+            } while (!walkable(position));
+            const glm::vec2 direction = kDirections[static_cast<std::size_t>(random.next() * 8.0f) % 8];
+            const float pace = 0.75f + 0.5f * random.next();
+            const glm::vec3 color = linear(0.35f + 0.55f * random.next(), 0.35f + 0.55f * random.next(), 0.35f + 0.55f * random.next());
+            const float health = 0.3f + 0.7f * random.next();
+            // The slice: warriors and minions in turn, as rows of the characters' table.
+            const std::string character = options_.hero ? (k % 2 == 0 ? "squelette_guerrier" : "squelette_sbire") : std::string();
+            spawns.push_back({position, direction, pace, color, health, character});
+            if (recording_ != nullptr) {
+                recording_->push_back({"", "monstre", {position.x, 0.0f, position.y}, 0.0f, 1.0f,
+                                       {{"personnage", character}, {"rythme", pace}, {"direction", moteur::to_json_value(direction)},
+                                        {"vie", health}, {"couleur", moteur::to_json_value(color)}}});
+            }
+        }
+    }
+    for (int k = 0; k < static_cast<int>(spawns.size()); ++k) {
+        const entt::entity creature = spawn_creature(spawns[static_cast<std::size_t>(k)], k);
+        if (k == 0) {
+            selected_ = creature;
+        }
+    }
+    if (selected_ == entt::null) {
+        return;
+    }
+    // Start next to the first creature, selected: a ring under it, and a mark where it is sent.
+    const glm::vec2 first = cell_position(selected_);
+    camera_.set_target({first.x, 0.0f, first.y});
+    create_selection_marks();
+}
+
+entt::entity Demo3D::spawn_creature(const CreatureSpawn& spawn, int k) {
     entt::registry& registry = world_.registry();
     const moteur::Material skin = surface(linear(0.85f, 0.7f, 0.55f), 0.6f);
     // A part of the creature, attached to it.
@@ -461,53 +633,56 @@ void Demo3D::spawn_creatures() {
         registry.emplace<moteur::MeshComponent>(part, mesh, material);
         return part;
     };
-    for (int k = 0; k < options_.creatures; ++k) {
-        glm::vec2 position(0.0f);
-        do {
-            position = {1.0f + random.next() * (n - 2.0f), 1.0f + random.next() * (n - 2.0f)};
-        } while (!walkable(position));
-        const glm::vec2 direction = kDirections[static_cast<std::size_t>(random.next() * 8.0f) % 8];
-        const float pace = 0.75f + 0.5f * random.next();
-        const glm::vec3 color = linear(0.35f + 0.55f * random.next(), 0.35f + 0.55f * random.next(), 0.35f + 0.55f * random.next());
-        const float health = 0.3f + 0.7f * random.next();
-        // The creature is where its feet are; its body and head are attached to it (or, in the
-        // animated slice, a KayKit skeleton, warriors and minions in turn).
-        const moteur::Transform foot = place({position.x, 0.0f, position.y}, glm::vec3(1.0f));
-        const entt::entity creature =
-            animated_ ? spawn_animated(kSkeletons[k % 2], foot, kCreatureHeight, {}) : registry.create();
-        if (!animated_) {
-            registry.emplace<moteur::Transform>(creature, foot);
-            registry.emplace<moteur::PreviousTransform>(creature, foot);
-        }
-        registry.emplace<Walker>(creature, direction * (kCreatureSpeed * pace), std::nullopt);
-        registry.emplace<Health>(creature, health);
-        if (options_.hero) {
-            moteur::Collider collider;
-            collider.radius = kCharacterRadius;
-            registry.emplace<moteur::Collider>(creature, collider);
-            moteur::Mover mover;
-            mover.speed = kCreatureSpeed * pace;
-            mover.move(direction);
-            registry.emplace<moteur::Mover>(creature, mover);
-            registry.emplace<Hunter>(creature, Hunter{direction});
-        }
-        registry.emplace<moteur::Name>(creature, "créature " + std::to_string(k));
-        if (!animated_) {
-            attach(creature, cube_, place({0.0f, 0.5f, 0.0f}, {0.45f, 1.0f, 0.45f}), surface(color, 0.7f));
-            attach(creature, sphere_, place({0.0f, 1.2f, 0.0f}, glm::vec3(0.38f)), skin);
-        }
-        if (k == 0) {
-            selected_ = creature;
-        }
-        ++creatures_;
+    const glm::vec2 position = spawn.position;
+    const glm::vec2 direction = spawn.direction;
+    const float pace = spawn.pace;
+    const glm::vec3 color = spawn.color;
+    const float health = spawn.health;
+    // The creature is where its feet are; its body and head are attached to it (or, in the
+    // animated slice, a KayKit skeleton, warriors and minions in turn).
+    const moteur::Transform foot = place({position.x, 0.0f, position.y}, glm::vec3(1.0f));
+    const moteur::DataRef<CharacterData> row =
+        options_.hero ? app_.data().get<CharacterData>().ref(spawn.character) : moteur::DataRef<CharacterData>{};
+    const entt::entity creature =
+        animated_ ? spawn_animated(row ? row->model.c_str() : kSkeletons[k % 2], foot, row ? row->height : kCreatureHeight, {})
+                  : registry.create();
+    if (!animated_) {
+        registry.emplace<moteur::Transform>(creature, foot);
+        registry.emplace<moteur::PreviousTransform>(creature, foot);
     }
-    if (selected_ == entt::null) {
-        return;
+    registry.emplace<Walker>(creature, direction * (kCreatureSpeed * pace), std::nullopt);
+    registry.emplace<Health>(creature, health);
+    if (options_.hero) {
+        if (!row) {
+            throw std::runtime_error("Tranche : le personnage « " + spawn.character + " » manque dans la table personnages");
+        }
+        moteur::Collider collider;
+        collider.radius = row->radius;
+        collider.push_weight = row->weight;
+        registry.emplace<moteur::Collider>(creature, collider);
+        moteur::Mover mover;
+        mover.speed = row->speed * pace;
+        mover.move(direction);
+        registry.emplace<moteur::Mover>(creature, mover);
+        registry.emplace<Hunter>(creature, Hunter{direction});
+        registry.emplace<Archetype>(creature, Archetype{row, pace});
+        registry.emplace<moteur::PersistentId>(creature, next_persistent_id_++);
     }
-    // Start next to the first creature, selected: a ring under it, and a mark where it is sent.
-    const glm::vec2 first = cell_position(selected_);
-    camera_.set_target({first.x, 0.0f, first.y});
-    ring_ = attach(selected_, tile_, place({0.0f, 0.01f, 0.0f}, glm::vec3(1.1f)), glowing({0.3f, 1.2f, 0.4f}));
+    registry.emplace<moteur::Name>(creature, "créature " + std::to_string(k));
+    if (!animated_) {
+        attach(creature, cube_, place({0.0f, 0.5f, 0.0f}, {0.45f, 1.0f, 0.45f}), surface(color, 0.7f));
+        attach(creature, sphere_, place({0.0f, 1.2f, 0.0f}, glm::vec3(0.38f)), skin);
+    }
+    ++creatures_;
+    return creature;
+}
+
+void Demo3D::create_selection_marks() {
+    entt::registry& registry = world_.registry();
+    ring_ = registry.create();
+    registry.emplace<moteur::Transform>(ring_, place({0.0f, 0.01f, 0.0f}, glm::vec3(1.1f)));
+    registry.emplace<moteur::Parent>(ring_, selected_);
+    registry.emplace<moteur::MeshComponent>(ring_, tile_, glowing({0.3f, 1.2f, 0.4f}));
     registry.emplace<moteur::Name>(ring_, "sélection");
     goal_ = registry.create();
     registry.emplace<moteur::Transform>(goal_, place(glm::vec3(0.0f), glm::vec3(0.4f)));
@@ -518,13 +693,17 @@ void Demo3D::spawn_creatures() {
 
 void Demo3D::spawn_hero() {
     entt::registry& registry = world_.registry();
+    const moteur::DataRef<CharacterData> row = app_.data().get<CharacterData>().ref("chevalier");
+    if (!row) {
+        throw std::runtime_error("Tranche : la ligne chevalier manque dans la table personnages");
+    }
     // The start point of the map: the first room, away from its brazier.
     const glm::vec2 start = moteur::nearest_fit(grid_, moteur::cell_centre(slice_map_->point("depart")), kCharacterRadius)
                                 .value_or(moteur::cell_centre(slice_map_->point("depart")));
     const moteur::Transform foot = place({start.x, 0.0f, start.y}, glm::vec3(1.0f));
     if (animated_) {
         // The knight, its sword (a file of its own) on the right_hand point of its description.
-        hero_ = spawn_animated(kKnight, foot, kHeroHeight, kKnightHidden);
+        hero_ = spawn_animated(row->model.c_str(), foot, row->height, kKnightHidden);
         registry.emplace<Walker>(hero_, glm::vec2(0.0f), std::nullopt);
         registry.emplace<Health>(hero_, 1.0f);
         registry.emplace<moteur::Name>(hero_, "héros");
@@ -555,12 +734,15 @@ void Demo3D::spawn_hero() {
     }
     // Milestone 6: a circle the creatures give way to, moved by paths or straight by keys.
     moteur::Collider collider;
-    collider.radius = kCharacterRadius;
-    collider.push_weight = 4;
+    collider.radius = row->radius;
+    collider.push_weight = row->weight;
     registry.emplace<moteur::Collider>(hero_, collider);
     moteur::Mover mover;
-    mover.speed = kSentSpeed;
+    mover.speed = row->speed;
     registry.emplace<moteur::Mover>(hero_, mover);
+    registry.emplace<Archetype>(hero_, Archetype{row, 1.0f});
+    registry.emplace<HeroTag>(hero_);
+    registry.emplace<moteur::PersistentId>(hero_, next_persistent_id_++);
     selected_ = hero_;
 }
 
@@ -591,7 +773,7 @@ entt::entity Demo3D::spawn_animated(const char* path, const moteur::Transform& f
     registry.emplace<Stature>(entity, height);
     moteur::Animator animator =
         moteur::Animator::create(assets.skeleton(path), assets.clips(path), assets.animation_set(kAnimationSet));
-    animator.play("locomotion", {.fade_ticks = 0});
+    animator.start_graph();  // milestone 7: the clips come from the set's graph; the game sets its parameters
     registry.emplace<moteur::Animator>(entity, std::move(animator));
     return entity;
 }
@@ -610,7 +792,7 @@ void Demo3D::attack(entt::entity target) {
     }
     entt::registry& registry = world_.registry();
     moteur::Animator& animator = registry.get<moteur::Animator>(hero_);
-    if (!animator.play(kAttack, {.layer = 1, .loop = false})) {
+    if (!animator.fire("attaque")) {
         return;  // a blow under way: clicking again does not start it again
     }
     attack_target_ = target;
@@ -675,7 +857,8 @@ void Demo3D::animate_characters(float dt) {
 }
 
 bool Demo3D::in_reach(entt::entity creature) const {
-    constexpr float kReach = 2.0f;  // cells
+    const Archetype* hero = world_.registry().try_get<Archetype>(hero_);
+    const float kReach = hero != nullptr ? hero->data->reach : 2.0f;  // metres
     const glm::vec2 d = cell_position(creature) - cell_position(hero_);
     return glm::dot(d, d) <= kReach * kReach;
 }
@@ -686,11 +869,12 @@ entt::entity Demo3D::creature_in_reach() const {
     return nearest != entt::null && in_reach(nearest) ? nearest : entt::null;
 }
 
-void Demo3D::strike(entt::entity creature) {
+void Demo3D::hurt(entt::entity creature, float blow) {
     entt::registry& registry = world_.registry();
     Health& health = registry.get<Health>(creature);
     const bool was_alive = health.value > 0.0f;
-    health.value = std::max(health.value - 0.25f, 0.0f);
+    const Archetype* victim = registry.try_get<Archetype>(creature);
+    health.value = std::max(health.value - blow, 0.0f);
     if (health.value <= 0.0f) {
         Walker& walker = registry.get<Walker>(creature);  // down: it stops where it is
         walker.velocity = glm::vec2(0.0f);
@@ -698,25 +882,39 @@ void Demo3D::strike(entt::entity creature) {
     }
     if (moteur::Animator* animator = registry.try_get<moteur::Animator>(creature)) {
         if (health.value <= 0.0f && was_alive) {
-            animator->stop(1, 4);
-            animator->play("Death_A", {.loop = false});  // falls, and stays on the ground
+            animator->fire("mort");  // falls, and stays on the ground
         } else if (health.value > 0.0f) {
-            animator->play("Hit_A", {.layer = 1, .loop = false, .restart = true});  // the upper body takes the blow
+            animator->fire("touche");  // the upper body takes the blow
         }
     }
     if (options_.hero) {
         // Milestone 6: sparks where the blade meets the bones; the dead go up in smoke and no
         // longer block the way.
         const glm::vec2 p = cell_position(creature);
-        play_effect(kSparks, {p.x, 1.0f, p.y}, 0.8f);
+        if (victim != nullptr && !victim->data->hit_effect.empty()) {
+            play_effect(victim->data->hit_effect.c_str(), {p.x, 1.0f, p.y}, 0.8f);  // from its row
+        }
         if (health.value <= 0.0f && was_alive) {
-            play_effect(kDeathSmoke, {p.x, 0.1f, p.y});
+            if (victim != nullptr && !victim->data->death_effect.empty()) {
+                play_effect(victim->data->death_effect.c_str(), {p.x, 0.1f, p.y});
+            }
             registry.remove<moteur::Collider>(creature);
             if (moteur::Mover* mover = registry.try_get<moteur::Mover>(creature)) {
                 mover->stop();
             }
         }
     }
+}
+
+void Demo3D::strike(entt::entity creature) {
+    entt::registry& registry = world_.registry();
+    // The slice: the hero's damage over the creature's life, from their rows.
+    const Archetype* attacker = registry.try_get<Archetype>(hero_);
+    const Archetype* victim = registry.try_get<Archetype>(creature);
+    const float blow = attacker != nullptr && victim != nullptr
+                           ? static_cast<float>(attacker->data->damage) / static_cast<float>(victim->data->life)
+                           : 0.25f;
+    hurt(creature, blow);
     flashes_.push_back({0, creature, live_ticks_ + 45});
     ++hits_;
     if (!impacts_.empty()) {
@@ -975,6 +1173,10 @@ void Demo3D::apply_input(float dt) {
 }
 
 void Demo3D::update(double dt) {
+    if (stop_after_export_) {
+        app_.quit();
+        return;
+    }
     elapsed_ += dt;
     ++ticks_;
     if (options_.run_seconds > 0.0 && elapsed_ >= options_.run_seconds) {
@@ -1002,15 +1204,28 @@ void Demo3D::update(double dt) {
     live_pointer_ = app_.input().pointer();
     const auto step = static_cast<float>(dt);
     const glm::vec2 hero_before = hero_ != entt::null ? cell_position(hero_) : glm::vec2(0.0f);
-    apply_input(step);
+    // The slice's systems in the Profiler window (milestone 7, part 11), around the engine's own zones.
+    {
+        MOTEUR_PROFILE("tranche : entrées");
+        apply_input(step);
+    }
     if (moteur::DebugTools* tools = app_.debug_tools(); tools != nullptr && selected_ != reported_selection_) {
         tools->select(selected_);  // a creature picked in the world shows in the inspector
         reported_selection_ = selected_;
     }
     if (options_.hero) {
-        hunt();
-        move_characters(step);
-        update_sight();
+        {
+            MOTEUR_PROFILE("tranche : chasse");
+            hunt(step);
+        }
+        {
+            MOTEUR_PROFILE("tranche : déplacements");
+            move_characters(step);
+        }
+        {
+            MOTEUR_PROFILE("tranche : vision");
+            update_sight();
+        }
         if (options_.freeze_after_ticks > 0) {
             particles_.update(step);  // a reproducible capture: the effects follow the ticks
         }
@@ -1018,6 +1233,7 @@ void Demo3D::update(double dt) {
         move_creatures(step);
     }
     if (animated_) {
+        MOTEUR_PROFILE("tranche : animation");
         animate_characters(step);  // footsteps on the events
     } else if (hero_ != entt::null) {
         play_steps(hero_before);
@@ -1026,6 +1242,27 @@ void Demo3D::update(double dt) {
     if (follow_ && selected_ != entt::null) {
         const glm::vec2 p = cell_position(selected_);
         camera_.follow({p.x, 0.0f, p.y}, step, 0.25f);
+    }
+    // A save at the end of a given tick (the exactness test of milestone 7, part 6).
+    if (options_.hero && options_.save_at_tick > 0 && live_ticks_ == options_.save_at_tick && !options_.save_path.empty()) {
+        std::string error;
+        // Timed in parts (milestone 7, part 10): the state gathered, encoded, written.
+        const Uint64 start = SDL_GetPerformanceCounter();
+        const moteur::SaveGame game = save();
+        const Uint64 gathered = SDL_GetPerformanceCounter();
+        const std::vector<std::uint8_t> bytes = game.encode(options_.save_cbor ? moteur::SaveEncoding::Cbor : moteur::SaveEncoding::Json);
+        const Uint64 encoded = SDL_GetPerformanceCounter();
+        if (moteur::write_file_atomic(options_.save_path, bytes.data(), bytes.size(), error)) {
+            const Uint64 written = SDL_GetPerformanceCounter();
+            const auto ms = [](Uint64 a, Uint64 b) {
+                return static_cast<double>(b - a) * 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
+            };
+            SDL_Log("Save: slice saved after tick %ld into '%s' (%zu bytes, %s) in %.2f ms: state %.2f, encoding %.2f, writing %.2f",
+                    live_ticks_, options_.save_path.c_str(), bytes.size(), options_.save_cbor ? "CBOR" : "JSON",
+                    ms(start, written), ms(start, gathered), ms(gathered, encoded), ms(encoded, written));
+        } else {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Save: %s", error.c_str());
+        }
     }
 }
 
@@ -1073,7 +1310,11 @@ void Demo3D::render(moteur::Renderer& renderer, double alpha) {
     world_.submit(renderer, blend, collect);
     collect_seconds_ += static_cast<double>(SDL_GetPerformanceCounter() - collect_start) / static_cast<double>(SDL_GetPerformanceFrequency());
 
-    // The effects (the slice): real time, except when frozen for a capture (see update()).
+    // The effects (the slice): real time, except when frozen for a capture (see update()). Switched
+    // off, every running effect goes (they are visual only, and never saved).
+    if (options_.hero && effects_on_ != nullptr && !effects_on_->as_bool()) {
+        particles_.clear();
+    }
     if (options_.hero) {
         const std::uint64_t now = SDL_GetTicksNS();
         if (options_.freeze_after_ticks <= 0 && last_frame_ns_ != 0) {
@@ -1082,6 +1323,17 @@ void Demo3D::render(moteur::Renderer& renderer, double alpha) {
         last_frame_ns_ = now;
         const moteur::Frustum view = camera.frustum();
         particles_.draw(billboards, app_.assets(), &view);
+        if (debug_flags_.any()) {
+            moteur::WorldDebugSources sources;
+            sources.world = &world_;
+            sources.grid = &grid_;
+            sources.clearance = &clearance_;
+            sources.field = &field_;
+            sources.view = &view_;
+            sources.highlight = hero_;
+            moteur::draw_world_debug(renderer.debug_lines().lines(), debug_flags_, sources, camera.target(),
+                                     camera.visible_height() * 1.1f, blend);
+        }
     }
 
     // The cell under the mouse. Frozen, the pointer of the last live tick: in a replay, the pointer
@@ -1309,6 +1561,9 @@ void Demo3D::draw_controls() {
 // --- Milestone 6: the world of the slice ---------------------------------------------------------
 
 void Demo3D::play_effect(const char* path, glm::vec3 at, float scale) {
+    if (effects_on_ != nullptr && !effects_on_->as_bool()) {
+        return;  // visual only: the game is the same without
+    }
     auto found = effects_.find(path);
     if (found == effects_.end()) {
         if (!app_.assets().exists(path)) {
@@ -1375,13 +1630,20 @@ void Demo3D::creature_blow(entt::entity creature) {
         return;
     }
     const glm::vec2 hero = cell_position(hero_);
-    if (glm::length(hero - cell_position(creature)) > 2.0f * kCharacterRadius + 0.6f) {
+    const CharacterData& striker = *registry.get<Archetype>(creature).data;
+    const CharacterData& target = *registry.get<Archetype>(hero_).data;
+    if (glm::length(hero - cell_position(creature)) > target.radius + striker.radius + striker.reach + 0.4f) {
         return;  // the hero stepped out of the swing
     }
     Health& health = registry.get<Health>(hero_);
-    health.value = std::max(health.value - 0.04f, 0.05f);  // the slice does not kill its hero
+    const float blow = static_cast<float>(striker.damage) / static_cast<float>(target.life);
+    if (!god_) {
+        health.value = std::max(health.value - blow, 0.05f);  // the slice does not kill its hero
+    }
     ++blows_taken_;
-    play_effect(kBlood, {hero.x, 1.1f, hero.y}, 0.8f);
+    if (!target.hit_effect.empty()) {
+        play_effect(target.hit_effect.c_str(), {hero.x, 1.1f, hero.y}, 0.8f);  // the hero's row: blood
+    }
     if (!impacts_.empty()) {
         moteur::PlaySound impact;
         impact.position = glm::vec3(hero.x, 1.0f, hero.y);
@@ -1391,13 +1653,18 @@ void Demo3D::creature_blow(entt::entity creature) {
     }
 }
 
-void Demo3D::hunt() {
+void Demo3D::hunt(float dt) {
     // The creatures, in the order of their identifiers: they wander, turn back when blocked, chase
     // the hero once they see it (and give up four seconds after losing it), and strike it in reach.
     entt::registry& registry = world_.registry();
     const glm::vec2 hero = cell_position(hero_);
     Health& hero_health = registry.get<Health>(hero_);
     hero_health.value = std::min(hero_health.value + 0.0005f, 1.0f);  // heals slowly
+    // The rows are read again every tick: a table edited while the game runs changes everyone.
+    const CharacterData& hero_data = *registry.get<Archetype>(hero_).data;
+    registry.get<moteur::Mover>(hero_).speed = hero_data.speed;
+    registry.get<moteur::Collider>(hero_).radius = hero_data.radius;
+    registry.get<moteur::Collider>(hero_).push_weight = hero_data.weight;
     std::vector<entt::entity> hunters(registry.view<Hunter>().begin(), registry.view<Hunter>().end());
     std::sort(hunters.begin(), hunters.end(), [](entt::entity a, entt::entity b) { return entt::to_integral(a) < entt::to_integral(b); });
     for (const entt::entity entity : hunters) {
@@ -1407,18 +1674,22 @@ void Demo3D::hunt() {
         Hunter& hunter = registry.get<Hunter>(entity);
         moteur::Mover& mover = registry.get<moteur::Mover>(entity);
         moteur::Collider& collider = registry.get<moteur::Collider>(entity);
+        const Archetype& archetype = registry.get<Archetype>(entity);
+        const CharacterData& data = *archetype.data;
+        mover.speed = data.speed * archetype.pace;
+        collider.radius = data.radius;
         const glm::vec2 p = cell_position(entity);
         const float distance = glm::length(hero - p);
-        const bool sees = distance <= kHunterSight && moteur::line_of_sight(grid_, p, hero);
+        const bool sees = distance <= data.sight && moteur::line_of_sight(grid_, p, hero);
         if (sees) {
             hunter.chasing = true;
             hunter.lost_ticks = 0;
         } else if (hunter.chasing && ++hunter.lost_ticks > 240) {
             hunter.chasing = false;
         }
-        const float reach = 2.0f * kCharacterRadius + 0.2f;
+        const float reach = hero_data.radius + data.radius + data.reach;
         if (!hunter.chasing) {
-            collider.push_weight = 1;
+            collider.push_weight = data.weight;
             if (mover.state == moteur::MoveState::Blocked) {
                 hunter.wander = -hunter.wander;  // turns back, as in the 2D demo
             }
@@ -1432,7 +1703,7 @@ void Demo3D::hunt() {
         }
         // In reach: it stands its ground (immovable) and strikes every second and a half.
         const bool striking = distance <= reach + 0.1f;
-        collider.push_weight = striking ? 0 : 1;
+        collider.push_weight = striking ? 0 : data.weight;
         if (!striking) {
             hunter.cooldown = std::min(hunter.cooldown, 30);
             continue;
@@ -1440,10 +1711,10 @@ void Demo3D::hunt() {
         if (--hunter.cooldown > 0) {
             continue;
         }
-        hunter.cooldown = 90;
+        hunter.cooldown = std::max(1, static_cast<int>(std::lround(data.cadence / dt)));  // seconds of the row, in ticks
         mover.facing = (hero - p) / std::max(distance, 1e-4f);
         if (moteur::Animator* animator = registry.try_get<moteur::Animator>(entity)) {
-            animator->play(kAttack, {.layer = 1, .loop = false});  // the blow lands at its "impact" event
+            animator->fire("attaque");  // the blow lands at its "impact" event
         } else {
             creature_blow(entity);
         }
@@ -1455,6 +1726,7 @@ void Demo3D::move_characters(float dt) {
     const glm::vec2 hero = cell_position(hero_);
     if (moteur::cell_at(hero) != field_cell_) {
         field_cell_ = moteur::cell_at(hero);
+        field_target_ = hero;
         field_.compute(grid_, clearance_, hero, kCharacterRadius, 300);
     }
     entt::registry& registry = world_.registry();
@@ -1494,4 +1766,414 @@ void Demo3D::update_sight() {
             registry.emplace<moteur::Hidden>(entity);
         }
     }
+}
+
+// --- Milestone 7, part 6: saves of the slice --------------------------------------------------
+
+void Demo3D::setup_serializers() {
+    serializers_.add_engine_components();
+    serializers_.add<Walker>(
+        "marcheur",
+        [](const Walker& w, const moteur::SaveContext&) {
+            return nlohmann::json{{"v", moteur::to_json_value(w.velocity)},
+                                  {"but", w.goal ? moteur::to_json_value(*w.goal) : nlohmann::json()}};
+        },
+        [](entt::registry& r, entt::entity e, const nlohmann::json& j, const moteur::SaveContext&) {
+            Walker w{moteur::vec2_from_json(j.at("v")), std::nullopt};
+            if (!j.at("but").is_null()) {
+                w.goal = moteur::vec2_from_json(j.at("but"));
+            }
+            r.emplace_or_replace<Walker>(e, w);
+        });
+    serializers_.add<Health>(
+        "sante", [](const Health& h, const moteur::SaveContext&) { return nlohmann::json(h.value); },
+        [](entt::registry& r, entt::entity e, const nlohmann::json& j, const moteur::SaveContext&) {
+            r.emplace_or_replace<Health>(e, j.get<float>());
+        });
+    serializers_.add<Stature>(
+        "stature", [](const Stature& s, const moteur::SaveContext&) { return nlohmann::json(s.height); },
+        [](entt::registry& r, entt::entity e, const nlohmann::json& j, const moteur::SaveContext&) {
+            r.emplace_or_replace<Stature>(e, j.get<float>());
+        });
+    serializers_.add<Hunter>(
+        "chasseur",
+        [](const Hunter& h, const moteur::SaveContext&) {
+            return nlohmann::json{moteur::to_json_value(h.wander), h.chasing, h.lost_ticks, h.cooldown};
+        },
+        [](entt::registry& r, entt::entity e, const nlohmann::json& j, const moteur::SaveContext&) {
+            r.emplace_or_replace<Hunter>(e, Hunter{moteur::vec2_from_json(j.at(0)), j.at(1).get<bool>(), j.at(2).get<int>(),
+                                                   j.at(3).get<int>()});
+        });
+    // The row of the characters' table, by identifier (the save survives new rows in the table).
+    serializers_.add<Archetype>(
+        "archetype", [](const Archetype& a, const moteur::SaveContext&) { return nlohmann::json{a.data.id, a.pace}; },
+        [this](entt::registry& r, entt::entity e, const nlohmann::json& j, const moteur::SaveContext&) {
+            const moteur::DataRef<CharacterData> row = app_.data().get<CharacterData>().ref(j.at(0).get<std::string>());
+            if (!row) {
+                throw std::runtime_error("personnage « " + j.at(0).get<std::string>() + " » absent de la table");
+            }
+            r.emplace_or_replace<Archetype>(e, Archetype{row, j.at(1).get<float>()});
+        });
+    serializers_.add_tag<HeroTag>("heros");
+}
+
+entt::entity Demo3D::spawn_from_record(entt::registry& registry, const nlohmann::json& record) {
+    // The character as its row of the table describes it (model, size, Animator); the save then
+    // gives every component its value.
+    const nlohmann::json& c = record.at("c");
+    if (!c.contains("archetype")) {
+        return entt::null;
+    }
+    const moteur::DataRef<CharacterData> row = app_.data().get<CharacterData>().ref(c["archetype"].at(0).get<std::string>());
+    if (!row) {
+        return entt::null;
+    }
+    const bool hero = c.contains("heros");
+    const moteur::Transform foot = place(c.contains("transform") ? moteur::vec3_from_json(c["transform"].at("p")) : glm::vec3(0.0f),
+                                         glm::vec3(1.0f));
+    entt::entity entity = entt::null;
+    if (animated_) {
+        entity = spawn_animated(row->model.c_str(), foot, row->height, hero ? kKnightHidden : std::vector<std::string>{});
+        if (hero) {
+            const entt::entity sword = registry.create();
+            registry.emplace<moteur::Name>(sword, "épée (right_hand)");
+            registry.emplace<moteur::Transform>(sword);
+            registry.emplace<moteur::Parent>(sword, entity);
+            registry.emplace<moteur::BoneAttachment>(sword, "right_hand");
+            registry.emplace<moteur::ModelComponent>(sword, app_.assets().model(kSword), std::vector<std::uint32_t>{});
+        }
+    } else {
+        entity = registry.create();
+        registry.emplace<moteur::Transform>(entity, foot);
+        registry.emplace<moteur::PreviousTransform>(entity, foot);
+        const auto part = [&](const moteur::Asset<moteur::Mesh>& mesh, const moteur::Transform& transform, const moteur::Material& material) {
+            const entt::entity child = registry.create();
+            registry.emplace<moteur::Transform>(child, transform);
+            registry.emplace<moteur::Parent>(child, entity);
+            registry.emplace<moteur::MeshComponent>(child, mesh, material);
+        };
+        if (hero) {
+            part(cube_, place({0.0f, 0.65f, 0.0f}, {0.5f, 1.3f, 0.5f}), surface(linear(0.25f, 0.4f, 0.8f), 0.35f, 0.8f));
+            part(sphere_, place({0.0f, 1.55f, 0.0f}, glm::vec3(0.42f)), surface(linear(0.85f, 0.7f, 0.55f), 0.6f));
+        } else {
+            part(cube_, place({0.0f, 0.5f, 0.0f}, {0.45f, 1.0f, 0.45f}), surface(linear(0.6f, 0.55f, 0.5f), 0.7f));
+            part(sphere_, place({0.0f, 1.2f, 0.0f}, glm::vec3(0.38f)), surface(linear(0.85f, 0.7f, 0.55f), 0.6f));
+        }
+    }
+    if (hero) {
+        hero_ = entity;
+        selected_ = entity;
+    } else {
+        ++creatures_;
+    }
+    return entity;
+}
+
+namespace {
+
+// Runs of explored cells: [start, length, start, length...] over the cells in row order.
+nlohmann::json explored_runs(const moteur::ExploredMap& explored) {
+    nlohmann::json runs = nlohmann::json::array();
+    const std::vector<std::uint8_t>& cells = explored.cells();
+    for (std::size_t i = 0; i < cells.size();) {
+        if (!cells[i]) {
+            ++i;
+            continue;
+        }
+        const std::size_t start = i;
+        while (i < cells.size() && cells[i]) {
+            ++i;
+        }
+        runs.push_back(start);
+        runs.push_back(i - start);
+    }
+    return runs;
+}
+
+}  // namespace
+
+moteur::SaveGame Demo3D::save() const {
+    const entt::registry& registry = world_.registry();
+    moteur::SaveGame save;
+    save.header.game_version = "bac_a_sable, jalon 7";
+    SDL_Time now = 0;
+    SDL_GetCurrentTime(&now);
+    save.header.time = static_cast<std::int64_t>(now / SDL_NS_PER_SECOND);
+    save.header.play_seconds = elapsed_;
+    const Health* hero_health = hero_ != entt::null ? registry.try_get<Health>(hero_) : nullptr;
+    save.header.summary = {{"lieu", "Tranche jouable"},
+                           {"coups", hits_},
+                           {"vie", hero_health != nullptr ? hero_health->value : 1.0f},
+                           {"exploré", explored_.count()}};
+    save.set_section("monde", 1, serializers_.save(registry));
+    // A forgotten state shows up here, before it breaks a game.
+    for (const std::string& name : serializers_.unknown_components(registry)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Save: component %s of a persistent entity is neither saved nor ignored",
+                    name.c_str());
+    }
+
+    const moteur::SaveContext context;  // ids read straight from the components below
+    nlohmann::json scene;
+    scene["seed"] = options_.seed;
+    scene["ticks"] = ticks_;
+    scene["live_ticks"] = live_ticks_;
+    scene["elapsed"] = elapsed_;
+    scene["hits"] = hits_;
+    scene["blows_taken"] = blows_taken_;
+    scene["skill_uses"] = skill_uses_;
+    scene["next_id"] = next_persistent_id_;
+    const auto id_of = [&registry](entt::entity e) -> std::uint64_t {
+        if (e == entt::null || !registry.valid(e)) {
+            return 0;
+        }
+        const moteur::PersistentId* id = registry.try_get<moteur::PersistentId>(e);
+        return id != nullptr ? id->value : 0;
+    };
+    nlohmann::json flashes = nlohmann::json::array();
+    for (const SkillFlash& flash : flashes_) {
+        flashes.push_back({flash.skill, id_of(flash.creature), flash.until_tick});
+    }
+    scene["flashes"] = flashes;
+    scene["attack_target"] = id_of(attack_target_);
+    scene["follow"] = follow_;
+    scene["god"] = god_;
+    scene["fog"] = fog_on_;
+    scene["pressed"] = {pressed_on_creature_, pressed_on_ground_, follow_repath_};
+    scene["camera"] = {{"target", moteur::to_json_value(camera_.target())},
+                       {"height", camera_.visible_height()},
+                       {"projection", camera_.projection() == moteur::Projection::Perspective ? 0 : 1}};
+    scene["field"] = {{"cell", {field_cell_.x, field_cell_.y}}, {"target", moteur::to_json_value(field_target_)}};
+    scene["explored"] = explored_runs(explored_);
+    // The cells of the grid that differ from the map (doors opened, walls broken).
+    const moteur::NavGrid original(slice_map_->tiles(), slice_map_->tileset());
+    nlohmann::json grid = nlohmann::json::array();
+    for (int j = 0; j < grid_.height(); ++j) {
+        for (int i = 0; i < grid_.width(); ++i) {
+            if (grid_.walkable({i, j}) != original.walkable({i, j}) || grid_.opaque({i, j}) != original.opaque({i, j})) {
+                grid.push_back({i, j, grid_.walkable({i, j}), grid_.opaque({i, j})});
+            }
+        }
+    }
+    scene["grid"] = grid;
+    save.set_section("scene", 1, scene);
+    return save;
+}
+
+void Demo3D::load(const moteur::SaveGame& save) {
+    const nlohmann::json* scene = save.section("scene");
+    const nlohmann::json* records = save.section("monde");
+    if (scene == nullptr || records == nullptr) {
+        throw std::runtime_error("Tranche : la sauvegarde n'a pas les sections monde et scene");
+    }
+    if (scene->at("seed").get<std::uint32_t>() != options_.seed) {
+        throw std::runtime_error("Tranche : sauvegarde faite avec la graine " + scene->at("seed").dump() +
+                                 " (le décor diffère) ; relancer avec --seed " + scene->at("seed").dump());
+    }
+    entt::registry& registry = world_.registry();
+    std::vector<std::string> problems;
+    serializers_.load(registry, *records, [this](entt::registry& r, const nlohmann::json& record) { return spawn_from_record(r, record); },
+                      problems);
+    for (const std::string& problem : problems) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Save: %s", problem.c_str());
+    }
+    if (hero_ == entt::null) {
+        throw std::runtime_error("Tranche : pas de héros dans la sauvegarde");
+    }
+    std::unordered_map<std::uint64_t, entt::entity> by_id;
+    for (auto [entity, id] : registry.view<moteur::PersistentId>().each()) {
+        by_id[id.value] = entity;
+    }
+    const auto entity_of = [&by_id](std::uint64_t id) {
+        const auto found = by_id.find(id);
+        return found == by_id.end() ? entt::entity{entt::null} : found->second;
+    };
+    ticks_ = scene->at("ticks").get<long>();
+    live_ticks_ = scene->at("live_ticks").get<long>();
+    elapsed_ = scene->at("elapsed").get<double>();
+    hits_ = scene->at("hits").get<int>();
+    blows_taken_ = scene->at("blows_taken").get<int>();
+    const std::vector<int> uses = scene->at("skill_uses").get<std::vector<int>>();
+    for (std::size_t i = 0; i < uses.size() && i < std::size(skill_uses_); ++i) {
+        skill_uses_[i] = uses[i];
+    }
+    next_persistent_id_ = scene->at("next_id").get<std::uint64_t>();
+    god_ = scene->value("god", false);
+    fog_on_ = scene->value("fog", true);
+    flashes_.clear();
+    for (const nlohmann::json& f : scene->at("flashes")) {
+        const entt::entity creature = entity_of(f.at(1).get<std::uint64_t>());
+        if (creature != entt::null) {
+            flashes_.push_back({f.at(0).get<int>(), creature, f.at(2).get<long>()});
+        }
+    }
+    attack_target_ = entity_of(scene->at("attack_target").get<std::uint64_t>());
+    follow_ = scene->at("follow").get<bool>();
+    pressed_on_creature_ = scene->at("pressed").at(0).get<bool>();
+    pressed_on_ground_ = scene->at("pressed").at(1).get<bool>();
+    follow_repath_ = scene->at("pressed").at(2).get<int>();
+    const nlohmann::json& camera = scene->at("camera");
+    camera_.set_target(moteur::vec3_from_json(camera.at("target")));
+    camera_.set_visible_height(camera.at("height").get<float>());
+    camera_.set_projection(camera.at("projection").get<int>() == 0 ? moteur::Projection::Perspective : moteur::Projection::Orthographic);
+    camera_.begin_update();
+    for (const nlohmann::json& cell : scene->at("grid")) {
+        grid_.set({cell.at(0).get<int>(), cell.at(1).get<int>()}, cell.at(2).get<bool>(), cell.at(3).get<bool>());
+    }
+    if (!scene->at("grid").empty()) {
+        clearance_ = moteur::ClearanceMap(grid_);
+    }
+    // What follows from the state is computed again: the flow field (from where the hero was when
+    // it was computed), the fog (explored cells, then the field of view).
+    const nlohmann::json& field = scene->at("field");
+    field_cell_ = {field.at("cell").at(0).get<int>(), field.at("cell").at(1).get<int>()};
+    field_target_ = moteur::vec2_from_json(field.at("target"));
+    if (field_cell_.x >= 0) {
+        field_.compute(grid_, clearance_, field_target_, kCharacterRadius, 300);
+    }
+    const nlohmann::json& runs = scene->at("explored");
+    for (std::size_t r = 0; r + 1 < runs.size(); r += 2) {
+        const std::size_t start = runs[r].get<std::size_t>();
+        const std::size_t length = runs[r + 1].get<std::size_t>();
+        for (std::size_t i = start; i < start + length; ++i) {
+            const glm::ivec2 cell(static_cast<int>(i) % grid_.width(), static_cast<int>(i) / grid_.width());
+            explored_.mark(cell);
+            fog_cells_[i] = 128;
+        }
+    }
+    view_cell_ = glm::ivec2(-1);
+    update_sight();
+    create_selection_marks();
+    SDL_Log("Save: slice loaded (%zu characters, tick %ld)", static_cast<std::size_t>(registry.view<moteur::PersistentId>().size()),
+            ticks_);
+}
+
+void Demo3D::register_commands() {
+    using Kind = moteur::Console::Kind;
+    moteur::Console& console = app_.console();
+    console.add("god", "[0|1]", "le héros ne perd plus de vie (tranche)", Kind::Game,
+                [this](const moteur::Console::Args& args, moteur::Console& out) {
+                    god_ = args.empty() ? !god_ : args[0] != "0";
+                    out.print(god_ ? "héros invulnérable" : "héros vulnérable");
+                });
+    console.add("heal", "", "rend toute sa vie au héros (tranche)", Kind::Game,
+                [this](const moteur::Console::Args&, moteur::Console& out) {
+                    world_.registry().get<Health>(hero_).value = 1.0f;
+                    out.print("héros soigné");
+                });
+    console.add("tp", "<x> <z>", "téléporte le héros (mètres, sur une case marchable proche)", Kind::Game,
+                [this](const moteur::Console::Args& args, moteur::Console& out) {
+                    if (args.size() != 2) {
+                        out.error("tp <x> <z>");
+                        return;
+                    }
+                    const glm::vec2 wanted(static_cast<float>(std::atof(args[0].c_str())), static_cast<float>(std::atof(args[1].c_str())));
+                    const std::optional<glm::vec2> fit = moteur::nearest_fit(grid_, wanted, kCharacterRadius);
+                    if (!fit) {
+                        out.error("aucune place libre près de " + args[0] + " " + args[1]);
+                        return;
+                    }
+                    entt::registry& registry = world_.registry();
+                    moteur::Transform transform = registry.get<moteur::Transform>(hero_);
+                    transform.position = glm::vec3(fit->x, transform.position.y, fit->y);
+                    registry.replace<moteur::Transform>(hero_, transform);
+                    registry.replace<moteur::PreviousTransform>(hero_, transform);  // no slide from where it was
+                    registry.get<moteur::Mover>(hero_).stop();
+                    camera_.set_target({fit->x, 0.0f, fit->y});
+                    out.print("héros en " + std::to_string(fit->x) + " " + std::to_string(fit->y));
+                });
+    console.add(
+        "spawn", "<personnage> [nombre]", "fait apparaître des créatures autour du héros (table personnages)", Kind::Game,
+        [this](const moteur::Console::Args& args, moteur::Console& out) {
+            if (args.empty()) {
+                out.error("spawn <personnage> [nombre]");
+                return;
+            }
+            if (app_.data().get<CharacterData>().find(args[0]) == nullptr || args[0] == "chevalier") {
+                out.error("« " + args[0] + " » n'est pas une créature de la table personnages");
+                return;
+            }
+            const int count = args.size() > 1 ? std::clamp(std::atoi(args[1].c_str()), 1, 200) : 1;
+            const glm::vec2 hero = cell_position(hero_);
+            int made = 0;
+            // Around the hero, on a ring of places that grows: the same places on every machine.
+            for (int k = 0; made < count && k < count * 20; ++k) {
+                const float angle = static_cast<float>(k) * 2.39996f;  // the golden angle: places spread evenly
+                const float radius = 2.0f + 0.35f * std::sqrt(static_cast<float>(k));
+                const glm::vec2 wanted = hero + radius * glm::vec2(std::cos(angle), std::sin(angle));
+                if (!moteur::circle_fits(grid_, wanted, kCharacterRadius)) {
+                    continue;
+                }
+                const glm::vec2 direction = glm::normalize(hero - wanted);
+                spawn_creature({wanted, direction, 1.0f, linear(0.6f, 0.55f, 0.5f), 1.0f, args[0]}, static_cast<int>(creatures_));
+                ++made;
+            }
+            out.print(std::to_string(made) + " « " + args[0] + " » de plus");
+        },
+        [this](std::size_t index, const std::string& prefix) {
+            std::vector<std::string> names;
+            if (index == 0) {
+                const moteur::DataTable<CharacterData>& table = app_.data().get<CharacterData>();
+                for (const std::uint32_t row : table.sorted()) {
+                    if (table.id(row).starts_with(prefix) && table.id(row) != "chevalier") {
+                        names.push_back(table.id(row));
+                    }
+                }
+            }
+            return names;
+        });
+    console.add("kill", "all", "abat toutes les créatures (tranche)", Kind::Game,
+                [this](const moteur::Console::Args& args, moteur::Console& out) {
+                    if (args.size() != 1 || args[0] != "all") {
+                        out.error("kill all");
+                        return;
+                    }
+                    entt::registry& registry = world_.registry();
+                    std::vector<entt::entity> living;
+                    for (auto [entity, health, hunter] : registry.view<Health, Hunter>().each()) {
+                        (void)hunter;
+                        if (health.value > 0.0f) {
+                            living.push_back(entity);
+                        }
+                    }
+                    std::sort(living.begin(), living.end(),
+                              [](entt::entity a, entt::entity b) { return entt::to_integral(a) < entt::to_integral(b); });
+                    for (const entt::entity creature : living) {
+                        hurt(creature, 1.0f);
+                    }
+                    out.print(std::to_string(living.size()) + " créature(s) abattue(s)");
+                },
+                [](std::size_t index, const std::string& prefix) {
+                    return index == 0 && std::string("all").starts_with(prefix) ? std::vector<std::string>{"all"}
+                                                                                : std::vector<std::string>{};
+                });
+    console.add("fog", "on|off", "le brouillard de guerre (tranche)", Kind::Game,
+                [this](const moteur::Console::Args& args, moteur::Console& out) {
+                    fog_on_ = args.empty() ? !fog_on_ : (args[0] == "on" || args[0] == "1");
+                    view_cell_ = glm::ivec2(-1);  // the field of view again: what it hides changes
+                    out.print(fog_on_ ? "brouillard activé" : "brouillard désactivé");
+                },
+                [](std::size_t index, const std::string& prefix) {
+                    std::vector<std::string> names;
+                    for (const char* word : {"on", "off"}) {
+                        if (index == 0 && std::string(word).starts_with(prefix)) {
+                            names.push_back(word);
+                        }
+                    }
+                    return names;
+                });
+}
+
+float Demo3D::hero_health() const {
+    const entt::registry& registry = world_.registry();
+    return hero_ != entt::null && registry.all_of<Health>(hero_) ? registry.get<Health>(hero_).value : 0.0f;
+}
+
+int Demo3D::creatures_standing() const {
+    int standing = 0;
+    for (auto [entity, health, hunter] : world_.registry().view<const Health, const Hunter>().each()) {
+        (void)entity;
+        (void)hunter;
+        standing += health.value > 0.0f ? 1 : 0;
+    }
+    return standing;
 }

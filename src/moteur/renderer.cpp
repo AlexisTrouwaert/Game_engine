@@ -201,6 +201,8 @@ Renderer::~Renderer() {
     scene_texture_ = {};
     scene_msaa_texture_ = {};
     depth_texture_ = {};
+    distance_texture_ = {};
+    distance_msaa_texture_ = {};
     ldr_texture_ = {};
     SDL_ReleaseWindowFromGPUDevice(device_, window_);
     SDL_DestroyGPUDevice(device_);
@@ -268,6 +270,7 @@ void Renderer::set_render_scale(float scale) {
 bool Renderer::supports(AntiAliasing mode) const {
     const SDL_GPUSampleCount samples = sample_count(mode);
     return samples == SDL_GPU_SAMPLECOUNT_1 || (SDL_GPUTextureSupportsSampleCount(device_, kSceneFormat, samples) &&
+                                                SDL_GPUTextureSupportsSampleCount(device_, kDistanceFormat, samples) &&
                                                 SDL_GPUTextureSupportsSampleCount(device_, depth_format_, samples));
 }
 
@@ -332,6 +335,10 @@ void Renderer::ensure_scene_targets() {
                               ? GpuTexture()
                               : create(kSceneFormat, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, "scene color (msaa)", samples);
     depth_texture_ = create(depth_format_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, "scene depth", samples);
+    distance_texture_ = create(kDistanceFormat, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER, "scene distance");
+    distance_msaa_texture_ = samples == SDL_GPU_SAMPLECOUNT_1
+                                 ? GpuTexture()
+                                 : create(kDistanceFormat, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, "scene distance (msaa)", samples);
     // With FXAA, the tone mapping draws into a texture of the swapchain's format, which FXAA reads.
     ldr_texture_ = anti_aliasing_ == AntiAliasing::Fxaa
                        ? create(swapchain_format(), SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
@@ -720,36 +727,71 @@ void Renderer::end_frame() {
             // The 3D world, in linear light. The clear color is given in screen (sRGB) terms like the
             // 2D one, so it is converted to linear first.
             const glm::vec3 clear = srgb_to_linear(glm::vec3(clear_color_.r, clear_color_.g, clear_color_.b));
-            SDL_GPUColorTargetInfo scene = {};
+            // Two passes (milestone 7, soft particles): the opaque meshes, which also write their
+            // distance along the view into a second target; then what is blended over them, which
+            // reads it. Without anything blended, the first pass ends the scene by itself.
+            const bool blended = billboards_->has_work() || debug_lines_->has_work();
+            SDL_GPUColorTargetInfo targets[2] = {};
+            SDL_GPUColorTargetInfo& scene = targets[0];
             scene.texture = scene_texture_.get();
             scene.clear_color = {clear.r, clear.g, clear.b, 1.0f};
             scene.load_op = SDL_GPU_LOADOP_CLEAR;
             scene.store_op = SDL_GPU_STOREOP_STORE;  // read by the tone mapping
             if (scene_msaa_texture_) {
-                // MSAA: the samples are averaged into the plain texture, and not kept themselves.
+                // MSAA: the samples are averaged into the plain texture at the end of the scene; kept
+                // between the two passes, the second goes on drawing into them.
                 scene.texture = scene_msaa_texture_.get();
-                scene.resolve_texture = scene_texture_.get();
-                scene.store_op = SDL_GPU_STOREOP_RESOLVE;
+                scene.resolve_texture = blended ? nullptr : scene_texture_.get();
+                scene.store_op = blended ? SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_RESOLVE;
+            }
+            SDL_GPUColorTargetInfo& distance = targets[1];
+            distance.texture = distance_texture_.get();
+            distance.clear_color = {kFarDistance, 0.0f, 0.0f, 0.0f};
+            distance.load_op = SDL_GPU_LOADOP_CLEAR;
+            distance.store_op = blended ? SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_DONT_CARE;
+            if (distance_msaa_texture_) {
+                distance.texture = distance_msaa_texture_.get();
+                distance.resolve_texture = blended ? distance_texture_.get() : nullptr;
+                distance.store_op = blended ? SDL_GPU_STOREOP_RESOLVE : SDL_GPU_STOREOP_DONT_CARE;
             }
 
-            // Nothing reads the depth after the pass: DONT_CARE spares tiled GPUs (Apple) writing it back.
+            // The depth is kept for the second pass only: DONT_CARE spares tiled GPUs (Apple) writing it back.
             SDL_GPUDepthStencilTargetInfo depth = {};
             depth.texture = depth_texture_.get();
             depth.clear_depth = 1.0f;
             depth.load_op = SDL_GPU_LOADOP_CLEAR;
-            depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
+            depth.store_op = blended ? SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_DONT_CARE;
             depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
             depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
 
             SDL_PushGPUDebugGroup(commands, "scene");
-            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, &scene, 1, &depth);
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, targets, 2, &depth);
             if (pass != nullptr) {
                 meshes_->render(commands, pass, stats_);
-                billboards_->render(commands, pass, stats_);   // after the opaque meshes, blended
-                debug_lines_->render(commands, pass, stats_);  // last: some are drawn over everything
                 SDL_EndGPURenderPass(pass);
             } else {
                 SDL_Log("SDL_BeginGPURenderPass (scene) failed: %s", SDL_GetError());
+            }
+            if (blended) {
+                SDL_GPUColorTargetInfo over = {};
+                over.texture = scene_texture_.get();
+                over.load_op = SDL_GPU_LOADOP_LOAD;
+                over.store_op = SDL_GPU_STOREOP_STORE;
+                if (scene_msaa_texture_) {
+                    over.texture = scene_msaa_texture_.get();
+                    over.resolve_texture = scene_texture_.get();
+                    over.store_op = SDL_GPU_STOREOP_RESOLVE;
+                }
+                depth.load_op = SDL_GPU_LOADOP_LOAD;
+                depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
+                pass = SDL_BeginGPURenderPass(commands, &over, 1, &depth);
+                if (pass != nullptr) {
+                    billboards_->render(commands, pass, stats_);   // after the opaque meshes, blended
+                    debug_lines_->render(commands, pass, stats_);  // last: some are drawn over everything
+                    SDL_EndGPURenderPass(pass);
+                } else {
+                    SDL_Log("SDL_BeginGPURenderPass (scene, blended) failed: %s", SDL_GetError());
+                }
             }
             SDL_PopGPUDebugGroup(commands);
         });
@@ -863,7 +905,7 @@ void Renderer::end_frame() {
         if (mapped == nullptr) {
             SDL_Log("SDL_MapGPUTransferBuffer (capture) failed: %s", SDL_GetError());
         } else {
-            write_capture_png(capture_path_, mapped, capture_width, capture_height, swapchain_format());
+            write_capture_png(capture_path_, mapped, capture_width, capture_height, swapchain_format(), capture_max_width_);
             SDL_UnmapGPUTransferBuffer(device_, download.get());
         }
     }

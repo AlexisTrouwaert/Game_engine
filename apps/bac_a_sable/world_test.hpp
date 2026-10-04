@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -21,7 +22,9 @@
 #include "moteur/spatial_hash.hpp"
 #include "moteur/visibility.hpp"
 #include "moteur/world.hpp"
+#include "moteur/world_debug.hpp"
 
+#include "map_objects.hpp"
 #include "sandbox_scene.hpp"
 
 // The "Monde" test (milestone 6): a test map of assets/maps (a MapData asset) built in 3D, with
@@ -51,6 +54,10 @@ public:
         bool report = false;
         std::string capture_path;  // with freeze_after_ticks: one capture of a frozen frame
         long freeze_after_ticks = 0;
+        // The map editor's "Essayer": this map instead of a file (not saved yet), the hero at
+        // `start` (metres on the ground) instead of the "depart" point.
+        std::shared_ptr<const moteur::MapData> data;
+        std::optional<glm::vec2> start;
     };
 
     WorldTest(moteur::Application& app, const Options& options, bool standalone);
@@ -155,6 +162,7 @@ private:
 
     moteur::Asset<moteur::Mesh> cube_;
     moteur::Asset<moteur::Mesh> tile_;
+    ObjectMeshes object_meshes_;  // the map's objects (milestone 7)
     std::optional<moteur::Environment> sky_;
     moteur::Camera3D camera_;
     std::optional<glm::ivec2> hovered_;
@@ -164,12 +172,7 @@ private:
     bool show_axes_ = true;
     bool show_points_ = true;
     bool show_ascii_ = false;
-    bool show_grid_ = false;
-    bool show_clearance_ = false;
-    bool show_colliders_ = true;
-    bool show_paths_ = true;
-    bool show_field_ = false;
-    bool show_view_ = false;
+    moteur::WorldDebugFlags debug_flags_;  // the overlays, console variables "debug.*"
     bool show_query_ = false;
     bool show_ray_ = false;
     bool fog_on_ = true;

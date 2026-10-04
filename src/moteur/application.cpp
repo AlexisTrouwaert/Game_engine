@@ -24,6 +24,26 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
     }
+    // The log first, so that everything after goes to the file; the console sees it too.
+    console_ = std::make_unique<Console>();
+    if (config_.log_file) {
+        if (const std::string directory = preferences_directory(); !directory.empty()) {
+            log_.open(directory);
+        }
+    }
+    log_.set_console(console_.get());
+    Profiler::set_current(&profiler_);
+    time_scale_ = &console_->variables().add_float("time.scale", 1.0f, 0.05f, 8.0f,
+                                                  "vitesse du temps (les ticks gardent leur durée ; outil)");
+    profile_enabled_ = &console_->variables().add_bool("profile.enabled", true,
+                                                       "mesure les zones à chaque image (fenêtre Profiler, --report, profile start)");
+    if (const std::string path = variables_path(); !path.empty() && SDL_GetPathInfo(path.c_str(), nullptr)) {
+        try {
+            console_->variables().set_pending(read_text_file(path));
+        } catch (const std::exception& e) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Variables: %s", e.what());
+        }
+    }
 
     window_ = SDL_CreateWindow(config_.title.c_str(), config_.width, config_.height,
                                SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -59,6 +79,9 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
         renderer_ = std::make_unique<Renderer>(window_, renderer_config);
         renderer_->set_gpu_timing(config_.gpu_timing);
         assets_ = std::make_unique<Assets>(*renderer_, asset_path(""));
+        data_ = std::make_unique<DataTables>();
+        assets_->add_file_listener([this](const std::string& key) { data_->reload_file(assets_->root(), key); });
+        add_console_commands();
         input_ = std::make_unique<Input>();
         AudioConfig audio_config;
         audio_config.device = config_.audio;
@@ -89,13 +112,135 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
 Application::~Application() {
     // Assets hold GPU resources: released before the renderer, itself before the window it draws to.
     save_audio_settings();
+    if (const std::string path = variables_path(); !path.empty()) {
+        const std::string text = console_->variables().archived_text();
+        if (!SDL_SaveFile(path.c_str(), text.data(), text.size())) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Variables: cannot write '%s': %s", path.c_str(), SDL_GetError());
+        }
+    }
     debug_tools_.reset();  // writes imgui.ini while ImGui is still there
     audio_.reset();  // its voices hold sounds
     input_.reset();  // closes the gamepads
     assets_.reset();
     renderer_.reset();
+    log_.close();
     SDL_DestroyWindow(window_);
     SDL_Quit();
+}
+
+std::string Application::variables_path() const {
+    const std::string directory = preferences_directory();
+    return directory.empty() ? std::string() : directory + "variables.cfg";
+}
+
+void Application::add_console_commands() {
+    Console& c = *console_;
+    c.add("quit", "", "quitte le programme", Console::Kind::Tool, [this](const Console::Args&, Console&) { quit(); });
+    c.add("pause", "[0|1]", "met les ticks en pause (les images continuent)", Console::Kind::Tool,
+          [this](const Console::Args& args, Console& out) {
+              paused_ = args.empty() ? !paused_ : args[0] != "0";
+              out.print(paused_ ? "en pause" : "reprise");
+          });
+    c.add("step", "[ticks]", "en pause, avance de quelques ticks (1 par défaut)", Console::Kind::Tool,
+          [this](const Console::Args& args, Console& out) {
+              const int n = args.empty() ? 1 : std::max(1, std::atoi(args[0].c_str()));
+              paused_ = true;
+              pending_steps_ += n;
+              out.print(std::to_string(n) + " tick(s)");
+          });
+    c.add("reload", "<fichier d'asset | table>", "recharge un asset (tous ceux faits de ce fichier) ou une table de données",
+          Console::Kind::Tool,
+          [this](const Console::Args& args, Console& out) {
+              if (args.size() != 1) {
+                  out.error("usage : reload <fichier | table>");
+                  return;
+              }
+              if (data_->find(args[0]) != nullptr) {
+                  out.print(data_->reload(assets_->root(), args[0]) ? "table rechargée" : "table non rechargée (voir le journal)");
+                  return;
+              }
+              const std::size_t types = assets_->stats().size();
+              int reloaded = 0;
+              for (std::size_t type = 0; type < types; ++type) {
+                  for (const AssetInfo& info : assets_->infos()[type]) {
+                      if (info.key == args[0] || info.key.rfind(args[0] + "#", 0) == 0) {
+                          reloaded += assets_->reload(type, info.key) ? 1 : 0;
+                      }
+                  }
+              }
+              out.print(std::to_string(reloaded) + " asset(s) rechargé(s)");
+          },
+          [this](std::size_t index, const std::string&) {
+              std::vector<std::string> names;
+              if (index == 0) {
+                  for (const auto& table : data_->tables()) {
+                      names.push_back(table->name());
+                  }
+                  for (const auto& type : assets_->infos()) {
+                      for (const AssetInfo& info : type) {
+                          names.push_back(info.key.substr(0, info.key.find('#')));
+                      }
+                  }
+              }
+              return names;
+          });
+    c.add("assets", "", "statistiques des assets", Console::Kind::Tool, [this](const Console::Args&, Console& out) {
+        for (const AssetTypeStats& type : assets_->stats()) {
+            out.print(type.type + " : " + std::to_string(type.count) + " (" + std::to_string(type.bytes / 1024) + " Kio), " +
+                      std::to_string(type.loads) + " chargement(s), " + std::to_string(type.failures) + " échec(s)");
+        }
+    });
+    c.add("tables", "", "les tables de données", Console::Kind::Tool, [this](const Console::Args&, Console& out) {
+        for (const auto& table : data_->tables()) {
+            out.print(table->name() + " : " + std::to_string(table->size()) + " ligne(s), rechargée " +
+                      std::to_string(table->revision()) + " fois");
+        }
+    });
+    c.add("exec", "<fichier>", "exécute les lignes d'un fichier (chemin, ou fichier des assets)", Console::Kind::Tool,
+          [this](const Console::Args& args, Console& out) {
+              if (args.size() != 1) {
+                  out.error("usage : exec <fichier>");
+                  return;
+              }
+              std::string path = args[0];
+              if (!SDL_GetPathInfo(path.c_str(), nullptr)) {
+                  path = assets_->file_path(args[0]);
+              }
+              try {
+                  out.run_script(read_text_file(path));
+              } catch (const std::exception& e) {
+                  out.error(e.what());
+              }
+          });
+    c.add("profile", "start | stop [fichier.json]", "capture le profil des images entre start et stop (format Chrome Trace)",
+          Console::Kind::Tool,
+          [this](const Console::Args& args, Console& out) {
+              if (args.empty() || (args[0] != "start" && args[0] != "stop")) {
+                  out.error("usage : profile start | stop [fichier.json]");
+                  return;
+              }
+              if (args[0] == "start") {
+                  profiler_.start_capture();
+                  out.print("capture du profil commencée");
+                  return;
+              }
+              const std::string directory = preferences_directory();
+              const std::string path = args.size() > 1 ? args[1] : directory + "profils/profil.json";
+              out.print(profiler_.stop_capture(path) ? "profil écrit : " + path + " (ouvrir dans ui.perfetto.dev)"
+                                                     : "écriture impossible : " + path);
+          },
+          [](std::size_t index, const std::string&) {
+              return index == 0 ? std::vector<std::string>{"start", "stop"} : std::vector<std::string>{};
+          });
+    c.add("screenshot", "<fichier.png>", "capture l'image suivante", Console::Kind::Tool,
+          [this](const Console::Args& args, Console& out) {
+              if (args.size() != 1) {
+                  out.error("usage : screenshot <fichier.png>");
+                  return;
+              }
+              renderer_->request_capture(args[0]);
+              out.print("capture demandée : " + args[0]);
+          });
 }
 
 glm::vec2 Application::to_pixels(glm::vec2 window_point) const {
@@ -211,22 +356,42 @@ void Application::run(Game& game) {
         SDL_Log("Input: replaying '%s' (%zu ticks)", config_.replay_input_path.c_str(), replay->frames.size());
     }
     std::optional<InputRecording> recording;
-    std::size_t tick = 0;
+    std::size_t tick = replay ? config_.replay_start : 0;
+    for (const std::string& line : config_.startup_commands) {
+        console_->submit(line);
+    }
 
     running_ = true;
     while (running_) {
         const std::uint64_t iteration_start = SDL_GetPerformanceCounter();
         const double frame_time = static_cast<double>(iteration_start - previous) / frequency;
         previous = iteration_start;
+        profiler_.set_enabled(profile_enabled_->as_bool());
+        profiler_.begin_frame();
 
-        assets_->update();  // hot reload, between two frames
-        if (debug_tools_) {
-            debug_tools_->between_frames();  // the tools' reloads and frees, also between two frames
+        {
+            MOTEUR_PROFILE("assets");
+            assets_->update();  // hot reload, between two frames
+            if (debug_tools_) {
+                debug_tools_->between_frames();  // the tools' reloads and frees, also between two frames
+            }
         }
 
         DebugUi* ui = renderer_->debug_ui();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            // The console's key (under Escape, by position): opens and closes it, never typed.
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_GRAVE && debug_tools_) {
+                if (!event.key.repeat) {
+                    debug_tools_->toggle_console();
+                }
+                swallow_text_ = true;
+                continue;
+            }
+            if (event.type == SDL_EVENT_TEXT_INPUT && swallow_text_) {
+                swallow_text_ = false;
+                continue;
+            }
             if (event.type == SDL_EVENT_QUIT) {
                 quit();
             } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
@@ -255,20 +420,46 @@ void Application::run(Game& game) {
             game.on_event(event);
         }
 
-        const int steps = timestep.advance(frame_time);
+        console_->flush_log();
+        // Paused: only the ticks asked for by "step"; otherwise the time, scaled by "time.scale".
+        int steps = 0;
+        if (paused_) {
+            steps = std::min(pending_steps_, 8);
+            pending_steps_ -= steps;
+            timestep.advance(0.0);
+        } else {
+            pending_steps_ = 0;
+            steps = timestep.advance(frame_time * static_cast<double>(time_scale_->as_float()));
+        }
+        profiler_.begin_zone("logique");
         for (int i = 0; i < steps; ++i) {
+            MOTEUR_PROFILE("tick");
+            // The console's game commands of this tick: replayed, or typed and recorded.
+            std::vector<std::string> commands;
             if (replay) {
                 input_->set_frame(*replay, tick);
-            } else if (!config_.record_input_path.empty()) {
-                if (!recording) {
-                    recording = input_->start_recording();  // the game has declared its actions by now
+                if (tick < replay->frames.size()) {
+                    commands = replay->frames[tick].commands;
                 }
-                recording->frames.push_back(input_->frame());
+            } else {
+                commands = console_->take_game_commands();
+                if (!config_.record_input_path.empty()) {
+                    if (!recording) {
+                        recording = input_->start_recording();  // the game has declared its actions by now
+                    }
+                    InputFrame frame = input_->frame();
+                    frame.commands = commands;
+                    recording->frames.push_back(std::move(frame));
+                }
+            }
+            for (const std::string& command : commands) {
+                console_->run_game_command(command);
             }
             game.update(timestep.step());
             input_->end_tick();  // what this tick has seen is consumed
             ++tick;
         }
+        profiler_.end_zone();
         stats_ticks += steps;
         const std::uint64_t update_end = SDL_GetPerformanceCounter();
         if (restart_clock_) {
@@ -278,16 +469,24 @@ void Application::run(Game& game) {
         }
 
         // begin_frame() blocks until the display can take a new image: that is waiting, not work.
+        profiler_.begin_zone("attente de l'affichage");
         const bool drawable = renderer_->begin_frame();
+        profiler_.end_zone();
         const std::uint64_t wait_end = SDL_GetPerformanceCounter();
 
         if (drawable) {
             if (ui != nullptr) {
                 ui->new_frame();
             }
-            game.render(*renderer_, timestep.alpha());
+            {
+                MOTEUR_PROFILE("rendu : enregistrement");
+                game.render(*renderer_, timestep.alpha());
+            }
             const std::uint64_t record_end = SDL_GetPerformanceCounter();
-            renderer_->end_frame();
+            {
+                MOTEUR_PROFILE("rendu : envoi");
+                renderer_->end_frame();
+            }
             const std::uint64_t submit_end = SDL_GetPerformanceCounter();
             ++stats_frames;
 
@@ -316,7 +515,11 @@ void Application::run(Game& game) {
             SDL_Delay(10);
         }
         // The sounds the updates asked for, at the end of the frame (see Audio).
-        audio_->update();
+        {
+            MOTEUR_PROFILE("audio");
+            audio_->update();
+        }
+        profiler_.end_frame();
 
         stats_time += frame_time;
         if (stats_time >= 1.0) {
@@ -356,6 +559,15 @@ void Application::run(Game& game) {
                 cpu_stats.max());
         SDL_Log("perf: phases   update %.3f  record %.3f  submit %.3f  (means, ms)", update_stats.mean(),
                 record_stats.mean(), submit_stats.mean());
+        // The profiler's zones over the whole run (per frame where they ran).
+        int shown = 0;
+        for (const Profiler::Summary& zone : profiler_.totals()) {
+            if (++shown > 16) {
+                break;
+            }
+            SDL_Log("perf: zone %-28s mean %.3f  p99 %.3f  max %.3f  (%.1f per frame)", zone.name.c_str(), zone.mean_ms,
+                    zone.p99_ms, zone.max_ms, zone.calls);
+        }
         SDL_Log("perf: per frame  %.0f sprites, %.0f draw calls, %.1f KiB uploaded", sprites_total / measured,
                 draw_calls_total / measured, bytes_total / measured / 1024.0);
         if (mesh_totals.submitted > 0.0) {

@@ -29,7 +29,7 @@ TEST_CASE("ParticleEffect reads emitters, curves and lights") {
         "texture": "particles/spark.png", "frames": [4, 2], "burst": 10, "lifetime": [0.5, 1],
         "shape": "cone", "angle": 90, "direction": [0, 2, 0], "speed": 3,
         "size": [[0, 0.2], [1, 0.0]], "color": [[0, [1, 2, 3, 1]], [0.5, [0, 0, 0, 0]]],
-        "facing": "flat", "light": { "intensity": 4, "flicker": 2 }
+        "facing": "flat", "soft": 0.4, "light": { "intensity": 4, "flicker": 2 }
       }]
     })", "test.json");
     REQUIRE(e.emitters().size() == 1);
@@ -44,6 +44,7 @@ TEST_CASE("ParticleEffect reads emitters, curves and lights") {
     CHECK(d.color.at(0.25f).y == doctest::Approx(1.0f));
     CHECK(d.color.at(0.9f) == glm::vec4(0.0f));  // past the last key: its value
     CHECK(d.facing == moteur::BillboardFacing::Flat);
+    CHECK(d.soft == doctest::Approx(0.4f));
     CHECK(d.light.enabled);
     CHECK(d.light.flicker == 1.0f);  // clamped
     CHECK_FALSE(e.loops());
@@ -59,6 +60,9 @@ TEST_CASE("ParticleEffect refuses broken files") {
     CHECK_THROWS_AS(moteur::ParticleEffect::parse(
                         R"({"version": 1, "emitters": [{"texture": "a.png", "burst": 1, "shape": "torus"}]})", "a.json"),
                     std::runtime_error);
+    CHECK_THROWS_WITH_AS(moteur::ParticleEffect::parse(
+                             R"({"version": 1, "emitters": [{"texture": "a.png", "burst": 1, "soft": -1}]})", "a.json"),
+                         doctest::Contains("\"soft\" is negative"), std::runtime_error);
 }
 
 TEST_CASE("A burst lives its lifetime, then the effect is forgotten") {

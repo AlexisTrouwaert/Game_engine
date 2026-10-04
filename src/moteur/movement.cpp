@@ -1,5 +1,7 @@
 #include "moteur/movement.hpp"
 
+#include "moteur/profiler.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -80,6 +82,7 @@ glm::quat facing_rotation(glm::vec2 facing) {
 
 void plan_paths(entt::registry& registry, const NavGrid& grid, const ClearanceMap& clearance, int max_paths,
                 MovementStats& stats, int max_nodes) {
+    MOTEUR_PROFILE("chemins");
     for (const entt::entity entity : sorted_movers(registry)) {
         Mover& mover = registry.get<Mover>(entity);
         if (!mover.needs_path || mover.mode != MoveMode::ToPoint) {
@@ -115,6 +118,7 @@ void move_movers(entt::registry& registry, const NavGrid& grid, float dt, const 
 
 void move_movers(entt::registry& registry, const NavGrid& grid, float dt, std::span<const FlowField* const> fields,
                  MovementStats& stats) {
+    MOTEUR_PROFILE("déplacements");
     for (const entt::entity entity : sorted_movers(registry)) {
         Mover& mover = registry.get<Mover>(entity);
         ++stats.movers;
@@ -208,6 +212,7 @@ void move_movers(entt::registry& registry, const NavGrid& grid, float dt, std::s
 }
 
 void finish_movers(entt::registry& registry, float dt) {
+    MOTEUR_PROFILE("déplacements : fin");
     for (const entt::entity entity : sorted_movers(registry)) {
         Mover& mover = registry.get<Mover>(entity);
         const glm::vec2 travelled = plane_position(registry, entity) - mover.tick_start;

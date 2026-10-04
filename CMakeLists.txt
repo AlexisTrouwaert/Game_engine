@@ -12,6 +12,13 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     endif()
 endif()
 
+# Tracy (milestone 7, part 4): off by default; on, vcpkg builds it (manifest feature "tracy") and the
+# engine's MOTEUR_PROFILE zones also go to Tracy's profiler application.
+option(MOTEUR_TRACY "Send the profiler's zones to Tracy" OFF)
+if(MOTEUR_TRACY)
+    list(APPEND VCPKG_MANIFEST_FEATURES "tracy")
+endif()
+
 project(moteur LANGUAGES C CXX)  # C: miniaudio's implementation
 
 set(CMAKE_CXX_STANDARD 20)

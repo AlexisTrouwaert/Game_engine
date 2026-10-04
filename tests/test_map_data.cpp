@@ -104,7 +104,7 @@ TEST_CASE("MapData refuses broken files with a message naming the place") {
         return std::string("no error");
     };
     CHECK(message("{").find("broken.json") != std::string::npos);
-    CHECK(message(replaced(kMap, "\"version\": 1", "\"version\": 2")).find("version") != std::string::npos);
+    CHECK(message(replaced(kMap, "\"version\": 1", "\"version\": 3")).find("version") != std::string::npos);
     CHECK(message(replaced(kMap, "[\"floor\", \"fence\"]", "[\"floor\", \"lava\"]")).find("lava") != std::string::npos);
     CHECK(message(replaced(kMap, "\"=\": [", "\"==\": [")).find("one character") != std::string::npos);
     CHECK(message(replaced(kMap, "\"=\": [\"floor\", \"fence\"]", "\"=\": [\"floor\", \"wall\"]")).find("the same") !=

@@ -26,6 +26,9 @@
 #include "moteur/spatial_hash.hpp"
 #include "moteur/tilemap.hpp"
 #include "moteur/visibility.hpp"
+#include "moteur/world_debug.hpp"
+#include "moteur/save_file.hpp"
+#include "moteur/world_save.hpp"
 #include "moteur/world.hpp"
 
 #include "sandbox_scene.hpp"
@@ -70,7 +73,22 @@ public:
         // hero walks by paths and slides on walls, the creatures collide, see the hero, chase and
         // strike it; braziers burn, blows spark and bleed, the dead vanish in smoke; the fog of war
         // hides what the hero has not seen, and walls before the hero fade.
+        // Milestone 7, part 2: the hero and the creatures are rows of the "personnages" table
+        // (assets/data/personnages/), read again every tick: edited while the game runs, they change.
         bool hero = false;
+        // Milestone 7, part 6 (the slice): after tick `save_at_tick`, the game saved into
+        // `save_path`; or, with `load_path`, the game loaded from that save instead of a new one.
+        std::string save_path;
+        long save_at_tick = 0;
+        bool save_cbor = false;  // the compact binary form of the shipped game, instead of JSON
+        std::string load_path;
+        // Milestone 7, part 11: a save already read (the menus read slots, with their backup):
+        // the slice starts from it, as from `load_path`.
+        std::shared_ptr<const moteur::SaveGame> saved_game;
+        // Milestone 7, part 8: the decor and creatures drawn at random written as objects of the
+        // slice's map into this file (a v2 map), then the program stops. Once the map has objects,
+        // the slice places those instead of drawing.
+        std::string export_objects_path;
     };
 
     // The assets it loads from files (a loading screen loads them ahead: see StatesDemo).
@@ -115,6 +133,15 @@ public:
     // The slice: blows landed on creatures.
     int hits() const { return hits_; }
 
+    // The slice's whole state as a save (milestone 7, part 6): the persistent entities (hero,
+    // creatures) and the scene's own state (ticks, camera, exploration...). Between ticks.
+    moteur::SaveGame save() const;
+
+    // What a save's header says of the game (the slots' menu): the hero's health (0 to 1), the
+    // creatures still standing.
+    float hero_health() const;
+    int creatures_standing() const;
+
     // For the command line report.
     double elapsed() const { return elapsed_; }
     long ticks() const { return ticks_; }
@@ -136,6 +163,22 @@ private:
     void spawn_hero();
     // The hero hits a creature: an impact where it is, a quarter of its health.
     void strike(entt::entity creature);
+    // A creature loses `blow` of its health (a share of 1): its blow taken, or its fall (effects,
+    // collider gone). What a strike and "kill all" share.
+    void hurt(entt::entity creature, float blow);
+    // What each creature is: drawn, read from the "monstre" objects of the map, or asked for by
+    // the console ("spawn").
+    struct CreatureSpawn {
+        glm::vec2 position, direction;
+        float pace;
+        glm::vec3 color;
+        float health;
+        std::string character;  // row of the characters' table (the slice)
+    };
+    entt::entity spawn_creature(const CreatureSpawn& spawn, int index);
+    // Milestone 7, part 11: the slice's console commands (game commands: queued, run at the start
+    // of a tick, recorded in replays).
+    void register_commands();
     // The hero starts a blow at `target` (null: in the air): with an animated hero, the blow lands
     // on the attack's "impact" event, on the target if it is still within reach then, or else on
     // the nearest creature within reach; a blow already under way is not started again. Without
@@ -177,7 +220,7 @@ private:
     void draw_overlay(moteur::Renderer& renderer, const moteur::Camera3D& camera, float blend);
     // Milestone 6 (the slice only): the grid of the file map, the hunt of the creatures, the moves
     // (paths, flow field, collisions), the field of view and the fog, the effects.
-    void hunt();
+    void hunt(float dt);
     // The hero's moves of this tick: a click walks by a path (held: follows the pointer), a click on
     // a creature strikes it or walks up to it, keys and stick walk straight and slide on walls.
     void steer_hero(const std::optional<glm::vec3>& ground);
@@ -187,6 +230,11 @@ private:
     void update_sight();
     void play_effect(const char* path, glm::vec3 at, float scale = 1.0f);
     bool is_wall(int i, int j) const;
+    // Milestone 7, part 6: what saves need.
+    void setup_serializers();
+    entt::entity spawn_from_record(entt::registry& registry, const nlohmann::json& record);
+    void load(const moteur::SaveGame& save);
+    void create_selection_marks();
 
     // The actions of the scene.
     struct Actions {
@@ -275,9 +323,18 @@ private:
     std::map<std::string, moteur::Asset<moteur::ParticleEffect>> effects_;
     std::uint64_t last_frame_ns_ = 0;
     bool fog_on_ = true;
+    moteur::WorldDebugFlags debug_flags_;  // the overlays of the world, console variables "debug.*"
     bool pressed_on_ground_ = false;
     int follow_repath_ = 0;
     int blows_taken_ = 0;
+    glm::vec2 field_target_{0.0f};  // where the hero was when the flow field was computed
+    std::uint64_t next_persistent_id_ = 1;
+    moteur::ComponentSerializers serializers_;
+    moteur::Variable* effects_on_ = nullptr;  // "effects.enabled"
+    std::vector<moteur::MapObject>* recording_ = nullptr;  // the draws, as objects (export)
+    bool stop_after_export_ = false;
+    bool god_ = false;  // "god": the hero takes no blow
+    bool from_objects() const;  // the slice whose map has objects: no draws
 
     moteur::Camera3D camera_;
     glm::vec2 mouse_{-1.0f};

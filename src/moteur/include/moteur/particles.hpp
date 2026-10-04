@@ -49,6 +49,7 @@ struct Texture;
 //         "spin": [-3, 3],                     // radians per second
 //         "additive": true,
 //         "facing": "camera",                  // camera, upright, flat
+//         "soft": 0.5,                         // metres of fade before the surface behind (milestone 7); 0: hard
 //         "light": { "color": [1, 0.6, 0.3], "intensity": 6, "range": 5, "flicker": 0.2 }
 //       }
 //     ]
@@ -92,6 +93,7 @@ struct EmitterDesc {
     glm::vec2 spin{0.0f, 0.0f};
     bool additive = false;
     BillboardFacing facing = BillboardFacing::Camera;
+    float soft = 0.0f;  // see BillboardOptions::soft
     EmitterLight light;
 };
 

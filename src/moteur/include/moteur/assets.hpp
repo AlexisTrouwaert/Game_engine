@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -106,6 +107,11 @@ public:
     // Applies the changes seen since the last call (a file is taken once it has not changed for a
     // moment, as editors often write in several steps). Called by Application between frames.
     void update();
+    // Called by update() with the key of every file that changed (after the assets made from it
+    // were reloaded): for what is not an asset of this manager (the data tables).
+    void add_file_listener(std::function<void(const std::string& key)> listener) {
+        file_listeners_.push_back(std::move(listener));
+    }
 
     // false: models use the plain images of their KHR_texture_basisu textures rather than the KTX2
     // ones (to compare the two). For the models loaded afterwards.
@@ -144,6 +150,7 @@ private:
     AssetCache<MapData> maps_;
     AssetCache<ParticleEffect> effects_;
     std::unique_ptr<Watcher> watcher_;
+    std::vector<std::function<void(const std::string&)>> file_listeners_;
     bool prefer_ktx2_ = true;
 };
 

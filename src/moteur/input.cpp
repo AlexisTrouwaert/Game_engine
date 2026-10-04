@@ -796,6 +796,9 @@ std::string input_recording_to_json(const InputRecording& recording) {
         if (!values.empty()) {
             item["a"] = values;
         }
+        if (!frame.commands.empty()) {
+            item["c"] = frame.commands;
+        }
         frames.push_back(item);
     }
     doc["frames"] = frames;
@@ -830,6 +833,9 @@ InputRecording input_recording_from_json(std::string_view json_text, const std::
                     throw std::runtime_error("an action index is out of range");
                 }
                 frame.axes[i] = {a.at(1).get<float>(), a.at(2).get<float>()};
+            }
+            if (item.contains("c")) {
+                frame.commands = item.at("c").get<std::vector<std::string>>();
             }
             recording.frames.push_back(std::move(frame));
         }

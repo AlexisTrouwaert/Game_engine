@@ -72,6 +72,8 @@ public:
     int height() const { return height_; }
     // One byte per cell, row after row (0 or 1): to save, and to draw.
     const std::vector<std::uint8_t>& cells() const { return cells_; }
+    // Marks one cell explored (a save loaded). False if it already was, or is outside.
+    bool mark(glm::ivec2 cell);
 
 private:
     int width_ = 0;

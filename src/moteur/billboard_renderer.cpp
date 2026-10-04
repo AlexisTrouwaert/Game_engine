@@ -26,8 +26,8 @@ BillboardRenderer::BillboardRenderer(Renderer& renderer, SDL_GPUTextureFormat co
     vertex_info.uniform_buffers = 1;  // the view-projection matrix
     ShaderInfo fragment_info;
     fragment_info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
-    fragment_info.samplers = 2;         // the texture, the fog of war
-    fragment_info.uniform_buffers = 1;  // the fog settings
+    fragment_info.samplers = 3;         // the texture, the fog of war, the scene's distances (soft particles)
+    fragment_info.uniform_buffers = 1;  // the fog settings, the view
     // Kept: the pipeline is made again when the number of samples changes (MSAA).
     vertex_shader_ = renderer.load_shader("billboard.vert", vertex_info);
     fragment_shader_ = renderer.load_shader("billboard.frag", fragment_info);
@@ -48,6 +48,18 @@ BillboardRenderer::BillboardRenderer(Renderer& renderer, SDL_GPUTextureFormat co
         throw std::runtime_error(std::string("SDL_CreateGPUSampler (billboard) failed: ") + SDL_GetError());
     }
     sampler_ = GpuSampler(renderer.device(), sampler);
+    // The distances the meshes wrote: one texel per pixel, read as it is.
+    sampler_info.min_filter = SDL_GPU_FILTER_NEAREST;
+    sampler_info.mag_filter = SDL_GPU_FILTER_NEAREST;
+    sampler_info.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+    sampler_info.max_lod = 0.0f;
+    const NameProperty depth_sampler_name(SDL_PROP_GPU_SAMPLER_CREATE_NAME_STRING, "billboard.depth sampler");
+    sampler_info.props = depth_sampler_name.id();
+    sampler = SDL_CreateGPUSampler(renderer.device(), &sampler_info);
+    if (sampler == nullptr) {
+        throw std::runtime_error(std::string("SDL_CreateGPUSampler (billboard depth) failed: ") + SDL_GetError());
+    }
+    depth_sampler_ = GpuSampler(renderer.device(), sampler);
 
     // The same six indices for every quad, as for sprites.
     std::vector<std::uint16_t> indices;
@@ -70,7 +82,7 @@ void BillboardRenderer::create_pipeline(SDL_GPUSampleCount samples) {
     vertex_buffer.slot = 0;
     vertex_buffer.pitch = sizeof(BillboardVertex);
     vertex_buffer.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-    SDL_GPUVertexAttribute attributes[3] = {};
+    SDL_GPUVertexAttribute attributes[4] = {};
     attributes[0].location = 0;  // position
     attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
     attributes[0].offset = offsetof(BillboardVertex, x);
@@ -80,6 +92,9 @@ void BillboardRenderer::create_pipeline(SDL_GPUSampleCount samples) {
     attributes[2].location = 2;  // color, premultiplied
     attributes[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
     attributes[2].offset = offsetof(BillboardVertex, r);
+    attributes[3].location = 3;  // soft fade distance
+    attributes[3].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT;
+    attributes[3].offset = offsetof(BillboardVertex, soft);
 
     // Premultiplied alpha, as for sprites: "source + background x (1 - source alpha)". With a
     // source alpha of 0 (additive billboards), the source is simply added.
@@ -99,7 +114,7 @@ void BillboardRenderer::create_pipeline(SDL_GPUSampleCount samples) {
     info.vertex_input_state.vertex_buffer_descriptions = &vertex_buffer;
     info.vertex_input_state.num_vertex_buffers = 1;
     info.vertex_input_state.vertex_attributes = attributes;
-    info.vertex_input_state.num_vertex_attributes = 3;
+    info.vertex_input_state.num_vertex_attributes = 4;
     info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
     info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;  // seen from both sides
@@ -141,6 +156,7 @@ void BillboardRenderer::draw(const Texture& texture, glm::vec3 center, glm::vec2
     billboard.additive = options.additive;
     billboard.facing = options.facing;
     billboard.rotation = options.rotation;
+    billboard.soft = std::max(options.soft, 0.0f);
     batcher_.add(billboard);
 }
 
@@ -196,11 +212,17 @@ void BillboardRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass
     SDL_BindGPUIndexBuffer(pass, &indices, SDL_GPU_INDEXELEMENTSIZE_16BIT);
     SDL_PushGPUVertexUniformData(commands, 0, &view_projection_, sizeof(view_projection_));
     const MeshRenderer& meshes = renderer_.meshes();
-    glm::vec4 fog[2];
-    meshes.fog_uniforms(fog[0], fog[1]);
-    SDL_PushGPUFragmentUniformData(commands, 0, fog, sizeof(fog));
-    const SDL_GPUTextureSamplerBinding fog_binding = {meshes.fog_texture(), meshes.fog_sampler()};
-    SDL_BindGPUFragmentSamplers(pass, 1, &fog_binding, 1);
+    // The fog of war, and the view and target size for the soft fade (see billboard.frag.hlsl).
+    glm::vec4 frame[5];
+    meshes.fog_uniforms(frame[0], frame[1]);
+    frame[2] = glm::vec4(view_.eye, 0.0f);
+    frame[3] = glm::vec4(view_.forward, 0.0f);
+    const glm::ivec2 target = renderer_.scene_size();
+    frame[4] = glm::vec4(1.0f / static_cast<float>(std::max(target.x, 1)), 1.0f / static_cast<float>(std::max(target.y, 1)), 0.0f, 0.0f);
+    SDL_PushGPUFragmentUniformData(commands, 0, frame, sizeof(frame));
+    const SDL_GPUTextureSamplerBinding bindings[2] = {{meshes.fog_texture(), meshes.fog_sampler()},
+                                                      {renderer_.scene_distance_texture(), depth_sampler_.get()}};
+    SDL_BindGPUFragmentSamplers(pass, 1, bindings, 2);
     const void* bound_texture = nullptr;
     for (const BillboardRun& run : batcher_.runs()) {
         if (run.texture != bound_texture) {

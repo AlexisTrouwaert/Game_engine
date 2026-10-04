@@ -1,0 +1,10 @@
+{
+  "_note": "Reference captures (first 12 hex digits of their SHA-256), per platform: written by tools/tests/check_references.py --record once a change is checked and explained in the milestone's document.",
+  "windows": {
+    "2d": "bd91e8b2c616",
+    "demo3d": "fdc076d9c3ae",
+    "demo3d_replay": "952477744ffb",
+    "slice": "f54c9067ab40",
+    "exactness": "063b80d5f127"
+  }
+}

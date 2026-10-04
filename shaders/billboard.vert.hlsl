@@ -11,12 +11,14 @@ struct Input {
     float3 position : TEXCOORD0;  // world, metres
     float2 uv : TEXCOORD1;
     float4 color : TEXCOORD2;     // premultiplied, linear
+    float soft : TEXCOORD3;       // metres over which it fades before the surface behind it; 0: hard
 };
 
 struct Output {
     float2 uv : TEXCOORD0;
     float4 color : TEXCOORD1;
-    float3 world_position : TEXCOORD2;  // for the fog of war
+    float3 world_position : TEXCOORD2;  // for the fog of war and the soft fade
+    nointerpolation float soft : TEXCOORD3;
     float4 position : SV_Position;
 };
 
@@ -26,5 +28,6 @@ Output main(Input input) {
     output.uv = input.uv;
     output.color = input.color;
     output.world_position = input.position;
+    output.soft = input.soft;
     return output;
 }

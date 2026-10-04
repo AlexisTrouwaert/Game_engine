@@ -93,7 +93,7 @@ void BillboardBatcher::finish(const BillboardView& view) {
         const float us[4] = {uv.x, uv.z, uv.z, uv.x};
         const float vs[4] = {uv.y, uv.y, uv.w, uv.w};
         for (int i = 0; i < 4; ++i) {
-            vertices_.push_back({corner[i].x, corner[i].y, corner[i].z, us[i], vs[i], r, g, b, a});
+            vertices_.push_back({corner[i].x, corner[i].y, corner[i].z, us[i], vs[i], r, g, b, a, billboard.soft});
         }
 
         const auto index = static_cast<std::uint32_t>(k);

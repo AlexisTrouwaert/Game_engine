@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SDL3/SDL.h>
+#include <glm/glm.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -175,7 +176,11 @@ public:
     // automated pixel comparisons (deterministic scene + fixed tick -> reproducible capture).
     // One-shot: cleared after end_frame() attempts it, whether or not that attempt succeeds. Stalls
     // the GPU until the frame is done; never call this every frame, only for tests and tools.
-    void request_capture(std::string path) { capture_path_ = std::move(path); }
+    // `max_width` > 0: the image is reduced to at most that many pixels across (a save's thumbnail).
+    void request_capture(std::string path, int max_width = 0) {
+        capture_path_ = std::move(path);
+        capture_max_width_ = max_width;
+    }
 
     // Sprite drawing, recorded between begin_frame() and end_frame(). sprites() draws the 2D world,
     // over the 3D scene, with the camera given to set_view_projection() (window pixels without one).
@@ -222,8 +227,15 @@ public:
     // Size of the 3D scene image of the current frame, in pixels.
     std::uint32_t scene_width() const { return scene_width_; }
     std::uint32_t scene_height() const { return scene_height_; }
+    glm::ivec2 scene_size() const { return {static_cast<int>(scene_width_), static_cast<int>(scene_height_)}; }
     // Format of that image: 16-bit floats per channel, so lights can exceed 1.0.
     static constexpr SDL_GPUTextureFormat kSceneFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
+    // The distance of the opaque surfaces along the view, in metres (milestone 7, soft particles):
+    // written by the meshes as a second target, resolved with MSAA, read by the billboards. Far
+    // where no mesh was drawn.
+    static constexpr SDL_GPUTextureFormat kDistanceFormat = SDL_GPU_TEXTUREFORMAT_R16_FLOAT;
+    static constexpr float kFarDistance = 60000.0f;  // what the distance target is cleared to
+    SDL_GPUTexture* scene_distance_texture() const { return distance_texture_.get(); }
 
     // The debug interface, or null when RendererConfig::debug_ui is off. Its windows are drawn
     // after the sprites, in window pixels.
@@ -305,6 +317,7 @@ private:
     std::uint32_t height_ = 0;
     RenderStats stats_;
     std::string capture_path_;
+    int capture_max_width_ = 0;
 
     // Color and depth of the "scene" pass, at the render resolution, recreated when it or the
     // anti-aliasing changes (the scene pass's pipelines too, for the number of samples).
@@ -315,6 +328,8 @@ private:
     GpuTexture scene_texture_;       // what the tone mapping reads (the resolved image with MSAA)
     GpuTexture scene_msaa_texture_;  // with MSAA only: the multisampled image the scene pass draws
     GpuTexture depth_texture_;       // multisampled with MSAA
+    GpuTexture distance_texture_;    // the meshes' distances along the view (resolved with MSAA)
+    GpuTexture distance_msaa_texture_;  // with MSAA only: what the meshes write, resolved into the one above
     GpuTexture ldr_texture_;         // with FXAA only: the tone-mapped scene, which FXAA reads
     std::uint32_t scene_width_ = 0;
     std::uint32_t scene_height_ = 0;

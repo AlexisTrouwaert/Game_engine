@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "moteur/animation_graph.hpp"
+
 namespace moteur {
 
 // The description of a character's skeletal animations (milestone 5, part 6): what the glTF file
@@ -33,7 +35,8 @@ namespace moteur {
 //     "upper_mask": "upper_body",           // the mask of layer 1
 //     "attach_points": {                    // where objects go on the character (part 8)
 //       "right_hand": { "joint": "handslot.r", "position": [0, 0.033, 0], "rotation": [0, 180, 0] }
-//     }
+//     },
+//     "graph": { ... }                      // the animation graph (milestone 7): see AnimationGraph
 //   }
 //
 // Plain data, checked against no skeleton: the Animator resolves clips and joints when it plays.
@@ -101,6 +104,8 @@ public:
     const std::string& upper_mask() const { return upper_mask_; }
     const std::map<std::string, AttachPoint>& attach_points() const { return attach_points_; }
     const AttachPoint* attach_point(const std::string& name) const;
+    // Empty if the file has none (the game plays its clips itself).
+    const AnimationGraph& graph() const { return graph_; }
 
 private:
     std::string source_;
@@ -110,6 +115,7 @@ private:
     std::map<std::string, MaskData> masks_;
     std::string upper_mask_;
     std::map<std::string, AttachPoint> attach_points_;
+    AnimationGraph graph_;
 };
 
 }  // namespace moteur

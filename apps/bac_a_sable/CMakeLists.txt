@@ -1,13 +1,22 @@
-add_executable(bac_a_sable main.cpp demo3d.cpp blender_compare.cpp states_demo.cpp audio_test.cpp animation_test.cpp anim_compare.cpp world_test.cpp)
-
 find_package(nlohmann_json CONFIG REQUIRED)
 
-target_link_libraries(bac_a_sable PRIVATE moteur nlohmann_json::nlohmann_json)
+# What the sandbox and the map editor share: the game's data tables and object types, the "Monde"
+# scene (the editor's "Essayer") and the editor itself (milestone 7, parts 7 and 8).
+add_library(bac_a_sable_commun STATIC sandbox_data.cpp map_objects.cpp world_test.cpp map_editor.cpp)
+target_link_libraries(bac_a_sable_commun PUBLIC moteur nlohmann_json::nlohmann_json)
+moteur_enable_warnings(bac_a_sable_commun)
+# Hot reload of the assets while developing (see Assets::enable_hot_reload; --no-hot-reload), and
+# where the editor writes the maps.
+target_compile_definitions(bac_a_sable_commun PUBLIC MOTEUR_ASSETS_SOURCE_DIR="${CMAKE_SOURCE_DIR}/assets")
 
+add_executable(bac_a_sable main.cpp demo3d.cpp blender_compare.cpp states_demo.cpp audio_test.cpp animation_test.cpp anim_compare.cpp)
+target_link_libraries(bac_a_sable PRIVATE bac_a_sable_commun)
 moteur_enable_warnings(bac_a_sable)
 
-# Hot reload of the assets while developing (see Assets::enable_hot_reload; --no-hot-reload).
-target_compile_definitions(bac_a_sable PRIVATE MOTEUR_ASSETS_SOURCE_DIR="${CMAKE_SOURCE_DIR}/assets")
+# The map editor as a program of its own: next to the sandbox, with the same shaders and assets.
+add_executable(editeur editeur_main.cpp)
+target_link_libraries(editeur PRIVATE bac_a_sable_commun)
+moteur_enable_warnings(editeur)
 
 moteur_add_shaders(bac_a_sable
     SOURCES
@@ -34,11 +43,15 @@ moteur_add_shaders(bac_a_sable
 )
 
 moteur_add_assets(bac_a_sable)
+add_dependencies(editeur bac_a_sable_shaders bac_a_sable_assets)
 
 # Shown by the "À propos" window; keep in step with assets/credits.json.
 set(_licenses sdl3 imgui glm stb nlohmann-json cgltf mikktspace entt efsw ktx miniaudio ozz-animation)
 if(WIN32)
     list(APPEND _licenses winpixevent)
+endif()
+if(MOTEUR_TRACY)
+    list(APPEND _licenses tracy)
 endif()
 moteur_add_licenses(bac_a_sable PACKAGES ${_licenses})
 

@@ -105,6 +105,15 @@
       "copyright": "Copyright (c) 2020 Guillaume Blanc",
       "url": "https://github.com/guillaumeblanc/ozz-animation",
       "license_file": "licenses/ozz-animation.txt"
+    },
+    {
+      "name": "Tracy",
+      "version": "0.13.1",
+      "license": "BSD 3-Clause",
+      "copyright": "Copyright (c) 2017-2025, Bartosz Taudul",
+      "url": "https://github.com/wolfpld/tracy",
+      "license_file": "licenses/tracy.txt",
+      "build": "MOTEUR_TRACY"
     }
   ],
   "fonts": [

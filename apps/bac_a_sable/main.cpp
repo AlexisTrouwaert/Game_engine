@@ -47,7 +47,9 @@
 #include "sandbox_scene.hpp"
 #include "states_demo.hpp"
 #include "animation_test.hpp"
+#include "sandbox_data.hpp"
 #include "world_test.hpp"
+#include "map_editor.hpp"
 #include "audio_test.hpp"
 
 namespace {
@@ -75,7 +77,8 @@ struct Mover {
 
 // What the "À propos" window lists, read from assets/credits.json: the third-party libraries and
 // fonts with their licenses, and the authors of the assets. Paths are relative to the executable.
-// An entry with a "platform" ("windows", "macos") is only listed on that OS.
+// An entry with a "platform" ("windows", "macos") is only listed on that OS; one with a "build"
+// option ("MOTEUR_TRACY") only when the program was built with it.
 struct Credits {
     struct Entry {
         std::string name;
@@ -113,6 +116,15 @@ struct Credits {
                     const std::string platform = item.value("platform", "");
                     if (!platform.empty() && platform != kPlatform) {
                         continue;
+                    }
+                    if (const std::string build = item.value("build", ""); !build.empty()) {
+#if defined(MOTEUR_TRACY)
+                        if (build != "MOTEUR_TRACY") {
+                            continue;
+                        }
+#else
+                        continue;
+#endif
                     }
                     Entry entry;
                     entry.name = item.value("name", "");
@@ -1753,6 +1765,12 @@ public:
              "ses points nommés et les axes de l'origine ; la case sous le pointeur et la grille de jeu dans le "
              "panneau. Clic droit : poser ou retirer un mur. Modifier le fichier de la carte la recharge.",
              TestKind::World, {}, {}},
+            {"Éditeur de cartes",
+             "Les cartes de assets/maps en 3D : pinceau, rectangles, remplissage, gomme, pipette, calques, légende, "
+             "points nommés, objets (décor, lumières, effets, apparitions de monstres) et connecteurs ; annuler et "
+             "rétablir, vérifications (cases inaccessibles...), enregistrement dans les sources, et F5 pour essayer "
+             "la carte dans la scène « Monde ». Aussi en programme seul : editeur.",
+             TestKind::Editor, {}, {}},
         };
         if (launch_test >= 0 && launch_test < static_cast<int>(tests_.size())) {
             request(Action::Launch, launch_test);
@@ -1817,7 +1835,7 @@ public:
 private:
     enum class Screen { Home, Tests, Running };
     enum class Action { None, ShowHome, ShowTests, Launch };
-    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare, States, Audio, Animation, World };
+    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare, States, Audio, Animation, World, Editor };
 
     struct TestEntry {
         const char* name;
@@ -1865,6 +1883,10 @@ private:
                         WorldTest::Options world;
                         world.map = world_map_;
                         next = std::make_unique<WorldTest>(app_, world, false);
+                    } else if (test.kind == TestKind::Editor) {
+                        MapEditor::Options editor;
+                        editor.map = world_map_;
+                        next = std::make_unique<MapEditor>(app_, editor, false);
                     } else if (test.kind == TestKind::Animation) {
                         next = std::make_unique<AnimationTest>(app_, AnimationTest::Options{}, false);
                     } else if (test.kind == TestKind::States) {
@@ -2213,7 +2235,14 @@ int main(int argc, char** argv) {
     // that scene directly, without any interface: that is what scripts and measurements use.
     bool menu = argc == 1;
     std::string world_map = "salle_portes";
+    std::size_t replay_start = 0;
+    std::vector<std::string> startup_commands;  // --exec FILE, +set NAME VALUE: console lines at the start
+    bool check_data = false;          // --check-data: load and check every table, print, exit
+    std::string compile_data;         // --compile-data DIR: write the tables' binary form into DIR
+    std::string compiled_data;        // --compiled-data DIR: read the tables from their binary form
     bool world_standalone = false;  // --world-auto or --world-crowd N: the "Monde" test without the menu
+    bool editor_standalone = false;  // --editeur [map]: the map editor without the menu
+    bool editor_top = false;
     WorldTest::Options world_options;
     int menu_test = -1;  // --menu-test N: the menu, with its test N (from 0) already running
     TestScene::Options options;
@@ -2341,6 +2370,25 @@ int main(int argc, char** argv) {
         } else if (arg == "--states-cycles" && has_one) {
             states = true;
             states_cycles = std::max(0, std::atoi(argv[i + 1]));
+        } else if (arg == "--slice") {  // the 3D demo as the playable slice, without the menus around it
+            demo3d = true;
+            demo3d_options.hero = true;
+        } else if (arg == "--save-at" && i + 2 < argc) {  // --save-at TICK FILE: the slice saved after that tick
+            demo3d_options.save_at_tick = std::atol(argv[i + 1]);
+            demo3d_options.save_path = argv[i + 2];
+            i += 2;
+        } else if (arg == "--save-cbor") {  // with --save-at: the binary form (CBOR) instead of JSON
+            demo3d_options.save_cbor = true;
+        } else if (arg == "--export-slice-objects" && has_one) {  // the slice's draws written as map objects
+            demo3d = true;
+            demo3d_options.hero = true;
+            demo3d_options.export_objects_path = argv[++i];
+        } else if (arg == "--load" && has_one) {  // the slice loaded from a save
+            demo3d_options.load_path = argv[++i];
+            demo3d = true;
+            demo3d_options.hero = true;
+        } else if (arg == "--replay-start" && has_one) {  // the replay starts at this tick (after --load)
+            replay_start = static_cast<std::size_t>(std::atol(argv[++i]));
         } else if (arg == "--demo3d") {
             demo3d = true;
         } else if (arg == "--creatures" && has_one) {
@@ -2396,6 +2444,17 @@ int main(int argc, char** argv) {
             options.depth = true;
         } else if (arg == "--still") {
             options.still = true;
+        } else if (arg == "--exec" && has_one) {
+            startup_commands.push_back("exec \"" + std::string(argv[++i]) + "\"");
+        } else if (arg == "+set" && i + 2 < argc) {
+            startup_commands.push_back("set " + std::string(argv[i + 1]) + " \"" + std::string(argv[i + 2]) + "\"");
+            i += 2;
+        } else if (arg == "--check-data") {
+            check_data = true;
+        } else if (arg == "--compile-data" && has_one) {
+            compile_data = argv[++i];
+        } else if (arg == "--compiled-data" && has_one) {
+            compiled_data = argv[++i];
         } else if (arg == "--report") {
             report = true;
         } else if (arg == "--menu") {
@@ -2423,6 +2482,14 @@ int main(int argc, char** argv) {
             world_options.fires = std::max(0, std::atoi(argv[++i]));
         } else if (arg == "--world-map" && has_one) {
             world_map = argv[++i];
+        } else if (arg == "--editeur") {  // the map editor alone (milestone 7): --editeur [map]
+            editor_standalone = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                world_map = argv[++i];
+            }
+        } else if (arg == "--editeur-top") {  // with --editeur: seen from above
+            editor_standalone = true;
+            editor_top = true;
         }
     }
     if (options.demo) {
@@ -2437,6 +2504,27 @@ int main(int argc, char** argv) {
     std::cout << "SDL " << moteur::sdl_version() << '\n';
 
     try {
+        // The data tables, checked or compiled without opening a window (milestone 7, part 2).
+        if (check_data || !compile_data.empty()) {
+            moteur::DataTables tables;
+            register_sandbox_tables(tables);
+            moteur::DataIssues issues;
+            bool ok = true;
+            if (!compile_data.empty()) {
+                if (compile_data.back() != '/' && compile_data.back() != '\\') {
+                    compile_data += '/';
+                }
+                ok = tables.compile(moteur::asset_path(""), compile_data, issues);
+            } else {
+                issues = tables.load_all(moteur::asset_path(""));
+                ok = !issues.has_errors();
+            }
+            std::cout << issues.text();
+            std::cout << (ok ? "données valides" : "données invalides") << " : " << issues.errors() << " erreur(s), "
+                      << issues.warnings() << " avertissement(s)\n";
+            return ok ? 0 : 1;
+        }
+
         moteur::ApplicationConfig config;
         config.title = "bac a sable";
         config.application = "bac_a_sable";  // the player's files: SDL_GetPrefPath("moteur", "bac_a_sable")
@@ -2448,13 +2536,15 @@ int main(int argc, char** argv) {
         config.gpu_timing = gpu_timing;
         config.pixel_width = pixel_size.x;
         config.pixel_height = pixel_size.y;
+        config.startup_commands = startup_commands;
+        config.replay_start = replay_start;
 #ifdef MOTEUR_ASSETS_SOURCE_DIR
         // Development: the assets edited in the source tree are reloaded while the program runs.
         if (hot_reload && std::filesystem::is_directory(std::filesystem::path(u8"" MOTEUR_ASSETS_SOURCE_DIR))) {
             config.assets_source_directory = MOTEUR_ASSETS_SOURCE_DIR;
         }
 #endif
-        if (menu || states || audio_test) {  // these tests draw their screens with ImGui
+        if (menu || states || audio_test || editor_standalone) {  // these draw their screens with ImGui
             config.debug_ui = true;
             config.debug_ui_font = moteur::asset_path("fonts/Inter-Regular.ttf");  // accents
         }
@@ -2466,6 +2556,19 @@ int main(int argc, char** argv) {
         app.renderer().set_anti_aliasing(anti_aliasing);
         app.renderer().set_block_compression(block_compression);
         app.assets().set_prefer_ktx2(prefer_ktx2);
+        // The game's data: every table loaded at the start; invalid data stops here, with the reasons.
+        register_sandbox_tables(app.data());
+        if (!compiled_data.empty()) {
+            if (compiled_data.back() != '/' && compiled_data.back() != '\\') {
+                compiled_data += '/';
+            }
+            app.data().set_source(moteur::DataSource::Compiled, compiled_data);
+        }
+        if (const moteur::DataIssues& issues = app.data().load_all(app.assets().root()); issues.has_errors()) {
+            std::cerr << issues.text();
+            std::cerr << "fatal: données invalides (" << issues.errors() << " erreur(s))\n";
+            return 1;
+        }
         if (menu) {
             Sandbox sandbox(app, options.run_seconds, menu_test, world_map);
             app.run(sandbox);
@@ -2499,6 +2602,16 @@ int main(int argc, char** argv) {
             StatesDemo game(app, states_options, true);
             app.run(game);
             game.report();
+            return 0;
+        }
+        if (editor_standalone) {
+            MapEditor::Options editor_options;
+            editor_options.map = world_map;
+            editor_options.run_seconds = options.run_seconds;
+            editor_options.capture_path = options.capture_path;
+            editor_options.top_view = editor_top;
+            MapEditor editor(app, editor_options, true);
+            app.run(editor);
             return 0;
         }
         if (world_standalone) {

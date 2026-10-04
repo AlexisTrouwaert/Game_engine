@@ -60,6 +60,9 @@ struct InputFrame {
     std::vector<ButtonState> buttons;  // by action (axes: unused)
     std::vector<glm::vec2> axes;       // by action (buttons: unused)
     glm::vec2 pointer{-1.0f};          // window pixels; negative: outside the window
+    // The console's game commands run at the start of this tick (see Console): not the input's,
+    // recorded alongside it so that a replay runs them again.
+    std::vector<std::string> commands;
 };
 
 // A recording of what update() read, tick after tick: replayed, it gives the same run again (tests,

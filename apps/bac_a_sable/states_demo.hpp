@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "moteur/application.hpp"
+#include "moteur/save_file.hpp"
 #include "moteur/state_stack.hpp"
 
 #include "demo3d.hpp"
@@ -22,6 +24,12 @@
 // title, Escape (or Start) pauses and resumes, "Retour au titre" leaves the game. With `cycles` > 0, an autopilot goes title -> game -> pause -> game -> pause -> title that
 // many times, and after each return to the title logs what stays in memory: assets, GPU objects,
 // the process's memory. They must not grow from one cycle to the next.
+//
+// Saves (milestone 7, part 11): "Sauvegarder" in the pause (three slots, with a thumbnail of the
+// game), "Continuer" (the most recent save) and "Charger" on the title, an automatic save every two
+// minutes of play (two slots in turn; console variable save.auto, in seconds, 0: off), and the
+// console commands "save [emplacement]" and "load [emplacement]". The slots are in the player's
+// preferences (sauvegardes/); a damaged one shows as unreadable (its backup is read when it can).
 class StatesDemo final : public SandboxScene {
 public:
     struct Options {
@@ -85,6 +93,24 @@ public:
     const moteur::Asset<moteur::Music>& title_music() const { return title_music_; }
     const moteur::Asset<moteur::Music>& game_music() const { return game_music_; }
 
+    // Saves.
+    moteur::SaveSlots& slots() { return slots_; }
+    // The game being played (null outside it): what is saved.
+    void set_world(Demo3D* world) { world_ = world; }
+    Demo3D* world() const { return world_; }
+    // Writes the game into `slot`; its thumbnail is copied from `thumbnail` (a PNG), or captured at
+    // the next frame when it is empty. False with `error`.
+    bool save_game(const std::string& slot, const std::string& thumbnail, std::string& error);
+    // Reads `slot` (or its backup) and starts the game from it; if it cannot, back to the title with
+    // the reason.
+    void load_game(const std::string& slot);
+    // A game of play went by (the game's update): the automatic save when its time comes.
+    void played(double dt);
+    // The most recent readable slot, or empty.
+    std::string latest_slot() const;
+    // The thumbnail the pause takes as it opens (the game without the menu).
+    std::string pause_thumbnail() const { return slots_.directory() + "_pause.png"; }
+
 private:
     moteur::Application& app_;
     Options options_;
@@ -101,5 +127,12 @@ private:
     moteur::Asset<moteur::Sound> confirm_;
     Uint64 loading_start_ = 0;
     double last_load_ms_ = 0.0;
+    moteur::SaveSlots slots_;
+    Demo3D* world_ = nullptr;
+    double since_autosave_ = 0.0;  // seconds of play
+    int next_auto_ = 0;
+    std::string pending_thumbnail_;  // captured with the next frame
+    moteur::Variable* save_binary_ = nullptr;  // "save.binary": CBOR (the shipped game's) instead of JSON
+    moteur::Variable* save_auto_ = nullptr;    // "save.auto": seconds between automatic saves
     moteur::StateStack stack_;  // last: its states refer to the members above
 };

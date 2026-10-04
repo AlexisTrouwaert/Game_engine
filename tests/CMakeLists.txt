@@ -4,6 +4,7 @@ add_executable(moteur_tests
     main.cpp
     test_animation.cpp
     test_animator.cpp
+    test_animation_graph.cpp
     test_blending.cpp
     test_attachment.cpp
     test_animation_debug.cpp
@@ -15,12 +16,15 @@ add_executable(moteur_tests
     test_camera.cpp
     test_camera3d.cpp
     test_color.cpp
+    test_console.cpp
+    test_data_table.cpp
     test_debug_lines.cpp
     test_debug_tools.cpp
     test_environment.cpp
     test_fixed_timestep.cpp
     test_iso.cpp
     test_map_data.cpp
+    test_map_document.cpp
     test_ktx_texture.cpp
     test_frame_stats.cpp
     test_image.cpp
@@ -29,7 +33,10 @@ add_executable(moteur_tests
     test_mesh_batcher.cpp
     test_model.cpp
     test_ozz.cpp
+    test_profiler.cpp
     test_particles.cpp
+    test_save_file.cpp
+    test_robustness.cpp
     test_shadow.cpp
     test_skeleton.cpp
     test_skinning.cpp
@@ -41,6 +48,7 @@ add_executable(moteur_tests
     test_utf8.cpp
     test_world.cpp
     test_world_grid.cpp
+    test_world_save.cpp
 )
 
 find_package(Ktx CONFIG REQUIRED)

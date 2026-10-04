@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "_note": "Les personnages de la tranche jouable (jalon 7, partie 2). Vitesses en m/s, distances en m, cadence en secondes ; vie et degats en points (un coup retire degats / vie de la barre).",
+  "rows": {
+    "chevalier": {
+      "nom": "Chevalier",
+      "modele": "models/characters/kaykit_adventurers/Knight.glb",
+      "taille": 1.8,
+      "rayon": 0.35,
+      "vitesse": 3.0,
+      "poids": 4,
+      "vie": 100,
+      "degats": 25,
+      "portee": 2.0,
+      "effet_touche": "effects/blood.json"
+    },
+    "squelette": {
+      "_note": "base commune des squelettes",
+      "nom": "Squelette",
+      "modele": "models/characters/kaykit_skeletons/Skeleton_Warrior.glb",
+      "taille": 1.5,
+      "rayon": 0.35,
+      "vitesse": 2.0,
+      "poids": 1,
+      "vie": 100,
+      "degats": 4,
+      "portee": 0.2,
+      "vue": 9.0,
+      "cadence": 1.5,
+      "effet_touche": "effects/sparks.json",
+      "effet_mort": "effects/death_smoke.json"
+    },
+    "squelette_guerrier": { "base": "squelette", "nom": "Squelette guerrier" },
+    "squelette_sbire": {
+      "base": "squelette",
+      "nom": "Squelette sbire",
+      "modele": "models/characters/kaykit_skeletons/Skeleton_Minion.glb"
+    }
+  }
+}

@@ -30,5 +30,16 @@
       "name": "winpixevent",
       "platform": "windows"
     }
-  ]
+  ],
+  "features": {
+    "tracy": {
+      "description": "Tracy profiler (option MOTEUR_TRACY): the engine's zones are also sent to Tracy",
+      "dependencies": [
+        {
+          "name": "tracy",
+          "default-features": false
+        }
+      ]
+    }
+  }
 }

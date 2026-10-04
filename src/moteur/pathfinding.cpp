@@ -1,5 +1,7 @@
 #include "moteur/pathfinding.hpp"
 
+#include "moteur/profiler.hpp"
+
 #include <algorithm>
 #include <climits>
 #include <cmath>
@@ -150,6 +152,7 @@ void ClearanceMap::update_around(glm::ivec2 cell) {
 
 PathResult find_path(const NavGrid& grid, const ClearanceMap& clearance, glm::vec2 start, glm::vec2 goal,
                      const PathOptions& options) {
+    MOTEUR_PROFILE("A*");
     PathResult result;
     const float radius = options.radius;
     const glm::ivec2 start_cell = nearest_fitting_cell(clearance, cell_at(start), start, radius, 2);
@@ -264,6 +267,7 @@ PathResult find_path(const NavGrid& grid, const ClearanceMap& clearance, glm::ve
 }
 
 int FlowField::compute(const NavGrid& grid, const ClearanceMap& clearance, glm::vec2 target, float radius, int max_cost) {
+    MOTEUR_PROFILE("flow field");
     width_ = grid.width();
     height_ = grid.height();
     radius_ = radius;

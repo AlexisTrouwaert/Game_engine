@@ -31,7 +31,10 @@ add_library(moteur STATIC
     animation_data.cpp
     animation_debug.cpp
     animation_set.cpp
+    animation_graph.cpp
     animator.cpp
+    animator_graph.cpp
+    animator_state.cpp
     application.cpp
     asset_cache.cpp
     assets.cpp
@@ -44,29 +47,37 @@ add_library(moteur STATIC
     camera3d.cpp
     collision.cpp
     color.cpp
+    console.cpp
+    data_reader.cpp
+    data_table.cpp
     debug_lines.cpp
     debug_tools.cpp
     debug_ui.cpp
     environment.cpp
     fixed_timestep.cpp
     input.cpp
+    file_io.cpp
     font.cpp
     frame_stats.cpp
     image.cpp
     iso.cpp
     map_data.cpp
+    map_document.cpp
     ktx_texture.cpp
     mesh.cpp
     mesh_batcher.cpp
     mesh_renderer.cpp
+    log_file.cpp
     model.cpp
     movement.cpp
     nav_grid.cpp
     particles.cpp
     paths.cpp
+    profiler.cpp
     pathfinding.cpp
     process_memory.cpp
     renderer.cpp
+    save_file.cpp
     screenshot.cpp
     shadow.cpp
     skeleton.cpp
@@ -81,18 +92,27 @@ add_library(moteur STATIC
     tone_mapper.cpp
     tilemap.cpp
     utf8.cpp
+    variables.cpp
     visibility.cpp
     version.cpp
     world.cpp
+    world_debug.cpp
+    world_save.cpp
 )
 
 target_include_directories(moteur PUBLIC include)
 target_include_directories(moteur SYSTEM PRIVATE ${STB_INCLUDE_DIRS} ${CGLTF_INCLUDE_DIRS})
-target_link_libraries(moteur PUBLIC SDL3::SDL3 glm::glm imgui::imgui EnTT::EnTT
-                      PRIVATE nlohmann_json::nlohmann_json mikktspace::mikktspace efsw::efsw KTX::ktx moteur_miniaudio
+# nlohmann/json is public: the data tables (data_table.hpp) hand JSON rows to the game's readers.
+target_link_libraries(moteur PUBLIC SDL3::SDL3 glm::glm imgui::imgui EnTT::EnTT nlohmann_json::nlohmann_json
+                      PRIVATE mikktspace::mikktspace efsw::efsw KTX::ktx moteur_miniaudio
                               ozz::animation_offline ozz::animation)
 if(WIN32)
     target_link_libraries(moteur PRIVATE psapi)  # process_memory_bytes()
+endif()
+if(MOTEUR_TRACY)
+    find_package(Tracy CONFIG REQUIRED)
+    target_link_libraries(moteur PUBLIC Tracy::TracyClient)
+    target_compile_definitions(moteur PUBLIC MOTEUR_TRACY)
 endif()
 
 moteur_enable_warnings(moteur)

@@ -1,7 +1,8 @@
 // 3D mesh, fragment stage: physically based shading, the glTF metal / roughness model.
 //
 // SDL_GPU resource layout for a fragment shader: textures and samplers live in space2, uniform
-// buffers in space3. Output: linear HDR radiance (tone mapped later, see tonemap.frag.hlsl).
+// buffers in space3. Outputs: linear HDR radiance (tone mapped later, see tonemap.frag.hlsl), and
+// the distance of the surface along the view, in metres (milestone 7: the soft particles read it).
 //
 // Light = environment (diffuse from spherical harmonics, specular from the prefiltered image)
 //       + sun (directional) + point lights, each with the Cook-Torrance GGX specular term and a
@@ -46,6 +47,7 @@ cbuffer Frame : register(b0, space3) {
     float4 fog;         // fog of war: x on, y brightness never seen, z brightness explored, w saturation out of sight
     float4 fog_rect;    // xy: world (x, z) of the texture's corner; zw: 1 / its size in metres
     float4 cutout;      // xyz: the point kept visible (the hero); w: radius (m) of the dithered hole, 0 off
+    float4 view_forward;  // xyz: the direction the camera looks (unit)
 };
 
 static const float PI = 3.14159265;
@@ -217,7 +219,7 @@ void cut_out(Input input) {
     }
 }
 
-float4 main(Input input) : SV_Target0 {
+float4 shade(Input input) {
     cut_out(input);
     const float4 base_color = input.base_color * base_color_texture.Sample(base_color_sampler, input.uv);
     const float4 metal_rough = metallic_roughness_texture.Sample(metallic_roughness_sampler, input.uv);
@@ -303,4 +305,16 @@ float4 main(Input input) : SV_Target0 {
     // Read a little inside the surface: a wall's face lies exactly on the edge between its cell and
     // the next one (outside the map at the border), which would flicker between the two.
     return float4(apply_fog(color, input.world_position - geometric_normal * 0.3), 1.0);
+}
+
+struct Output {
+    float4 color : SV_Target0;
+    float depth : SV_Target1;  // metres along the view: the same measure as billboard.frag.hlsl's
+};
+
+Output main(Input input) {
+    Output output;
+    output.color = shade(input);
+    output.depth = dot(input.world_position - eye.xyz, view_forward.xyz);
+    return output;
 }

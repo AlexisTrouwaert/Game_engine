@@ -38,5 +38,37 @@
     "left_hand": { "joint": "handslot.l" },
     "shield": { "joint": "handslot.l", "position": [0, 0.017, 0.156] },
     "head": { "joint": "head" }
+  },
+  "graph": {
+    "parameters": { "attaque": "trigger", "touche": "trigger", "mort": "trigger" },
+    "layers": [
+      {
+        "name": "corps",
+        "start": "locomotion",
+        "states": {
+          "locomotion": { "motion": "locomotion" },
+          "mort": { "motion": "Death_A", "loop": false }
+        },
+        "transitions": [
+          { "from": "*", "to": "mort", "when": { "param": "mort" }, "priority": 10, "interrupt": true }
+        ]
+      },
+      {
+        "name": "haut",
+        "start": "repos",
+        "states": {
+          "repos": {},
+          "attaque": { "motion": "1H_Melee_Attack_Chop", "loop": false },
+          "touche": { "motion": "Hit_A", "loop": false }
+        },
+        "transitions": [
+          { "from": "*", "to": "repos", "when": { "param": "mort" }, "fade_ticks": 4, "priority": 10, "interrupt": true, "self": true },
+          { "from": "*", "to": "touche", "when": { "param": "touche" }, "priority": 5, "self": true },
+          { "from": "*", "to": "attaque", "when": { "param": "attaque" } },
+          { "from": "attaque", "to": "repos", "when": { "end": true } },
+          { "from": "touche", "to": "repos", "when": { "end": true } }
+        ]
+      }
+    ]
   }
 }

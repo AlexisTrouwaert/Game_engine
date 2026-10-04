@@ -140,6 +140,16 @@ TEST_CASE("BillboardBatcher: colors are premultiplied, additive ones have no alp
     batcher.finish(view);
     CHECK(batcher.vertices()[0].a == 0.0f);
     CHECK(batcher.vertices()[0].b == doctest::Approx(2.0f));  // the light itself is kept
+    CHECK(batcher.vertices()[0].soft == 0.0f);  // hard by default
+
+    // Soft particles (milestone 7): the fade distance goes to every corner.
+    batcher.begin();
+    glass.soft = 0.5f;
+    batcher.add(glass);
+    batcher.finish(view);
+    for (const moteur::BillboardVertex& vertex : batcher.vertices()) {
+        CHECK(vertex.soft == 0.5f);
+    }
 }
 
 TEST_CASE("BillboardBatcher: a run never exceeds the 16-bit index limit") {

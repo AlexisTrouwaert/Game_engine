@@ -1,5 +1,7 @@
 #include "moteur/animator.hpp"
 
+#include "moteur/profiler.hpp"
+
 #include <entt/entity/registry.hpp>
 
 #include <algorithm>
@@ -390,6 +392,9 @@ float Animator::ratio(float alpha) const {
 }
 
 void Animator::advance(int ticks, std::vector<AnimatorEvent>* events, entt::entity entity) {
+    if (graph_.active) {
+        evaluate_graph(-1);  // the clips that ended this tick, and what the game set since the last tick
+    }
     ticks = std::max(0, ticks);
     ticks_ += ticks;
     std::vector<std::size_t> crossed;
@@ -522,6 +527,7 @@ void Animator::pose(float alpha, PoseRequest& out) const {
 }
 
 void advance_animators(entt::registry& registry, int ticks, std::vector<AnimatorEvent>* events) {
+    MOTEUR_PROFILE("animation : avance");
     for (auto [entity, animator] : registry.view<Animator>().each()) {
         animator.advance(ticks, events, entity);
     }

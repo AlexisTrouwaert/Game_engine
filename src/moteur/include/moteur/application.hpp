@@ -10,8 +10,12 @@
 #include "moteur/assets.hpp"
 #include "moteur/audio.hpp"
 #include "moteur/camera.hpp"
+#include "moteur/console.hpp"
+#include "moteur/data_table.hpp"
 #include "moteur/debug_tools.hpp"
 #include "moteur/input.hpp"
+#include "moteur/log_file.hpp"
+#include "moteur/profiler.hpp"
 #include "moteur/renderer.hpp"
 
 namespace moteur {
@@ -51,8 +55,15 @@ struct ApplicationConfig {
     std::string record_input_path;
     // Replays such a recording instead of the real input (which is then ignored).
     std::string replay_input_path;
+    // The replay starts at this tick of the recording (a save loaded at that tick goes on from there).
+    std::size_t replay_start = 0;
     // false: no sound device is opened (the Audio works, silently).
     bool audio = true;
+    // Console lines run before the first tick (--exec, +set): game commands among them run at the
+    // first tick and are recorded like the others.
+    std::vector<std::string> startup_commands;
+    // The log written to journal.txt in the player's preferences (see LogFile).
+    bool log_file = true;
 };
 
 // Implemented by the program driving the engine.
@@ -102,6 +113,18 @@ public:
     Renderer& renderer() { return *renderer_; }
     // Every asset the game loads (the assets/ folder next to the executable).
     Assets& assets() { return *assets_; }
+    // The game's data tables (see DataTables): the game registers them, then loads them; a changed
+    // file of a table reloads it (hot reload).
+    DataTables& data() { return *data_; }
+    // Where the time goes (see Profiler); its window is DEBUG > Profiler.
+    Profiler& profiler() { return profiler_; }
+    // Commands and variables (see Console); its window is DEBUG > Console (key under Escape).
+    Console& console() { return *console_; }
+    // Pauses the ticks (the frames go on); step() runs some ticks while paused. Tool commands
+    // "pause" and "step": the logic itself is unchanged, only when it runs.
+    void set_paused(bool paused) { paused_ = paused; }
+    bool paused() const { return paused_; }
+    void step(int ticks) { pending_steps_ += ticks; }
     // The player's input, as actions (see Input).
     Input& input() { return *input_; }
     // Sound and music (see Audio). Its settings (volumes) are the player's: read from audio.json in
@@ -122,11 +145,22 @@ private:
     std::string audio_settings_path() const;
     void load_audio_settings();
     void save_audio_settings();
+    void add_console_commands();
+    std::string variables_path() const;
 
     ApplicationConfig config_;
     SDL_Window* window_ = nullptr;
     std::unique_ptr<Renderer> renderer_;
     std::unique_ptr<Assets> assets_;  // after the renderer: released before it
+    std::unique_ptr<DataTables> data_;
+    std::unique_ptr<Console> console_;
+    LogFile log_;
+    Profiler profiler_;
+    Variable* time_scale_ = nullptr;  // "time.scale"
+    Variable* profile_enabled_ = nullptr;  // "profile.enabled"
+    bool paused_ = false;
+    int pending_steps_ = 0;
+    bool swallow_text_ = false;  // the console's key was pressed: its character is not typed
     std::unique_ptr<Input> input_;
     std::unique_ptr<Audio> audio_;  // after the assets: its voices hold sounds, released first
     std::unique_ptr<DebugTools> debug_tools_;  // refers to all of the above, released first

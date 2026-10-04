@@ -1,5 +1,7 @@
 #include "moteur/mesh_renderer.hpp"
 
+#include "moteur/profiler.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +38,7 @@ struct FrameUniforms {
     glm::vec4 fog;                  // x on, y never seen, z explored, w saturation
     glm::vec4 fog_rect;             // xy: corner (x, z); zw: 1 / size in metres
     glm::vec4 cutout;               // xyz: focus; w: radius, 0 off
+    glm::vec4 view_forward;         // xyz: where the camera looks (the distance target, milestone 7)
 };
 
 constexpr std::size_t kInitialInstances = 1024;
@@ -364,9 +367,11 @@ void MeshRenderer::fog_uniforms(glm::vec4& fog, glm::vec4& rect) const {
 void MeshRenderer::create_scene_pipelines(SDL_GPUSampleCount samples) {
     const MeshVertexInput input;
 
-    // Opaque: no blending. Linear HDR (see Renderer::kSceneFormat).
-    SDL_GPUColorTargetDescription color_target = {};
-    color_target.format = color_format_;
+    // Opaque: no blending. Linear HDR (see Renderer::kSceneFormat), and the distance along the view
+    // (Renderer::kDistanceFormat) that the soft particles read.
+    SDL_GPUColorTargetDescription color_targets[2] = {};
+    color_targets[0].format = color_format_;
+    color_targets[1].format = Renderer::kDistanceFormat;
 
     SDL_GPUGraphicsPipelineCreateInfo info = {};
     info.vertex_shader = vertex_shader_.get();
@@ -384,8 +389,8 @@ void MeshRenderer::create_scene_pipelines(SDL_GPUSampleCount samples) {
     info.depth_stencil_state.enable_depth_test = true;
     info.depth_stencil_state.enable_depth_write = true;
     info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS;
-    info.target_info.color_target_descriptions = &color_target;
-    info.target_info.num_color_targets = 1;
+    info.target_info.color_target_descriptions = color_targets;
+    info.target_info.num_color_targets = 2;
     info.target_info.has_depth_stencil_target = true;
     info.target_info.depth_stencil_format = depth_format_;
 
@@ -550,6 +555,7 @@ void MeshRenderer::ensure_palette_capacity(std::size_t rows) {
 }
 
 void MeshRenderer::prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats) {
+    MOTEUR_PROFILE("maillages : préparation");
     stats.dropped_lights += dropped_lights_;
     if (fog_dirty_ && fog_texture_) {
         void* mapped = SDL_MapGPUTransferBuffer(device_, fog_transfer_.get(), true);
@@ -877,6 +883,14 @@ void MeshRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pas
     frame.debug_view = glm::vec4(static_cast<float>(view_), kDistanceViewRange, 0.0f, 0.0f);
     fog_uniforms(frame.fog, frame.fog_rect);
     frame.cutout = cutout_.enabled ? glm::vec4(cutout_.focus, cutout_.radius) : glm::vec4(0.0f);
+    {
+        // Where the camera looks, from its view-projection (perspective or orthographic alike).
+        const glm::mat4 inverse = glm::inverse(view_projection_);
+        const glm::vec4 near_point = inverse * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        const glm::vec4 far_point = inverse * glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+        const glm::vec3 forward = glm::vec3(far_point) / far_point.w - glm::vec3(near_point) / near_point.w;
+        frame.view_forward = glm::vec4(glm::length(forward) > 0.0f ? glm::normalize(forward) : glm::vec3(0.0f, 0.0f, -1.0f), 0.0f);
+    }
     SDL_PushGPUFragmentUniformData(commands, 0, &frame, sizeof(frame));
     struct {
         glm::mat4 view_projection;

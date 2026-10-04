@@ -29,9 +29,12 @@ MapData MapData::parse(std::string_view json_text, const std::string& source) {
     MapData map;
     map.source_ = source;
     try {
-        if (!json.is_object() || json.value("version", 0) != kVersion) {
-            fail(source, "expected an object with \"version\": " + std::to_string(kVersion));
+        const int version = json.is_object() ? json.value("version", 0) : 0;
+        if (version < 1 || version > kVersion) {
+            fail(source, "expected an object with \"version\": 1 or " + std::to_string(kVersion));
         }
+        map.version_ = version;
+        map.chunk_ = json.value("chunk", false);
 
         map.description_ = json.value("description", std::string());
 
@@ -64,6 +67,10 @@ MapData MapData::parse(std::string_view json_text, const std::string& source) {
             }
             for (const nlohmann::json& tile : tiles) {
                 const std::string name = tile.get<std::string>();
+                if (name == "-") {  // no tile on this layer (a higher layer has one)
+                    symbol.tiles.push_back(kNoTile);
+                    continue;
+                }
                 const TileId id = map.tile_id(name);
                 if (id == kNoTile) {
                     fail(source, "legend " + quoted(symbol.character) + ": unknown tile \"" + name + "\"");
@@ -121,6 +128,48 @@ MapData MapData::parse(std::string_view json_text, const std::string& source) {
                     map.points_[symbol.point].push_back({i, j});
                 }
                 map.cell_symbols_[static_cast<std::size_t>(j * width + i)] = static_cast<std::uint8_t>(found);
+            }
+        }
+        // Version 2: objects and connectors.
+        if (json.contains("objects")) {
+            for (const nlohmann::json& item : json.at("objects")) {
+                MapObject object;
+                object.id = item.at("id").get<std::string>();
+                object.type = item.at("type").get<std::string>();
+                if (object.id.empty() || object.type.empty()) {
+                    fail(source, "an object has an empty id or type");
+                }
+                for (const MapObject& other : map.objects_) {
+                    if (other.id == object.id) {
+                        fail(source, "object id \"" + object.id + "\" used twice");
+                    }
+                }
+                object.position = {item.at("x").get<float>(), item.value("y", 0.0f), item.at("z").get<float>()};
+                object.rotation = item.value("rotation", 0.0f);
+                object.scale = item.value("scale", 1.0f);
+                object.props = item.value("props", nlohmann::json::object());
+                if (!object.props.is_object()) {
+                    fail(source, "object \"" + object.id + "\": props must be an object");
+                }
+                map.objects_.push_back(std::move(object));
+            }
+        }
+        if (json.contains("connectors")) {
+            for (const nlohmann::json& item : json.at("connectors")) {
+                MapConnector connector;
+                connector.name = item.at("name").get<std::string>();
+                connector.kind = item.value("kind", std::string());
+                connector.cell = {item.at("x").get<int>(), item.at("z").get<int>()};
+                const std::string direction = item.value("direction", std::string("nord"));
+                if (direction == "nord") connector.direction = MapConnector::Direction::North;
+                else if (direction == "est") connector.direction = MapConnector::Direction::East;
+                else if (direction == "sud") connector.direction = MapConnector::Direction::South;
+                else if (direction == "ouest") connector.direction = MapConnector::Direction::West;
+                else fail(source, "connector \"" + connector.name + "\": unknown direction \"" + direction + "\"");
+                if (!map.tiles_.contains(connector.cell)) {
+                    fail(source, "connector \"" + connector.name + "\" outside the map");
+                }
+                map.connectors_.push_back(std::move(connector));
             }
         }
     } catch (const nlohmann::json::exception& e) {

@@ -14,7 +14,11 @@
 #include <utility>
 #include <vector>
 
+#include "moteur/profiler.hpp"
+
 namespace moteur {
+
+class Variable;
 
 class Application;
 class StateStack;
@@ -110,8 +114,8 @@ bool inspector_filter_matches(std::string_view filter, std::uint32_t entity_numb
 // anything (except the Hidden tag): the game keeps entities and expects their components.
 class DebugTools {
 public:
-    enum class Window { Inspector, Assets, Input, Audio, States, Animation };
-    static constexpr int kWindowCount = 6;
+    enum class Window { Inspector, Assets, Input, Audio, States, Animation, Data, Console, Profiler };
+    static constexpr int kWindowCount = 9;
 
     explicit DebugTools(Application& app);
     ~DebugTools();
@@ -131,6 +135,8 @@ public:
 
     // The entity shown by the inspector (entt::null: none).
     void select(entt::entity entity) { selected_ = entity; }
+    // Opens or closes the console window (the key under Escape, see Application).
+    void toggle_console();
     entt::entity selected() const { return selected_; }
     // true once something was changed by hand in the current world.
     bool edited() const { return edited_; }
@@ -163,6 +169,11 @@ private:
     void draw_audio();
     void draw_states();
     void draw_animation();
+    void draw_data();
+    void draw_console();
+    void draw_profiler();
+    // The statistics bar over the game ("debug.stats").
+    void draw_stats_bar();
 
     Application& app_;
     ComponentInspectors components_;
@@ -186,6 +197,22 @@ private:
     std::optional<std::pair<std::size_t, std::string>> reload_request_;  // type index, key
     bool collect_request_ = false;
     std::string last_reload_;  // the result of the last button, shown next to them
+    // The data window: the table and row shown, a filter on the rows, a reload asked by its button.
+    std::string data_table_;
+    std::string data_row_;
+    char data_filter_[64] = {};
+    std::string data_reload_;
+    // The console window: the line being typed, the place in the history, scrolling, focus.
+    char console_input_[512] = {};
+    int console_history_ = -1;  // -1: not browsing the history
+    std::uint64_t console_seen_ = 0;
+    bool console_focus_ = false;
+    std::vector<std::string> console_candidates_;
+    // The profiler window: the frame shown (index in the profiler's numbering), cached statistics.
+    std::uint64_t profiler_frame_ = ~0ull;
+    std::vector<Profiler::Summary> profiler_summary_;
+    int profiler_summary_age_ = 1000;
+    Variable* stats_bar_ = nullptr;  // "debug.stats"
 };
 
 }  // namespace moteur
