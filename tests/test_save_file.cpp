@@ -78,14 +78,14 @@ TEST_CASE("Damaged, truncated and future saves are refused") {
     std::vector<std::uint8_t> flipped = bytes;
     flipped[bytes.size() / 2] ^= 0x40;
     CHECK_FALSE(moteur::SaveGame::decode(flipped, error));
-    CHECK(error.find("somme de contrôle") != std::string::npos);
+    CHECK(error.find("checksum") != std::string::npos);
     std::vector<std::uint8_t> cut(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(bytes.size() - 10));
     CHECK_FALSE(moteur::SaveGame::decode(cut, error));
-    CHECK(error.find("tronquée") != std::string::npos);
+    CHECK(error.find("truncated") != std::string::npos);
     std::vector<std::uint8_t> future = bytes;
     future[4] = 9;
     CHECK_FALSE(moteur::SaveGame::decode(future, error));
-    CHECK(error.find("plus récent") != std::string::npos);
+    CHECK(error.find("newer format") != std::string::npos);
     CHECK_FALSE(moteur::SaveGame::decode(std::vector<std::uint8_t>{'n', 'o', 'p', 'e'}, error));
 }
 
@@ -108,7 +108,7 @@ TEST_CASE("Migrations upgrade old sections step by step") {
     moteur::SaveGame newer;
     newer.set_section("joueur", 4, {});
     CHECK_FALSE(moteur::SaveGame::decode(newer.encode(moteur::SaveEncoding::Json), error, &migrations));
-    CHECK(error.find("plus récente que le jeu") != std::string::npos);
+    CHECK(error.find("newer than the game") != std::string::npos);
 }
 
 TEST_CASE("Slots: atomic writes, backup kept, damaged file falls back to the backup") {

@@ -98,9 +98,17 @@ Documentation détaillée : [Jalon 7 - Outils et données](JALON_7_OUTILS_ET_DON
 - [x] Éditeur de cartes minimal *(éditeur de production : tuiles, points, objets, morceaux et connecteurs, annuler, vérifier, essayer ; programme `editeur` ; retouche de la tranche à la main à faire)*
 
 ### 8. Consolidation
-- [ ] Profilage et optimisation
-- [ ] Packaging Windows et macOS (signature / notarisation)
-- [ ] Documentation de l'API du moteur
+Documentation détaillée : [Jalon 8 - Consolidation](JALON_8_CONSOLIDATION.md)
+
+*État au 2026-10-17 : tout est fait sous Windows ; restent les vérifications sur le Mac (repoussées par l'utilisateur) et les essais à la main sur une machine propre et à la manette.*
+
+- [x] Intégration continue Windows et macOS *(CI hébergée repoussée : script de vérification local `tools/ci/verify.py`, complet sous Windows ; à passer sur le Mac)*
+- [x] Le moteur comme bibliothèque consommée par l'ARPG *(`moteur_add_game`, exemple minimal construit de l'extérieur, version 0.8.0)*
+- [ ] Profilage et optimisation *(machine minimale, scènes de mesure, budgets ; chargement en arrière-plan : faits ; mesures du Mac M3 à faire)*
+- [x] Version livrée : assets préparés, archives, rapports de plantage, options d'affichage *(robustesse : ASan, fuzzing, clang-tidy, perte du GPU)*
+- [ ] Packaging Windows et macOS (signature / notarisation) *(installeur Inno Setup, archive portable, `.app` et `.dmg` signés ad hoc ; signature et notarisation prêtes, sans identité ; machine propre et Mac à essayer)*
+- [x] Documentation de l'API du moteur *(Doxygen sans avertissement, [GUIDE.md](GUIDE.md), [FORMATS.md](FORMATS.md))*
+- [x] Revue des jalons 1 à 7 sous l'exigence d'un moteur professionnel : [REVUE_JALONS_1_A_7.md](REVUE_JALONS_1_A_7.md) *(décisions prises, corrections P1 faites ; P2 dans les jalons 9 et 10)*
 
 ## Plus tard (hors périmètre initial)
 

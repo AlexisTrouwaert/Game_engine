@@ -19,6 +19,8 @@
 #include "ozz/base/maths/soa_transform.h"
 #include "ozz/base/memory/unique_ptr.h"
 
+#include "moteur/fixed_timestep.hpp"
+
 namespace moteur {
 
 namespace {
@@ -104,11 +106,13 @@ Skeleton Skeleton::create(const SkeletonData& data, const std::string& name) {
 }
 
 const std::string& Skeleton::name() const {
-    return impl_->name;
+    static const std::string kEmpty;
+    return impl_ ? impl_->name : kEmpty;
 }
 
 const SkeletonData& Skeleton::data() const {
-    return impl_->data;
+    static const SkeletonData kEmpty;
+    return impl_ ? impl_->data : kEmpty;
 }
 
 int Skeleton::joint_count() const {
@@ -128,6 +132,13 @@ std::size_t Skeleton::bytes() const {
 }
 
 void Skeleton::replace_in_place(Skeleton&& fresh) {
+    if (!fresh.impl_) {
+        throw std::invalid_argument("the new skeleton is empty (not made by Skeleton::create())");
+    }
+    if (!impl_) {  // nothing to keep: no joint anyone could point to
+        impl_ = std::move(fresh.impl_);
+        return;
+    }
     if (const std::string why = impl_->data.mismatch(fresh.impl_->data); !why.empty()) {
         throw std::runtime_error("its joints changed (" + why + "): reload the scene");
     }
@@ -145,15 +156,16 @@ SkeletalClip::SkeletalClip(SkeletalClip&&) noexcept = default;
 SkeletalClip& SkeletalClip::operator=(SkeletalClip&&) noexcept = default;
 
 const std::string& SkeletalClip::name() const {
-    return impl_->name;
+    static const std::string kEmpty;
+    return impl_ ? impl_->name : kEmpty;
 }
 
 float SkeletalClip::duration() const {
-    return impl_->animation->duration();
+    return impl_ ? impl_->animation->duration() : 0.0f;
 }
 
 int SkeletalClip::duration_ticks() const {
-    return std::max(1, static_cast<int>(std::lround(duration() * static_cast<float>(kClipTicksPerSecond))));
+    return std::max(1, static_cast<int>(ticks_from_seconds(duration())));
 }
 
 std::size_t SkeletalClip::bytes() const {

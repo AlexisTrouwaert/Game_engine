@@ -20,16 +20,17 @@
 #include <string_view>
 #include <vector>
 
-#include "moteur/animation.hpp"
 #include "moteur/application.hpp"
-#include "moteur/camera.hpp"
+#include "camera2d.hpp"
+#include "iso.hpp"
+#include "sprite_animation.hpp"
 #include "moteur/camera3d.hpp"
 #include "moteur/color.hpp"
+#include "moteur/credits.hpp"
 #include "moteur/environment.hpp"
 #include "moteur/fixed_timestep.hpp"
 #include "moteur/font.hpp"
 #include "moteur/image.hpp"
-#include "moteur/iso.hpp"
 #include "moteur/mesh.hpp"
 #include "moteur/billboard_renderer.hpp"
 #include "moteur/debug_lines.hpp"
@@ -75,83 +76,6 @@ struct Mover {
     glm::vec4 tint;
 };
 
-// What the "À propos" window lists, read from assets/credits.json: the third-party libraries and
-// fonts with their licenses, and the authors of the assets. Paths are relative to the executable.
-// An entry with a "platform" ("windows", "macos") is only listed on that OS; one with a "build"
-// option ("MOTEUR_TRACY") only when the program was built with it.
-struct Credits {
-    struct Entry {
-        std::string name;
-        std::string version;
-        std::string license;
-        std::string copyright;
-        std::string authors;
-        std::string source;
-        std::string url;
-        std::string license_file;  // full license text, shown on demand
-        std::string file;          // an asset: shown as present or missing
-    };
-    std::vector<Entry> libraries;
-    std::vector<Entry> fonts;
-    std::vector<Entry> models;
-    std::vector<Entry> environments;
-    std::vector<Entry> sounds;
-    std::string error;  // why the file could not be read, if it could not
-
-#if defined(SDL_PLATFORM_WINDOWS)
-    static constexpr const char* kPlatform = "windows";
-#elif defined(SDL_PLATFORM_MACOS)
-    static constexpr const char* kPlatform = "macos";
-#else
-    static constexpr const char* kPlatform = "other";
-#endif
-
-    static Credits load(const std::string& path) {
-        Credits credits;
-        try {
-            const nlohmann::json doc = nlohmann::json::parse(moteur::read_text_file(path));
-            const auto read = [](const nlohmann::json& list) {
-                std::vector<Entry> entries;
-                for (const nlohmann::json& item : list) {
-                    const std::string platform = item.value("platform", "");
-                    if (!platform.empty() && platform != kPlatform) {
-                        continue;
-                    }
-                    if (const std::string build = item.value("build", ""); !build.empty()) {
-#if defined(MOTEUR_TRACY)
-                        if (build != "MOTEUR_TRACY") {
-                            continue;
-                        }
-#else
-                        continue;
-#endif
-                    }
-                    Entry entry;
-                    entry.name = item.value("name", "");
-                    entry.version = item.value("version", "");
-                    entry.license = item.value("license", "");
-                    entry.copyright = item.value("copyright", "");
-                    entry.authors = item.value("authors", "");
-                    entry.source = item.value("source", "");
-                    entry.url = item.value("url", "");
-                    entry.license_file = item.value("license_file", "");
-                    entry.file = item.value("file", "");
-                    entries.push_back(std::move(entry));
-                }
-                return entries;
-            };
-            credits.libraries = read(doc.value("libraries", nlohmann::json::array()));
-            credits.fonts = read(doc.value("fonts", nlohmann::json::array()));
-            credits.models = read(doc.value("models", nlohmann::json::array()));
-            credits.environments = read(doc.value("environments", nlohmann::json::array()));
-            credits.sounds = read(doc.value("sounds", nlohmann::json::array()));
-        } catch (const std::exception& e) {
-            credits.error = "Crédits illisibles (" + path + ") : " + e.what();
-        }
-        return credits;
-    }
-};
-
 // A glTF model of assets/models/, shown by the 3D scene, or why it could not be loaded.
 struct ShownModel {
     std::string file;
@@ -165,7 +89,7 @@ struct Creature {
     glm::vec2 position;  // tile space, fractional
     glm::vec2 velocity;  // tiles per second
     glm::vec4 tint;
-    moteur::AnimationPlayer walk;
+    bac_a_sable::AnimationPlayer walk;
 };
 
 // One test scene of the engine, chosen by its Options: the sprite stress test, the isometric map,
@@ -323,9 +247,10 @@ public:
             tile_b_ = &world_atlas_->region("tile_b");
             highlight_ = &world_atlas_->region("tile_highlight");
             test_atlas_ = app.assets().atlas("test.json");
-            animations_ = app.assets().animations("animations.json");
+            animations_ = std::make_unique<bac_a_sable::AnimationLibrary>(
+                bac_a_sable::AnimationLibrary::load(moteur::asset_path("animations.json")));
             animations_->check_regions(*test_atlas_);
-            const moteur::AnimationClip& walk = animations_->clip("walk");
+            const bac_a_sable::AnimationClip& walk = animations_->clip("walk");
             font_ = app.assets().font("fonts/Inter-Regular.ttf", kFontPixelHeight);
 
             // The map: a ground layer of two alternating kinds, and a layer of walls that the
@@ -362,10 +287,10 @@ public:
                 // Faster creatures also step faster, so their feet keep up with the ground; each
                 // starts at its own point of the cycle so the crowd does not walk in step.
                 const float pace = 0.75f + 0.5f * random.next();
-                Creature creature{position, direction * (kCreatureSpeed * pace), tint, moteur::AnimationPlayer(walk)};
+                Creature creature{position, direction * (kCreatureSpeed * pace), tint, bac_a_sable::AnimationPlayer(walk)};
                 creature.walk.set_speed(pace);
                 creature.walk.set_time(static_cast<std::int64_t>(random.next() * static_cast<float>(walk.cycle_ticks())) *
-                                       moteur::AnimationPlayer::kSpeedOne);
+                                       bac_a_sable::AnimationPlayer::kSpeedOne);
                 creatures_.push_back(std::move(creature));
             }
 
@@ -657,7 +582,7 @@ private:
         // Drawing and picking use the same interpolated camera, so the tile under the mouse is
         // always the one drawn under it, even while the camera moves.
         camera_.set_viewport(view_size_);
-        const moteur::Camera2D camera = camera_.interpolated(alpha);
+        const bac_a_sable::Camera2D camera = camera_.interpolated(alpha);
         sprites.set_view_projection(camera.view_projection());
 
         // Only the tiles that can be seen: the visible part of the world, turned into tiles.
@@ -1220,7 +1145,7 @@ private:
     // assets/environments/ (equirectangular, as Poly Haven publishes them).
     void load_environments(moteur::Application& app) {
         const Uint64 start = SDL_GetPerformanceCounter();
-        environments_.push_back({"Ciel procédural", moteur::Asset<moteur::Environment>(std::make_shared<moteur::Environment>(
+        environments_.push_back({"Procedural sky", moteur::Asset<moteur::Environment>(std::make_shared<moteur::Environment>(
                                                         moteur::Environment::create(app.renderer(), moteur::make_sky(512, 256), "sky")))});
         SDL_Log("Environment 'sky': prefiltered in %.1f ms",
                 static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency()));
@@ -1275,10 +1200,10 @@ public:
             return;
         }
         int projection = camera3d_.projection() == moteur::Projection::Orthographic ? 0 : 1;
-        ImGui::SeparatorText("Caméra");
-        ImGui::Checkbox("Suivre le personnage (F)", &follow_);
-        ImGui::Checkbox("Rayon de la souris", &show_ray_);
-        if (ImGui::RadioButton("Orthographique", &projection, 0)) {
+        ImGui::SeparatorText("Camera");
+        ImGui::Checkbox("Follow the character (F)", &follow_);
+        ImGui::Checkbox("Mouse ray", &show_ray_);
+        if (ImGui::RadioButton("Orthographic", &projection, 0)) {
             camera3d_.set_projection(moteur::Projection::Orthographic);
         }
         ImGui::SameLine();
@@ -1289,25 +1214,25 @@ public:
         float yaw = camera3d_.yaw();
         ImGui::PushItemWidth(200.0f);
         // Both sliders are drawn every frame, so neither call may be skipped by short-circuiting.
-        const bool pitch_changed = ImGui::SliderFloat("Inclinaison (°)", &pitch, 10.0f, 80.0f, "%.1f");
-        const bool yaw_changed = ImGui::SliderFloat("Orientation (°)", &yaw, 0.0f, 360.0f, "%.0f");
+        const bool pitch_changed = ImGui::SliderFloat("Pitch (°)", &pitch, 10.0f, 80.0f, "%.1f");
+        const bool yaw_changed = ImGui::SliderFloat("Yaw (°)", &yaw, 0.0f, 360.0f, "%.0f");
         if (pitch_changed || yaw_changed) {
             camera3d_.set_angles(yaw, pitch);
         }
         float height = camera3d_.visible_height();
-        if (ImGui::SliderFloat("Hauteur visible (m)", &height, 3.0f, 60.0f, "%.1f")) {
+        if (ImGui::SliderFloat("Visible height (m)", &height, 3.0f, 60.0f, "%.1f")) {
             camera3d_.set_visible_height(height);
         }
         ImGui::BeginDisabled(camera3d_.projection() == moteur::Projection::Orthographic);
         float fov = camera3d_.field_of_view();
-        if (ImGui::SliderFloat("Champ de vision (°)", &fov, 10.0f, 90.0f, "%.0f")) {
+        if (ImGui::SliderFloat("Field of view (°)", &fov, 10.0f, 90.0f, "%.0f")) {
             camera3d_.set_field_of_view(fov);
         }
         ImGui::EndDisabled();
         ImGui::PopItemWidth();
-        ImGui::SeparatorText("Lumière");
+        ImGui::SeparatorText("Lighting");
         ImGui::PushItemWidth(200.0f);
-        if (ImGui::BeginCombo("Environnement", environments_[static_cast<std::size_t>(environment_index_)].name.c_str())) {
+        if (ImGui::BeginCombo("Environment", environments_[static_cast<std::size_t>(environment_index_)].name.c_str())) {
             for (std::size_t i = 0; i < environments_.size(); ++i) {
                 if (ImGui::Selectable(environments_[i].name.c_str(), static_cast<int>(i) == environment_index_)) {
                     environment_index_ = static_cast<int>(i);
@@ -1315,17 +1240,17 @@ public:
             }
             ImGui::EndCombo();
         }
-        ImGui::SliderFloat("Intensité environnement", &environment_intensity_, 0.0f, 4.0f, "%.2f");
-        ImGui::SliderFloat("Soleil", &sun_intensity_, 0.0f, 10.0f, "%.1f");
-        ImGui::SliderFloat("Hauteur du soleil (°)", &sun_elevation_, 5.0f, 90.0f, "%.0f");
-        ImGui::SliderFloat("Direction du soleil (°)", &sun_yaw_, 0.0f, 360.0f, "%.0f");
+        ImGui::SliderFloat("Environment intensity", &environment_intensity_, 0.0f, 4.0f, "%.2f");
+        ImGui::SliderFloat("Sun", &sun_intensity_, 0.0f, 10.0f, "%.1f");
+        ImGui::SliderFloat("Sun elevation (°)", &sun_elevation_, 5.0f, 90.0f, "%.0f");
+        ImGui::SliderFloat("Sun direction (°)", &sun_yaw_, 0.0f, 360.0f, "%.0f");
         ImGui::SliderInt("Torches", &torch_count_, 0, moteur::MeshRenderer::kMaxPointLights);
-        ImGui::SliderFloat("Intensité des torches", &torch_intensity_, 0.0f, 20.0f, "%.1f");
-        ImGui::Checkbox("Torches mobiles", &torches_move_);
+        ImGui::SliderFloat("Torch intensity", &torch_intensity_, 0.0f, 20.0f, "%.1f");
+        ImGui::Checkbox("Moving torches", &torches_move_);
         moteur::ShadowOptions shadows = app_.renderer().meshes().shadows();
-        bool changed = ImGui::Checkbox("Ombres du soleil", &shadows.enabled);
+        bool changed = ImGui::Checkbox("Sun shadows", &shadows.enabled);
         static const int kResolutions[] = {1024, 2048, 4096};
-        if (ImGui::BeginCombo("Résolution des ombres", std::to_string(shadows.resolution).c_str())) {
+        if (ImGui::BeginCombo("Shadow resolution", std::to_string(shadows.resolution).c_str())) {
             for (const int resolution : kResolutions) {
                 if (ImGui::Selectable(std::to_string(resolution).c_str(), resolution == shadows.resolution)) {
                     shadows.resolution = resolution;
@@ -1334,14 +1259,14 @@ public:
             }
             ImGui::EndCombo();
         }
-        changed |= ImGui::SliderFloat("Décalage normal (texels)", &shadows.normal_offset, 0.0f, 5.0f, "%.2f");
-        changed |= ImGui::SliderFloat("Biais de profondeur", &shadows.depth_bias, 0.0f, 0.005f, "%.5f",
+        changed |= ImGui::SliderFloat("Normal offset (texels)", &shadows.normal_offset, 0.0f, 5.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Depth bias", &shadows.depth_bias, 0.0f, 0.005f, "%.5f",
                                       ImGuiSliderFlags_Logarithmic);
-        ImGui::Checkbox("Ombres des torches", &torch_shadows_);
-        changed |= ImGui::SliderInt("Torches ombrées (budget)", &shadows.point_budget, 0,
+        ImGui::Checkbox("Torch shadows", &torch_shadows_);
+        changed |= ImGui::SliderInt("Shadowed torches (budget)", &shadows.point_budget, 0,
                                     moteur::MeshRenderer::kMaxShadowedPointLights);
         static const int kFaceResolutions[] = {256, 512, 1024};
-        if (ImGui::BeginCombo("Résolution par face", std::to_string(shadows.point_resolution).c_str())) {
+        if (ImGui::BeginCombo("Resolution per face", std::to_string(shadows.point_resolution).c_str())) {
             for (const int resolution : kFaceResolutions) {
                 if (ImGui::Selectable(std::to_string(resolution).c_str(), resolution == shadows.point_resolution)) {
                     shadows.point_resolution = resolution;
@@ -1350,24 +1275,24 @@ public:
             }
             ImGui::EndCombo();
         }
-        changed |= ImGui::SliderFloat("Décalage normal torches", &shadows.point_normal_offset, 0.0f, 5.0f, "%.2f");
-        changed |= ImGui::SliderFloat("Biais torches (m)", &shadows.point_depth_bias, 0.0f, 0.2f, "%.3f");
+        changed |= ImGui::SliderFloat("Torch normal offset", &shadows.point_normal_offset, 0.0f, 5.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Torch bias (m)", &shadows.point_depth_bias, 0.0f, 0.2f, "%.3f");
         if (changed) {
             app_.renderer().meshes().set_shadows(shadows);
         }
         ImGui::PopItemWidth();
-        ImGui::SeparatorText("Rendu");
+        ImGui::SeparatorText("Rendering");
         ImGui::PushItemWidth(200.0f);
         float scale = app_.renderer().render_scale();
-        if (ImGui::SliderFloat("Résolution de rendu", &scale, 0.25f, 1.0f, "%.2f")) {
+        if (ImGui::SliderFloat("Render resolution", &scale, 0.25f, 1.0f, "%.2f")) {
             app_.renderer().set_render_scale(scale);
         }
         anti_aliasing_combo(app_.renderer());
         float exposure = app_.renderer().exposure();
-        if (ImGui::SliderFloat("Exposition", &exposure, 0.1f, 8.0f, "%.2f", ImGuiSliderFlags_Logarithmic)) {
+        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 8.0f, "%.2f", ImGuiSliderFlags_Logarithmic)) {
             app_.renderer().set_exposure(exposure);
         }
-        if (ImGui::SliderInt("Objets de charge", &stress_count_, 0, 50000, "%d", ImGuiSliderFlags_Logarithmic)) {
+        if (ImGui::SliderInt("Stress objects", &stress_count_, 0, 50000, "%d", ImGuiSliderFlags_Logarithmic)) {
             build_stress_objects();
         }
         bool culling = app_.renderer().meshes().culling();
@@ -1376,9 +1301,9 @@ public:
         }
         ImGui::PopItemWidth();
         if (ImGui::BeginTable("passes", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
-            ImGui::TableSetupColumn("Passe");
-            ImGui::TableSetupColumn("Soumis");
-            ImGui::TableSetupColumn("Dessinés");
+            ImGui::TableSetupColumn("Pass");
+            ImGui::TableSetupColumn("Submitted");
+            ImGui::TableSetupColumn("Drawn");
             ImGui::TableSetupColumn("Triangles");
             ImGui::TableSetupColumn("Draw calls");
             ImGui::TableHeadersRow();
@@ -1395,8 +1320,8 @@ public:
                 ImGui::TableNextColumn();
                 ImGui::Text("%d", calls);
             };
-            row("Scène", last_stats_.meshes_submitted, last_stats_.meshes, last_stats_.triangles, last_stats_.mesh_draw_calls);
-            row("Ombre", last_stats_.shadow_casters_submitted, last_stats_.shadow_casters, last_stats_.shadow_triangles,
+            row("Scene", last_stats_.meshes_submitted, last_stats_.meshes, last_stats_.triangles, last_stats_.mesh_draw_calls);
+            row("Shadow",last_stats_.shadow_casters_submitted, last_stats_.shadow_casters, last_stats_.shadow_triangles,
                 last_stats_.shadow_draw_calls);
             row("Torches", last_stats_.point_shadow_lights, last_stats_.point_shadow_casters,
                 last_stats_.point_shadow_triangles, last_stats_.point_shadow_draw_calls);
@@ -1404,9 +1329,9 @@ public:
                 static_cast<std::size_t>(last_stats_.billboards) * 2, last_stats_.billboard_draw_calls);
             ImGui::EndTable();
         }
-        ImGui::Text("Torches : %d ombrées, %d recalculées cette frame", last_stats_.point_shadow_lights,
+        ImGui::Text("Torches: %d shadowed, %d updated this frame", last_stats_.point_shadow_lights,
                     last_stats_.point_shadow_updates);
-        if (ImGui::Button("Réglage retenu")) {
+        if (ImGui::Button("Chosen framing")) {
             const moteur::Camera3D chosen;  // the defaults are the chosen framing
             camera3d_.set_projection(chosen.projection());
             camera3d_.set_angles(chosen.yaw(), chosen.pitch());
@@ -1414,12 +1339,12 @@ public:
             camera3d_.set_visible_height(chosen.visible_height());
         }
         ImGui::SameLine();
-        if (ImGui::Button("Vraie isométrie")) {
+        if (ImGui::Button("True isometric")) {
             camera3d_.set_projection(moteur::Projection::Orthographic);
             camera3d_.set_angles(45.0f, moteur::Camera3D::isometric_pitch());
         }
         ImGui::SameLine();
-        if (ImGui::Button("Recentrer")) {
+        if (ImGui::Button("Recenter")) {
             camera3d_.set_target(glm::vec3(0.0f));
         }
     }
@@ -1477,7 +1402,7 @@ private:
         moteur::SpriteRenderer& sprites = renderer.sprites();
 
         camera_.set_viewport(view_size_);
-        const moteur::Camera2D camera = camera_.interpolated(alpha);
+        const bac_a_sable::Camera2D camera = camera_.interpolated(alpha);
         sprites.set_view_projection(camera.view_projection());
 
         // Only the tiles that can be seen, with room for the walls that stick out above theirs.
@@ -1602,8 +1527,8 @@ private:
     std::vector<Mover> movers_;
 
     // Isometric scene.
-    moteur::IsoProjection iso_;
-    moteur::Camera2D camera_;
+    bac_a_sable::IsoProjection iso_;
+    bac_a_sable::Camera2D camera_;
     moteur::Asset<moteur::TextureAtlas> world_atlas_;
     const moteur::SpriteRegion* tile_a_ = nullptr;
     const moteur::SpriteRegion* tile_b_ = nullptr;
@@ -1621,9 +1546,9 @@ private:
     moteur::TileId ground_b_ = moteur::kNoTile;
     moteur::TileId wall_ = moteur::kNoTile;
     std::optional<moteur::TileMap> map_;
-    moteur::Asset<moteur::AnimationLibrary> animations_;  // must outlive the creatures' players
+    std::unique_ptr<bac_a_sable::AnimationLibrary> animations_;  // must outlive the creatures' players
     std::vector<Creature> creatures_;
-    std::vector<const moteur::AnimationEvent*> fired_;  // reused every tick
+    std::vector<const bac_a_sable::AnimationEvent*> fired_;  // reused every tick
     long steps_ = 0;
     bool captured_ = false;
     moteur::RenderStats last_stats_;
@@ -1683,13 +1608,13 @@ private:
     long frames_ = 0;
 };
 
-// The program started without arguments: a menu bar (DEBUG > Tests moteur), a home screen, the
+// The program started without arguments: a menu bar (DEBUG > Engine tests), a home screen, the
 // page listing the test scenes with their settings, and the running test with a button to stop it.
 class Sandbox final : public moteur::Game {
 public:
-    // `launch_test` >= 0: that test (its place in DEBUG > Tests moteur, from 0) starts at once.
+    // `launch_test` >= 0: that test (its place in DEBUG > Engine tests, from 0) starts at once.
     Sandbox(moteur::Application& app, double run_seconds, int launch_test = -1, std::string world_map = "salle_portes")
-        : app_(app), run_seconds_(run_seconds), world_map_(std::move(world_map)), credits_(Credits::load(moteur::asset_path("credits.json"))) {
+        : app_(app), run_seconds_(run_seconds), world_map_(std::move(world_map)), credits_(moteur::Credits::load({moteur::asset_path("credits_moteur.json"), moteur::asset_path("credits.json")})) {
         // The settings each test starts with; the list page can change them before launching.
         TestScene::Options sprites;
         sprites.movers = 3000;
@@ -1708,68 +1633,68 @@ public:
         Demo3D::Options demo3d;  // its defaults are the demonstration's
 
         tests_ = {
-            {"Sprites et test de charge",
-             "Un grand sprite qui se déplace et des petits sprites qui rebondissent : batching, tri en "
-             "profondeur, nombre de draw calls (dans le titre de la fenêtre).",
+            {"Sprites and stress test",
+             "A large moving sprite and small bouncing sprites: batching, depth sorting, draw call count "
+             "(in the window title).",
              TestKind::Sprites, sprites},
-            {"Carte isométrique",
-             "Une carte de tuiles vue par la caméra, la tuile sous la souris surlignée. Flèches ou ZQSD "
-             "pour se déplacer, molette pour zoomer.",
+            {"Isometric map",
+             "A tile map seen through the camera, the tile under the mouse highlighted. Arrows or ZQSD "
+             "to move, wheel to zoom.",
              TestKind::Iso, iso},
-            {"Atlas de sprites",
-             "Tous les sprites de l'atlas de test à leur pivot (carré rouge), puis un personnage normal, "
-             "retourné, x2 et retourné x3.",
+            {"Sprite atlas",
+             "Every sprite of the test atlas at its pivot (red square), then a character normal, "
+             "flipped, x2 and flipped x3.",
              TestKind::Atlas, atlas},
-            {"Texte et polices",
-             "Une phrase avec accents et guillemets, un paragraphe avec retour à la ligne, les trois "
-             "alignements et un compteur de FPS.",
+            {"Text and fonts",
+             "A sentence with accents and guillemets, a word-wrapped paragraph, the three "
+             "alignments and an FPS counter.",
              TestKind::Text, text},
-            {"Scène de démonstration",
-             "Carte de tuiles avec murs, créatures animées qui font demi-tour devant les murs, "
-             "statistiques. Mêmes commandes que la carte isométrique.",
+            {"Demo scene",
+             "Tile map with walls, animated creatures that turn around at walls, "
+             "stats. Same controls as the isometric map.",
              TestKind::Demo, demo},
-            {"Rendu 3D : premiers maillages",
-             "Sol en damier (cases de 1 m), cubes, sphère, personnage (1,8 m), piliers de 3 m, et les "
-             "modèles glTF de assets/models. P change de projection ; réglages dans le panneau.",
+            {"3D rendering: first meshes",
+             "Checkerboard floor (1 m cells), cubes, sphere, character (1.8 m), 3 m pillars, and the "
+             "glTF models of assets/models. P switches projection; settings in the panel.",
              TestKind::Render3D, render3d},
-            {"Démo 3D",
-             "La carte de la démo 2D construite en 3D : murs, décor, créatures qui font demi-tour devant "
-             "les murs, soleil et torches avec ombres, barres de vie. Clic droit : choisir une créature, "
-             "clic gauche : l'envoyer, Tab : la suivante, F : la suivre.",
+            {"3D demo",
+             "The 2D demo's map built in 3D: walls, decor, creatures that turn around at "
+             "walls, sun and torches with shadows, health bars. Right click: pick a creature, "
+             "left click: send it, Tab: next one, F: follow it.",
              TestKind::Demo3D, {}, demo3d},
-            {"Comparaison avec Blender",
-             "Les modèles de test et deux sphères, éclairés par l'environnement de test seul, face à une "
-             "caméra fixe : la même scène que tools/blender/compare_render.py rend dans Blender.",
+            {"Blender comparison",
+             "The test models and two spheres, lit by the test environment alone, facing a "
+             "fixed camera: the same scene tools/blender/compare_render.py renders in Blender.",
              TestKind::BlenderCompare, {}, {}},
-            {"Tranche jouable (états de jeu)",
-             "Écran titre, chargement, la carte de la démo 3D avec un héros suivi par la caméra (clic ou stick "
-             "pour se déplacer, clic sur une créature proche ou compétence 1 pour la frapper), pas, impacts, "
-             "ambiance et musiques, et une pause par-dessus (le monde reste visible, figé). Menus aux flèches, "
-             "à la manette ou à la souris ; Échap ou Start : pause et reprise. Avec des cycles, un pilote "
-             "automatique enchaîne titre, jeu, pause, jeu, pause et titre, et compare ce qui reste en mémoire "
-             "d'un cycle à l'autre.",
+            {"Playable slice (game states)",
+             "Title screen, loading, the 3D demo's map with a hero followed by the camera (click or stick "
+             "to move, click a nearby creature or skill 1 to hit it), footsteps, impacts, "
+             "ambience and music, and a pause on top (the world stays visible, frozen). Menus with arrows, "
+             "gamepad or mouse; Esc or Start: pause and resume. With cycles, an autopilot "
+             "runs title, game, pause, game, pause and title, and compares what stays in memory "
+             "from one cycle to the next.",
              TestKind::States, {}, demo3d},
             {"Audio",
-             "Chaque son et musique de test, un feu qui tourne autour de l'auditeur (gauche, droite, distance), "
-             "les volumes par groupe, et une rafale de 200 impacts en une seconde pour la limite de voix. "
-             "Les sons viennent de tools/audio/fetch_test_sounds.py.",
+             "Every test sound and music, a fire circling the listener (left, right, distance), "
+             "volumes per group, and a burst of 200 impacts in one second for the voice limit. "
+             "The sounds come from tools/audio/fetch_test_sounds.py.",
              TestKind::Audio, {}, {}},
             {"Animation",
-             "Les personnages animés de test côte à côte, chacun jouant un clip de son fichier (choix du clip, "
-             "vitesse, temps), leur squelette par-dessus. Jalon 5 en cours : les maillages déformés restent en "
-             "pose de repos jusqu'au skinning ; les armes et casques suivent déjà leur os. Les personnages "
-             "viennent de tools/models/fetch_test_characters.py.",
+             "The animated test characters side by side, each playing a clip from its file (clip choice, "
+             "speed, time), their skeleton on top. Milestone 5 in progress: skinned meshes stay in "
+             "rest pose until skinning; weapons and helmets already follow their bone. The characters "
+             "come from tools/models/fetch_test_characters.py.",
              TestKind::Animation, {}, {}},
-            {"Monde",
-             "Une carte de test de assets/maps construite en 3D (murs, piliers, barrières, herbes hautes, trous), "
-             "ses points nommés et les axes de l'origine ; la case sous le pointeur et la grille de jeu dans le "
-             "panneau. Clic droit : poser ou retirer un mur. Modifier le fichier de la carte la recharge.",
+            {"World",
+             "A test map of assets/maps built in 3D (walls, pillars, fences, tall grass, holes), "
+             "its named points and the origin axes; the cell under the pointer and the game grid in the "
+             "panel. Right click: place or remove a wall. Editing the map file reloads it.",
              TestKind::World, {}, {}},
-            {"Éditeur de cartes",
-             "Les cartes de assets/maps en 3D : pinceau, rectangles, remplissage, gomme, pipette, calques, légende, "
-             "points nommés, objets (décor, lumières, effets, apparitions de monstres) et connecteurs ; annuler et "
-             "rétablir, vérifications (cases inaccessibles...), enregistrement dans les sources, et F5 pour essayer "
-             "la carte dans la scène « Monde ». Aussi en programme seul : editeur.",
+            {"Map editor",
+             "The maps of assets/maps in 3D: brush, rectangles, fill, eraser, picker, layers, legend, "
+             "named points, objects (decor, lights, effects, monster spawns) and connectors; undo and "
+             "redo, checks (unreachable cells...), saving into the sources, and F5 to test "
+             "the map in the 'World' scene. Also a program of its own: editeur.",
              TestKind::Editor, {}, {}},
         };
         if (launch_test >= 0 && launch_test < static_cast<int>(tests_.size())) {
@@ -1792,6 +1717,9 @@ public:
             scene_->on_event(event);
         }
     }
+
+    // A scene's loading screen waiting for background work: its ticks do not count (Game::waiting()).
+    bool waiting() override { return scene_ != nullptr && scene_->waiting(); }
 
     void update(double dt) override {
         elapsed_ += dt;
@@ -1917,8 +1845,8 @@ private:
             return;
         }
         if (ImGui::BeginMenu("DEBUG")) {
-            if (ImGui::BeginMenu("Tests moteur")) {
-                if (ImGui::MenuItem("Toutes les scènes...")) {
+            if (ImGui::BeginMenu("Engine tests")) {
+                if (ImGui::MenuItem("All scenes...")) {
                     request(Action::ShowTests);
                 }
                 ImGui::Separator();
@@ -1933,13 +1861,13 @@ private:
             ImGui::Separator();
             app_.debug_tools()->menu_items();  // inspector, assets, inputs, audio, states
             ImGui::Separator();
-            if (ImGui::MenuItem("Accueil", nullptr, false, screen_ != Screen::Home)) {
+            if (ImGui::MenuItem("Home", nullptr, false, screen_ != Screen::Home)) {
                 request(Action::ShowHome);
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Aide")) {
-            if (ImGui::MenuItem("À propos", nullptr, about_open_)) {
+        if (ImGui::BeginMenu("Help")) {
+            if (ImGui::MenuItem("About", nullptr, about_open_)) {
                 about_open_ = !about_open_;
             }
             ImGui::EndMenu();
@@ -1951,24 +1879,24 @@ private:
     void draw_home() {
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::Begin("Accueil", nullptr,
+        ImGui::Begin("Home", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
         ImGui::TextUnformatted("Moteur");
         ImGui::TextDisabled("SDL %s", moteur::sdl_version().c_str());
         ImGui::Separator();
-        ImGui::TextUnformatted("Le jeu viendra ici.");
-        ImGui::TextUnformatted("Les scènes de test sont dans le menu DEBUG > Tests moteur.");
+        ImGui::TextUnformatted("The game will come here.");
+        ImGui::TextUnformatted("The test scenes are in the DEBUG > Engine tests menu.");
         ImGui::Spacing();
-        if (ImGui::Button("Tests moteur")) {
+        if (ImGui::Button("Engine tests")) {
             request(Action::ShowTests);
         }
         ImGui::SameLine();
-        if (ImGui::Button("À propos")) {
+        if (ImGui::Button("About")) {
             about_open_ = true;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Quitter")) {
+        if (ImGui::Button("Quit")) {
             app_.quit();
         }
         ImGui::End();
@@ -1980,57 +1908,57 @@ private:
         ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(720.0f, 520.0f), ImGuiCond_Appearing);
         ImGui::SetNextWindowBgAlpha(1.0f);  // opaque: the home screen must not show through
-        if (!ImGui::Begin("À propos", &about_open_, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse)) {
+        if (!ImGui::Begin("About", &about_open_, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse)) {
             ImGui::End();
             return;
         }
-        ImGui::TextUnformatted("Moteur : bac à sable du moteur de jeu");
-        ImGui::TextDisabled("SDL %s (version chargée à l'exécution)", moteur::sdl_version().c_str());
+        ImGui::TextUnformatted("Moteur: game engine sandbox");
+        ImGui::TextDisabled("SDL %s (version loaded at run time)", moteur::sdl_version().c_str());
         if (!credits_.error.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.4f, 1.0f));
             ImGui::TextWrapped("%s", credits_.error.c_str());
             ImGui::PopStyleColor();
         }
 
-        ImGui::SeparatorText("Bibliothèques");
-        for (const Credits::Entry& entry : credits_.libraries) {
+        ImGui::SeparatorText("Libraries");
+        for (const moteur::CreditEntry& entry : credits_.libraries) {
             draw_credit(entry);
         }
-        ImGui::SeparatorText("Police");
-        for (const Credits::Entry& entry : credits_.fonts) {
+        ImGui::SeparatorText("Font");
+        for (const moteur::CreditEntry& entry : credits_.fonts) {
             draw_credit(entry);
         }
-        ImGui::SeparatorText("Modèles 3D de test");
-        ImGui::TextWrapped("Poly Haven publie ses modèles en CC0 (domaine public) : les citer n'est pas obligatoire, "
-                           "mais leurs auteurs sont remerciés ici.");
-        for (const Credits::Entry& entry : credits_.models) {
+        ImGui::SeparatorText("Test 3D models");
+        ImGui::TextWrapped("Poly Haven publishes its models under CC0 (public domain): crediting them is not required, "
+                           "but their authors are thanked here.");
+        for (const moteur::CreditEntry& entry : credits_.models) {
             draw_credit(entry);
         }
-        ImGui::SeparatorText("Environnement de test");
-        for (const Credits::Entry& entry : credits_.environments) {
+        ImGui::SeparatorText("Test environment");
+        for (const moteur::CreditEntry& entry : credits_.environments) {
             draw_credit(entry);
         }
-        ImGui::SeparatorText("Sons et musiques de test");
-        ImGui::TextWrapped("Tous en CC0 (domaine public) ; leurs auteurs sont remerciés ici.");
-        for (const Credits::Entry& entry : credits_.sounds) {
+        ImGui::SeparatorText("Test sounds and music");
+        ImGui::TextWrapped("All under CC0 (public domain); their authors are thanked here.");
+        for (const moteur::CreditEntry& entry : credits_.sounds) {
             draw_credit(entry);
         }
         ImGui::End();
     }
 
-    void draw_credit(const Credits::Entry& entry) {
+    void draw_credit(const moteur::CreditEntry& entry) {
         const std::string title = entry.version.empty() ? entry.name : entry.name + " " + entry.version;
         ImGui::PushID(title.c_str());
         if (ImGui::TreeNode(title.c_str())) {
             if (!entry.authors.empty()) {
-                ImGui::TextWrapped("Auteurs : %s", entry.authors.c_str());
+                ImGui::TextWrapped("Authors: %s", entry.authors.c_str());
             }
-            ImGui::TextWrapped("Licence : %s", entry.license.c_str());
+            ImGui::TextWrapped("License: %s", entry.license.c_str());
             if (!entry.copyright.empty()) {
                 ImGui::TextWrapped("%s", entry.copyright.c_str());
             }
             if (!entry.source.empty()) {
-                ImGui::TextWrapped("Source : %s", entry.source.c_str());
+                ImGui::TextWrapped("Source: %s", entry.source.c_str());
             }
             if (!entry.url.empty()) {
                 ImGui::TextDisabled("%s", entry.url.c_str());
@@ -2038,21 +1966,21 @@ private:
             if (!entry.file.empty()) {
                 const bool present = SDL_GetPathInfo((moteur::base_path() + entry.file).c_str(), nullptr);
                 if (present) {
-                    ImGui::TextDisabled("Fichier présent : %s", entry.file.c_str());
+                    ImGui::TextDisabled("File present: %s", entry.file.c_str());
                 } else {
-                    ImGui::TextDisabled("Fichier absent : python %s le télécharge",
+                    ImGui::TextDisabled("File missing: python %s downloads it",
                                         entry.file.starts_with("assets/audio/") ? "tools/audio/fetch_test_sounds.py"
                                                                                 : "tools/models/fetch_test_models.py");
                 }
             }
-            if (!entry.license_file.empty() && ImGui::TreeNode("Texte de la licence")) {
+            if (!entry.license_file.empty() && ImGui::TreeNode("License text")) {
                 auto found = license_texts_.find(entry.license_file);
                 if (found == license_texts_.end()) {
                     std::string text;
                     try {
                         text = moteur::read_text_file(moteur::base_path() + entry.license_file);
                     } catch (const std::exception& e) {
-                        text = std::string("Texte introuvable : ") + e.what();
+                        text = std::string("Text not found: ") + e.what();
                     }
                     found = license_texts_.emplace(entry.license_file, std::move(text)).first;
                 }
@@ -2073,17 +2001,17 @@ private:
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(viewport->WorkPos);
         ImGui::SetNextWindowSize(viewport->WorkSize);
-        ImGui::Begin("Tests moteur", nullptr,
+        ImGui::Begin("Engine tests", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_NoBringToFrontOnFocus);
-        if (ImGui::Button("< Accueil")) {
+        if (ImGui::Button("< Home")) {
             request(Action::ShowHome);
         }
         ImGui::SameLine();
-        ImGui::TextUnformatted("Tests moteur : choisir une scène. Échap pendant un test revient ici.");
+        ImGui::TextUnformatted("Engine tests: pick a scene. Esc during a test comes back here.");
         if (!error_.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.4f, 1.0f));
-            ImGui::TextWrapped("Le test n'a pas pu démarrer : %s", error_.c_str());
+            ImGui::TextWrapped("The test could not start: %s", error_.c_str());
             ImGui::PopStyleColor();
         }
 
@@ -2097,36 +2025,36 @@ private:
             ImGui::PushItemWidth(260.0f);
             switch (test.kind) {
                 case TestKind::Sprites:
-                    ImGui::SliderInt("Petits sprites", &options.movers, 0, 80000);
+                    ImGui::SliderInt("Small sprites", &options.movers, 0, 80000);
                     ImGui::Checkbox("Batching", &options.batching);
                     ImGui::SameLine();
-                    ImGui::Checkbox("Tri en profondeur", &options.depth);
+                    ImGui::Checkbox("Depth sorting", &options.depth);
                     ImGui::SameLine();
-                    ImGui::Checkbox("Grand sprite immobile", &options.still);
+                    ImGui::Checkbox("Still large sprite", &options.still);
                     break;
                 case TestKind::Iso:
-                    ImGui::SliderInt("Taille de la carte", &options.map_size, 1, 400);
+                    ImGui::SliderInt("Map size", &options.map_size, 1, 400);
                     ImGui::SliderFloat("Zoom", &options.zoom, 1.0f, kMaxZoom, "%.0f");
-                    ImGui::Checkbox("Alterner les textures tuile par tuile (casse le batching)", &options.interleave);
+                    ImGui::Checkbox("Alternate textures tile by tile (breaks batching)", &options.interleave);
                     break;
                 case TestKind::Demo:
-                    ImGui::SliderInt("Créatures", &options.movers, 0, 20000);
-                    ImGui::SliderInt("Taille de la carte", &options.map_size, 10, 400);
-                    ImGui::InputScalar("Graine", ImGuiDataType_U32, &options.seed);
+                    ImGui::SliderInt("Creatures", &options.movers, 0, 20000);
+                    ImGui::SliderInt("Map size", &options.map_size, 10, 400);
+                    ImGui::InputScalar("Seed", ImGuiDataType_U32, &options.seed);
                     break;
                 case TestKind::Render3D:
-                    ImGui::Checkbox("Commencer en orthographique", &options.orthographic);
+                    ImGui::Checkbox("Start in orthographic", &options.orthographic);
                     break;
                 case TestKind::Demo3D:
-                    ImGui::SliderInt("Créatures", &test.demo3d.creatures, 0, 5000);
-                    ImGui::SliderInt("Objets de décor", &test.demo3d.decor, 0, 30000);
-                    ImGui::SliderInt("Taille de la carte", &test.demo3d.map_size, 20, 400);
-                    ImGui::InputScalar("Graine", ImGuiDataType_U32, &test.demo3d.seed);
-                    ImGui::Checkbox("Sol fusionné par blocs de 10 x 10 (sinon une case par instance)", &test.demo3d.merged_floor);
+                    ImGui::SliderInt("Creatures", &test.demo3d.creatures, 0, 5000);
+                    ImGui::SliderInt("Decor objects", &test.demo3d.decor, 0, 30000);
+                    ImGui::SliderInt("Map size", &test.demo3d.map_size, 20, 400);
+                    ImGui::InputScalar("Seed", ImGuiDataType_U32, &test.demo3d.seed);
+                    ImGui::Checkbox("Floor merged in 10 x 10 blocks (otherwise one cell per instance)", &test.demo3d.merged_floor);
                     break;
                 case TestKind::States:
-                    ImGui::SliderInt("Cycles automatiques (0 : à la main)", &test.cycles, 0, 200);
-                    ImGui::SliderInt("Créatures", &test.demo3d.creatures, 0, 5000);
+                    ImGui::SliderInt("Automatic cycles (0: manual)", &test.cycles, 0, 200);
+                    ImGui::SliderInt("Creatures", &test.demo3d.creatures, 0, 5000);
                     break;
                 case TestKind::Audio:
                 case TestKind::Animation:
@@ -2136,7 +2064,7 @@ private:
                     break;  // nothing to set
             }
             ImGui::PopItemWidth();
-            if (ImGui::Button("Lancer")) {
+            if (ImGui::Button("Start")) {
                 request(Action::Launch, static_cast<int>(i));
             }
             ImGui::PopID();
@@ -2148,37 +2076,37 @@ private:
     void draw_debug_controls() {
         moteur::Renderer& renderer = app_.renderer();
         moteur::MeshRenderer& meshes = renderer.meshes();
-        if (!ImGui::CollapsingHeader("Débogage")) {
+        if (!ImGui::CollapsingHeader("Debug")) {
             return;
         }
         ImGui::PushItemWidth(200.0f);
-        static const char* const kViews[] = {"Éclairé", "Fil de fer", "Normales", "Couleur de base", "Distance",
-                                             "Poids d'un os"};
+        static const char* const kViews[] = {"Lit", "Wireframe", "Normals", "Base color", "Distance",
+                                             "Bone weight"};
         int view = static_cast<int>(meshes.view());
-        if (ImGui::Combo("Vue", &view, kViews, IM_ARRAYSIZE(kViews))) {
+        if (ImGui::Combo("View", &view, kViews, IM_ARRAYSIZE(kViews))) {
             meshes.set_view(static_cast<moteur::MeshView>(view));
         }
-        static const char* const kTextures[] = {"Aucune", "Carte d'ombre du soleil", "Atlas des ombres des torches"};
+        static const char* const kTextures[] = {"None", "Sun shadow map", "Torch shadow atlas"};
         int texture = static_cast<int>(renderer.debug_texture());
-        if (ImGui::Combo("Texture affichée", &texture, kTextures, IM_ARRAYSIZE(kTextures))) {
+        if (ImGui::Combo("Shown texture", &texture, kTextures, IM_ARRAYSIZE(kTextures))) {
             renderer.set_debug_texture(static_cast<moteur::DebugTexture>(texture));
         }
         ImGui::PopItemWidth();
         moteur::MeshDebug debug = meshes.debug();
-        bool changed = ImGui::Checkbox("Boîtes englobantes", &debug.bounds);
-        changed |= ImGui::Checkbox("Zone de l'ombre du soleil", &debug.shadow_frustum);
-        changed |= ImGui::Checkbox("Portée des lumières", &debug.lights);
+        bool changed = ImGui::Checkbox("Bounding boxes", &debug.bounds);
+        changed |= ImGui::Checkbox("Sun shadow area", &debug.shadow_frustum);
+        changed |= ImGui::Checkbox("Light ranges", &debug.lights);
         if (changed) {
             meshes.set_debug(debug);
         }
-        ImGui::Checkbox("Axes du repère (X rouge, Y vert, Z bleu)", &debug_axes_);
+        ImGui::Checkbox("Axes (X red, Y green, Z blue)", &debug_axes_);
         bool timing = renderer.gpu_timing();
-        if (ImGui::Checkbox("Temps GPU par passe (ralentit)", &timing)) {
+        if (ImGui::Checkbox("GPU time per pass (slows down)", &timing)) {
             renderer.set_gpu_timing(timing);
         }
         if (last_stats_.gpu_timed) {
             const float* g = last_stats_.gpu_ms;
-            ImGui::Text("GPU (ms) : envois %.2f, ombre %.2f, torches %.2f, scène %.2f, composition %.2f",
+            ImGui::Text("GPU (ms): uploads %.2f, shadow %.2f, torches %.2f, scene %.2f, compose %.2f",
                         static_cast<double>(g[moteur::kGpuUpload]), static_cast<double>(g[moteur::kGpuShadow]),
                         static_cast<double>(g[moteur::kGpuPointShadows]), static_cast<double>(g[moteur::kGpuScene]),
                         static_cast<double>(g[moteur::kGpuCompose]));
@@ -2191,20 +2119,20 @@ private:
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 10.0f, viewport->WorkPos.y + viewport->WorkSize.y - 10.0f),
                                 ImGuiCond_Always, ImVec2(0.0f, 1.0f));
         ImGui::SetNextWindowBgAlpha(0.85f);
-        ImGui::Begin("Test en cours", nullptr,
+        ImGui::Begin("Running test", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
-        ImGui::Text("Test en cours : %s", tests_[static_cast<std::size_t>(running_)].name);
-        ImGui::TextDisabled("%.0f FPS - Échap pour arrêter", static_cast<double>(ImGui::GetIO().Framerate));
+        ImGui::Text("Running test: %s", tests_[static_cast<std::size_t>(running_)].name);
+        ImGui::TextDisabled("%.0f FPS - Esc to stop", static_cast<double>(ImGui::GetIO().Framerate));
         if (scene_) {
             scene_->draw_controls();
             draw_debug_controls();
         }
-        if (ImGui::Button("Arrêter le test")) {
+        if (ImGui::Button("Stop the test")) {
             request(Action::ShowTests);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Accueil")) {
+        if (ImGui::Button("Home")) {
             request(Action::ShowHome);
         }
         ImGui::End();
@@ -2223,7 +2151,7 @@ private:
     Action action_ = Action::None;      // asked by the interface, done by the next update()
     int action_test_ = -1;
     std::string error_;                 // why the last test could not start
-    Credits credits_;
+    moteur::Credits credits_;
     bool about_open_ = false;
     std::map<std::string, std::string> license_texts_;  // loaded when first shown
 };
@@ -2247,8 +2175,10 @@ int main(int argc, char** argv) {
     int menu_test = -1;  // --menu-test N: the menu, with its test N (from 0) already running
     TestScene::Options options;
     bool vsync = true;
-    double fixed_hz = 60.0;  // --fixed-hz N: another logic rate (animation interpolation made visible at 10)
+    int tick_rate = 60;  // --tick-rate N: another logic rate (animation interpolation made visible at 10)
     bool report = false;
+    bool no_audio = false;
+    std::string report_json;  // --report-json FILE: the measurement report, in JSON (milestone 8, part 4)
     bool map_explicit = false;
     bool sprites_explicit = false;
     bool demo3d = false;
@@ -2373,6 +2303,10 @@ int main(int argc, char** argv) {
         } else if (arg == "--slice") {  // the 3D demo as the playable slice, without the menus around it
             demo3d = true;
             demo3d_options.hero = true;
+        } else if (arg == "--mesure" && has_one) {  // a measurement scene of the slice (milestone 8, part 4)
+            demo3d = true;
+            demo3d_options.hero = true;
+            demo3d_options.measure = argv[++i];
         } else if (arg == "--save-at" && i + 2 < argc) {  // --save-at TICK FILE: the slice saved after that tick
             demo3d_options.save_at_tick = std::atol(argv[i + 1]);
             demo3d_options.save_path = argv[i + 2];
@@ -2433,10 +2367,12 @@ int main(int argc, char** argv) {
             prefer_ktx2 = false;
         } else if (arg == "--no-bc") {
             block_compression = false;
+        } else if (arg == "--no-audio") {  // no sound device (long unattended runs: the endurance test)
+            no_audio = true;
         } else if (arg == "--no-vsync") {
             vsync = false;
-        } else if (arg == "--fixed-hz" && has_one) {
-            fixed_hz = std::max(1.0, std::atof(argv[i + 1]));
+        } else if (arg == "--tick-rate" && has_one) {
+            tick_rate = std::clamp(std::atoi(argv[i + 1]), 1, 1000);
             ++i;
         } else if (arg == "--no-batching") {
             options.batching = false;
@@ -2457,6 +2393,9 @@ int main(int argc, char** argv) {
             compiled_data = argv[++i];
         } else if (arg == "--report") {
             report = true;
+        } else if (arg == "--report-json" && has_one) {
+            report = true;
+            report_json = argv[++i];
         } else if (arg == "--menu") {
             menu = true;
         } else if (arg == "--menu-test" && has_one) {
@@ -2520,19 +2459,21 @@ int main(int argc, char** argv) {
                 ok = !issues.has_errors();
             }
             std::cout << issues.text();
-            std::cout << (ok ? "données valides" : "données invalides") << " : " << issues.errors() << " erreur(s), "
-                      << issues.warnings() << " avertissement(s)\n";
+            std::cout << (ok ? "data valid" : "data invalid") << ": " << issues.errors() << " error(s), "
+                      << issues.warnings() << " warning(s)\n";
             return ok ? 0 : 1;
         }
 
         moteur::ApplicationConfig config;
-        config.title = "bac a sable";
+        config.title = "Sandbox";
         config.application = "bac_a_sable";  // the player's files: SDL_GetPrefPath("moteur", "bac_a_sable")
         config.record_input_path = record_input;
         config.replay_input_path = replay_input;
         config.vsync = vsync;
-        config.fixed_hz = fixed_hz;
+        config.tick_rate = tick_rate;
         config.report_performance = report;
+        config.report_json_path = report_json;
+        config.audio = !no_audio;
         config.gpu_timing = gpu_timing;
         config.pixel_width = pixel_size.x;
         config.pixel_height = pixel_size.y;
@@ -2566,7 +2507,7 @@ int main(int argc, char** argv) {
         }
         if (const moteur::DataIssues& issues = app.data().load_all(app.assets().root()); issues.has_errors()) {
             std::cerr << issues.text();
-            std::cerr << "fatal: données invalides (" << issues.errors() << " erreur(s))\n";
+            std::cerr << "fatal: invalid data (" << issues.errors() << " error(s))\n";
             return 1;
         }
         if (menu) {

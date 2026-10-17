@@ -3,7 +3,7 @@
     python tools/audio/fetch_test_sounds.py
 
 All are under CC0 (public domain, no attribution required); their authors are credited anyway, in
-assets/credits.json and in the "À propos" window of the sandbox. Keep this list and that file in
+assets/credits.json and in the "About" window of the sandbox. Keep this list and that file in
 step.
 
 - Kenney (https://kenney.nl): "Impact Sounds" (footsteps on stone, metal impacts) and "Interface

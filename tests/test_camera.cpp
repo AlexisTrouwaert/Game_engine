@@ -4,9 +4,9 @@
 #include <limits>
 #include <stdexcept>
 
-#include "moteur/camera.hpp"
+#include "camera2d.hpp"
 
-using moteur::Camera2D;
+using bac_a_sable::Camera2D;
 
 namespace {
 
@@ -81,7 +81,7 @@ TEST_CASE("with snapping, integer world positions always land on whole pixels") 
 
 TEST_CASE("the visible rectangle covers exactly the window") {
     const Camera2D cam = camera({100.0f, 50.0f}, 2.0f);
-    const moteur::Rect visible = cam.visible_rect();
+    const bac_a_sable::Rect visible = cam.visible_rect();
     CHECK(visible.min == glm::vec2(-220.0f, -130.0f));
     CHECK(visible.max == glm::vec2(420.0f, 230.0f));
     CHECK(visible.contains({100.0f, 50.0f}));
@@ -124,7 +124,7 @@ TEST_CASE("an interpolated camera keeps the other settings") {
 TEST_CASE("the view-projection maps the window corners to the clip-space corners") {
     const Camera2D cam = camera({100.0f, 50.0f}, 2.0f);
     const glm::mat4 vp = cam.view_projection();
-    const moteur::Rect visible = cam.visible_rect();
+    const bac_a_sable::Rect visible = cam.visible_rect();
 
     const glm::vec4 top_left = vp * glm::vec4(visible.min, 0.0f, 1.0f);
     const glm::vec4 bottom_right = vp * glm::vec4(visible.max, 0.0f, 1.0f);
@@ -157,11 +157,3 @@ TEST_CASE("the zoom must be positive") {
     CHECK(cam.zoom() == 1.0f);
 }
 
-TEST_CASE("window points convert to pixels on a high-density screen") {
-    // A 640x360 point window drawn at 1280x720 pixels: one point is two pixels.
-    CHECK(moteur::window_to_pixels({100.0f, 50.0f}, {640.0f, 360.0f}, {1280.0f, 720.0f}) == glm::vec2(200.0f, 100.0f));
-    // Same size: nothing changes.
-    CHECK(moteur::window_to_pixels({100.0f, 50.0f}, {1280.0f, 720.0f}, {1280.0f, 720.0f}) == glm::vec2(100.0f, 50.0f));
-    // A degenerate window does not divide by zero.
-    CHECK(moteur::window_to_pixels({100.0f, 50.0f}, {0.0f, 0.0f}, {1280.0f, 720.0f}) == glm::vec2(100.0f, 50.0f));
-}

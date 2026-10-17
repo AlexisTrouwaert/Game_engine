@@ -12,7 +12,7 @@ in Git.
   made to test a glTF reader: SimpleSkin (CC0, 2 joints), InterpolationTest (CC0: STEP, LINEAR
   and CUBICSPLINE keys), RiggedFigure (CC-BY 4.0, Cesium) and Fox (CC0 model by PixelMannen,
   CC-BY 4.0 rig and animations by tomkranis, @AsoboStudio and @scurest). The CC-BY ones must be
-  credited: they are, in assets/credits.json and the "À propos" window of the sandbox. Keep this
+  credited: they are, in assets/credits.json and the "About" window of the sandbox. Keep this
   list and that file in step.
 
 Sources are pinned to a commit, and each download is checked against the SHA-256 of the file this

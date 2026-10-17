@@ -13,11 +13,13 @@
 #include "sandbox_data.hpp"
 
 // The map editor as a program of its own (milestone 7, part 7): the same editor as the sandbox's
-// DEBUG > Tests moteur > Éditeur de cartes, in a window of its own.
+// DEBUG > Engine tests > Map editor, in a window of its own.
 //
-//   editeur [CARTE] [--top] [--run-seconds S] [--capture FICHIER.png]
+//   editeur [MAP | --new] [--top] [--run-seconds S] [--capture FILE.png] [--self-test] [--no-vsync]
 //
-// CARTE: a file of assets/maps without ".json" (default: salle_portes); "--new": a new map.
+// MAP: a file of assets/maps without ".json" (default: salle_portes); "--new": a new map.
+// "--self-test": the editor's workflow, checked, on a copy of the map; "--no-vsync": frames as fast
+// as they come (measures).
 int main(int argc, char** argv) {
     MapEditor::Options options;
     bool vsync = true;
@@ -36,18 +38,18 @@ int main(int argc, char** argv) {
         } else if (arg == "--new") {
             options.map.clear();
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "editeur [CARTE | --new] [--top] [--run-seconds S] [--capture FICHIER.png] [--self-test] [--no-vsync]\n";
+            std::cout << "editeur [MAP | --new] [--top] [--run-seconds S] [--capture FILE.png] [--self-test] [--no-vsync]\n";
             return 0;
         } else if (!arg.empty() && arg[0] != '-') {
             options.map = arg;
         } else {
-            std::cerr << "fatal: option inconnue " << arg << '\n';
+            std::cerr << "fatal: unknown option " << arg << '\n';
             return 1;
         }
     }
     try {
         moteur::ApplicationConfig config;
-        config.title = "editeur de cartes";
+        config.title = "Map editor";
         config.application = "editeur";
         config.debug_ui = true;
         config.vsync = vsync;
@@ -62,7 +64,7 @@ int main(int argc, char** argv) {
         register_sandbox_tables(app.data());
         if (const moteur::DataIssues& issues = app.data().load_all(app.assets().root()); issues.has_errors()) {
             std::cerr << issues.text();
-            std::cerr << "fatal: données invalides (" << issues.errors() << " erreur(s))\n";
+            std::cerr << "fatal: invalid data (" << issues.errors() << " error(s))\n";
             return 1;
         }
         if (options.self_test) {

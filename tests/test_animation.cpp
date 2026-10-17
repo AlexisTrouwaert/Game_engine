@@ -4,17 +4,17 @@
 #include <string>
 #include <vector>
 
-#include "moteur/animation.hpp"
+#include "sprite_animation.hpp"
 
 namespace {
 
 // Four frames: a (2 ticks), b (1), c (3), d (2) = 8 ticks.
-moteur::AnimationClip make_clip(moteur::PlayMode mode, std::vector<moteur::AnimationEvent> events = {}) {
-    return moteur::AnimationClip("test", {{"a", 2}, {"b", 1}, {"c", 3}, {"d", 2}}, mode, std::move(events));
+bac_a_sable::AnimationClip make_clip(bac_a_sable::PlayMode mode, std::vector<bac_a_sable::AnimationEvent> events = {}) {
+    return bac_a_sable::AnimationClip("test", {{"a", 2}, {"b", 1}, {"c", 3}, {"d", 2}}, mode, std::move(events));
 }
 
 // The frame shown after each of `ticks` single-tick advances, as letters.
-std::string frames_over(moteur::AnimationPlayer& player, int ticks) {
+std::string frames_over(bac_a_sable::AnimationPlayer& player, int ticks) {
     std::string shown;
     for (int i = 0; i < ticks; ++i) {
         player.advance(1);
@@ -23,9 +23,9 @@ std::string frames_over(moteur::AnimationPlayer& player, int ticks) {
     return shown;
 }
 
-std::vector<std::string> names(const std::vector<const moteur::AnimationEvent*>& fired) {
+std::vector<std::string> names(const std::vector<const bac_a_sable::AnimationEvent*>& fired) {
     std::vector<std::string> result;
-    for (const moteur::AnimationEvent* event : fired) {
+    for (const bac_a_sable::AnimationEvent* event : fired) {
         result.push_back(event->name);
     }
     return result;
@@ -34,52 +34,52 @@ std::vector<std::string> names(const std::vector<const moteur::AnimationEvent*>&
 }  // namespace
 
 TEST_CASE("AnimationClip rejects impossible clips") {
-    using moteur::AnimationClip;
+    using bac_a_sable::AnimationClip;
     CHECK_THROWS_AS(AnimationClip("empty", {}), std::invalid_argument);
     CHECK_THROWS_AS(AnimationClip("zero", {{"a", 0}}), std::invalid_argument);
-    CHECK_THROWS_AS(AnimationClip("event", {{"a", 1}}, moteur::PlayMode::Loop, {{1, "hit"}}), std::invalid_argument);
-    CHECK_THROWS_AS(AnimationClip("event", {{"a", 1}}, moteur::PlayMode::Loop, {{-1, "hit"}}), std::invalid_argument);
+    CHECK_THROWS_AS(AnimationClip("event", {{"a", 1}}, bac_a_sable::PlayMode::Loop, {{1, "hit"}}), std::invalid_argument);
+    CHECK_THROWS_AS(AnimationClip("event", {{"a", 1}}, bac_a_sable::PlayMode::Loop, {{-1, "hit"}}), std::invalid_argument);
 }
 
 TEST_CASE("AnimationClip cycle length") {
-    CHECK(make_clip(moteur::PlayMode::Once).cycle_ticks() == 8);
-    CHECK(make_clip(moteur::PlayMode::Loop).cycle_ticks() == 8);
+    CHECK(make_clip(bac_a_sable::PlayMode::Once).cycle_ticks() == 8);
+    CHECK(make_clip(bac_a_sable::PlayMode::Loop).cycle_ticks() == 8);
     // There and back without repeating the end frames: a b c d c b = 2+1+3+2+3+1.
-    const moteur::AnimationClip ping_pong = make_clip(moteur::PlayMode::PingPong);
+    const bac_a_sable::AnimationClip ping_pong = make_clip(bac_a_sable::PlayMode::PingPong);
     CHECK(ping_pong.cycle_ticks() == 12);
     CHECK(ping_pong.step_count() == 6);
-    CHECK(moteur::AnimationClip("one", {{"a", 5}}, moteur::PlayMode::PingPong).cycle_ticks() == 5);
+    CHECK(bac_a_sable::AnimationClip("one", {{"a", 5}}, bac_a_sable::PlayMode::PingPong).cycle_ticks() == 5);
 }
 
 TEST_CASE("AnimationPlayer shows the expected frame at each tick") {
-    const moteur::AnimationClip loop = make_clip(moteur::PlayMode::Loop);
-    moteur::AnimationPlayer player(loop);
+    const bac_a_sable::AnimationClip loop = make_clip(bac_a_sable::PlayMode::Loop);
+    bac_a_sable::AnimationPlayer player(loop);
     CHECK(player.region() == "a");  // before any advance
     // Ticks 1..16. Frame a covers [0, 2), b [2, 3), c [3, 6), d [6, 8).
     CHECK(frames_over(player, 16) == "abcccddaabcccdda");
 }
 
 TEST_CASE("AnimationPlayer plays a Once clip to its last frame and stays there") {
-    const moteur::AnimationClip once = make_clip(moteur::PlayMode::Once);
-    moteur::AnimationPlayer player(once);
+    const bac_a_sable::AnimationClip once = make_clip(bac_a_sable::PlayMode::Once);
+    bac_a_sable::AnimationPlayer player(once);
     CHECK(frames_over(player, 7) == "abcccdd");
     CHECK_FALSE(player.finished());
     CHECK(frames_over(player, 1) == "d");
     CHECK(player.finished());
     CHECK(frames_over(player, 5) == "ddddd");
-    CHECK(player.time() == 8 * moteur::AnimationPlayer::kSpeedOne);  // stays at the end
+    CHECK(player.time() == 8 * bac_a_sable::AnimationPlayer::kSpeedOne);  // stays at the end
 }
 
 TEST_CASE("AnimationPlayer ping-pong does not repeat the end frames") {
-    const moteur::AnimationClip clip("pp", {{"a", 1}, {"b", 1}, {"c", 1}}, moteur::PlayMode::PingPong);
-    moteur::AnimationPlayer player(clip);
+    const bac_a_sable::AnimationClip clip("pp", {{"a", 1}, {"b", 1}, {"c", 1}}, bac_a_sable::PlayMode::PingPong);
+    bac_a_sable::AnimationPlayer player(clip);
     CHECK(player.region() == "a");
     CHECK(frames_over(player, 8) == "bcbabcba");
 }
 
 TEST_CASE("AnimationPlayer at speed x2 plays twice as fast") {
-    const moteur::AnimationClip once = make_clip(moteur::PlayMode::Once);
-    moteur::AnimationPlayer player(once);
+    const bac_a_sable::AnimationClip once = make_clip(bac_a_sable::PlayMode::Once);
+    bac_a_sable::AnimationPlayer player(once);
     player.set_speed(2.0);
     CHECK(frames_over(player, 3) == "bcd");
     CHECK_FALSE(player.finished());
@@ -88,15 +88,15 @@ TEST_CASE("AnimationPlayer at speed x2 plays twice as fast") {
 }
 
 TEST_CASE("AnimationPlayer at half speed plays twice as slowly") {
-    const moteur::AnimationClip loop = make_clip(moteur::PlayMode::Loop);
-    moteur::AnimationPlayer player(loop);
+    const bac_a_sable::AnimationClip loop = make_clip(bac_a_sable::PlayMode::Loop);
+    bac_a_sable::AnimationPlayer player(loop);
     player.set_speed(0.5);
     CHECK(frames_over(player, 8) == "aaabbccc");
 }
 
 TEST_CASE("AnimationPlayer speed: zero pauses, negative is refused") {
-    const moteur::AnimationClip loop = make_clip(moteur::PlayMode::Loop);
-    moteur::AnimationPlayer player(loop);
+    const bac_a_sable::AnimationClip loop = make_clip(bac_a_sable::PlayMode::Loop);
+    bac_a_sable::AnimationPlayer player(loop);
     player.set_speed(0.0);
     CHECK(frames_over(player, 10) == "aaaaaaaaaa");
     CHECK_THROWS_AS(player.set_speed(-1.0), std::invalid_argument);
@@ -104,9 +104,9 @@ TEST_CASE("AnimationPlayer speed: zero pauses, negative is refused") {
 }
 
 TEST_CASE("AnimationPlayer fires each event exactly once, in order") {
-    const moteur::AnimationClip loop = make_clip(moteur::PlayMode::Loop, {{0, "start"}, {2, "hit"}, {3, "end"}});
-    moteur::AnimationPlayer player(loop);
-    std::vector<const moteur::AnimationEvent*> fired;
+    const bac_a_sable::AnimationClip loop = make_clip(bac_a_sable::PlayMode::Loop, {{0, "start"}, {2, "hit"}, {3, "end"}});
+    bac_a_sable::AnimationPlayer player(loop);
+    std::vector<const bac_a_sable::AnimationEvent*> fired;
 
     player.advance(1, &fired);  // the first frame counts as reached
     CHECK(names(fired) == std::vector<std::string>{"start"});
@@ -125,17 +125,17 @@ TEST_CASE("AnimationPlayer fires each event exactly once, in order") {
 }
 
 TEST_CASE("AnimationPlayer fires the events of skipped frames and loops") {
-    const moteur::AnimationClip loop = make_clip(moteur::PlayMode::Loop, {{1, "b"}, {2, "c"}});
-    std::vector<const moteur::AnimationEvent*> fired;
+    const bac_a_sable::AnimationClip loop = make_clip(bac_a_sable::PlayMode::Loop, {{1, "b"}, {2, "c"}});
+    std::vector<const bac_a_sable::AnimationEvent*> fired;
 
     // One big step of 2.5 loops (20 ticks): b and c three times (the third b at 18, c at 19).
-    moteur::AnimationPlayer big(loop);
+    bac_a_sable::AnimationPlayer big(loop);
     big.advance(20, &fired);
     CHECK(names(fired) == std::vector<std::string>{"b", "c", "b", "c", "b", "c"});
 
     // The same 20 ticks one by one give exactly the same list.
-    std::vector<const moteur::AnimationEvent*> small_fired;
-    moteur::AnimationPlayer small(loop);
+    std::vector<const bac_a_sable::AnimationEvent*> small_fired;
+    bac_a_sable::AnimationPlayer small(loop);
     for (int i = 0; i < 20; ++i) {
         small.advance(1, &small_fired);
     }
@@ -144,10 +144,10 @@ TEST_CASE("AnimationPlayer fires the events of skipped frames and loops") {
 }
 
 TEST_CASE("AnimationPlayer events with a fractional speed are neither lost nor doubled") {
-    const moteur::AnimationClip loop = make_clip(moteur::PlayMode::Loop, {{0, "a"}, {1, "b"}, {2, "c"}, {3, "d"}});
-    moteur::AnimationPlayer player(loop);
+    const bac_a_sable::AnimationClip loop = make_clip(bac_a_sable::PlayMode::Loop, {{0, "a"}, {1, "b"}, {2, "c"}, {3, "d"}});
+    bac_a_sable::AnimationPlayer player(loop);
     player.set_speed(0.7);
-    std::vector<const moteur::AnimationEvent*> fired;
+    std::vector<const bac_a_sable::AnimationEvent*> fired;
     // 80 ticks at x0.7 = 56 clip ticks = 7 loops exactly.
     for (int i = 0; i < 80; ++i) {
         player.advance(1, &fired);
@@ -159,9 +159,9 @@ TEST_CASE("AnimationPlayer events with a fractional speed are neither lost nor d
 }
 
 TEST_CASE("AnimationPlayer Once clip fires its events once, never after the end") {
-    const moteur::AnimationClip once = make_clip(moteur::PlayMode::Once, {{0, "start"}, {3, "last"}});
-    moteur::AnimationPlayer player(once);
-    std::vector<const moteur::AnimationEvent*> fired;
+    const bac_a_sable::AnimationClip once = make_clip(bac_a_sable::PlayMode::Once, {{0, "start"}, {3, "last"}});
+    bac_a_sable::AnimationPlayer player(once);
+    std::vector<const bac_a_sable::AnimationEvent*> fired;
     player.advance(100, &fired);
     CHECK(names(fired) == std::vector<std::string>{"start", "last"});
     fired.clear();
@@ -174,11 +174,11 @@ TEST_CASE("AnimationPlayer Once clip fires its events once, never after the end"
 }
 
 TEST_CASE("AnimationPlayer set_time moves without firing the current frame") {
-    const moteur::AnimationClip loop = make_clip(moteur::PlayMode::Loop, {{2, "hit"}});
-    moteur::AnimationPlayer player(loop);
-    player.set_time(4 * moteur::AnimationPlayer::kSpeedOne);  // inside c
+    const bac_a_sable::AnimationClip loop = make_clip(bac_a_sable::PlayMode::Loop, {{2, "hit"}});
+    bac_a_sable::AnimationPlayer player(loop);
+    player.set_time(4 * bac_a_sable::AnimationPlayer::kSpeedOne);  // inside c
     CHECK(player.region() == "c");
-    std::vector<const moteur::AnimationEvent*> fired;
+    std::vector<const bac_a_sable::AnimationEvent*> fired;
     for (int i = 0; i < 8; ++i) {  // up to tick 12: the next c starts at 11
         player.advance(1, &fired);
     }
@@ -195,11 +195,11 @@ TEST_CASE("AnimationLibrary reads clips from JSON") {
             "idle": { "mode": "ping_pong", "frames": ["i0", "i1", "i2"] }
         }
     })";
-    const moteur::AnimationLibrary library = moteur::AnimationLibrary::parse(json, "test.json");
+    const bac_a_sable::AnimationLibrary library = bac_a_sable::AnimationLibrary::parse(json, "test.json");
     CHECK(library.names() == std::vector<std::string>{"die", "idle", "walk"});
 
-    const moteur::AnimationClip& walk = library.clip("walk");
-    CHECK(walk.mode() == moteur::PlayMode::Loop);
+    const bac_a_sable::AnimationClip& walk = library.clip("walk");
+    CHECK(walk.mode() == bac_a_sable::PlayMode::Loop);
     REQUIRE(walk.frames().size() == 3);
     CHECK(walk.frames()[0].ticks == 6);
     CHECK(walk.frames()[2].region == "w2");
@@ -208,16 +208,16 @@ TEST_CASE("AnimationLibrary reads clips from JSON") {
     REQUIRE(walk.events().size() == 1);
     CHECK(walk.events()[0].name == "step");
 
-    CHECK(library.clip("die").mode() == moteur::PlayMode::Once);
+    CHECK(library.clip("die").mode() == bac_a_sable::PlayMode::Once);
     CHECK(library.clip("die").frames()[0].ticks == 1);
-    CHECK(library.clip("idle").mode() == moteur::PlayMode::PingPong);
+    CHECK(library.clip("idle").mode() == bac_a_sable::PlayMode::PingPong);
     CHECK_THROWS_AS(library.clip("run"), std::runtime_error);
 }
 
 TEST_CASE("AnimationLibrary reports invalid files with their name") {
     const auto error_of = [](const char* json) {
         try {
-            moteur::AnimationLibrary::parse(json, "bad.json");
+            bac_a_sable::AnimationLibrary::parse(json, "bad.json");
         } catch (const std::runtime_error& e) {
             return std::string(e.what());
         }

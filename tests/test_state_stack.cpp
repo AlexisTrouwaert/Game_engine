@@ -341,3 +341,38 @@ TEST_CASE("loading state: a step that throws pops it by default") {
     REQUIRE(stack.size() == 1);
     CHECK(log == Log{"title.built", "title.enter", "title.covered", "title.uncovered", "title.update"});
 }
+
+TEST_CASE("loading state: a step waiting for background work makes ticks that do not count") {
+    // Milestone 8, part 5: how many ticks the wait lasts depends on the machine; the tick that sees
+    // the work done runs the next step at once, so a load has as many counting ticks either way.
+    Log log;
+    bool decoded = false;
+    int counted = 0;  // ticks the Application would count (waiting() false before them)
+    std::vector<moteur::LoadingState::Step> steps = {
+        {"Fichiers", [&log] { log.push_back("prefetch"); }, [&decoded] { return decoded; }},
+        {"Modèles", [&log] { log.push_back("models"); }},
+    };
+    moteur::StateStack stack;
+    stack.push(std::make_unique<moteur::LoadingState>(std::move(steps), "Jeu", [&log] { return probe(log, "game"); }));
+    const auto tick = [&] {
+        if (!stack.waiting()) {
+            ++counted;
+        }
+        stack.update(1.0 / 60.0);
+    };
+    tick();  // the push, and "Fichiers" runs, then waits
+    CHECK(log.back() == "prefetch");
+    for (int i = 0; i < 5; ++i) {
+        tick();  // waiting: nothing runs, nothing counts
+    }
+    CHECK(log.back() == "prefetch");
+    CHECK(counted == 1);
+    decoded = true;
+    tick();  // ready: "Modèles" in the same tick
+    CHECK(log.back() == "models");
+    CHECK(counted == 2);
+    tick();  // the game built
+    tick();  // and in place
+    CHECK(dynamic_cast<moteur::LoadingState*>(stack.top()) == nullptr);
+    CHECK(counted == 4);
+}

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "profile": "clavier",
+  "profiles": {
+    "clavier": {
+      "label": "Clavier ou manette",
+      "buttons": {
+        "bip": ["key:Space", "pad:a"],
+        "quitter": ["key:Escape", "pad:start"]
+      },
+      "axes": {
+        "tourner": {"left": ["key:Left"], "right": ["key:Right"], "up": ["key:Up"], "down": ["key:Down"], "stick": "left"}
+      }
+    }
+  }
+}

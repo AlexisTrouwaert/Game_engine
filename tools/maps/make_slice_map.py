@@ -5,6 +5,10 @@ rooms of 10 x 10 cells whose walls have doorways every 4 cells, a brazier in the
 room. As a file, the slice reads it like any map (and the map editor of milestone 7 will open it).
 
     python tools/maps/make_slice_map.py [size]
+
+It writes the first version of the map only (format version 1, no objects). The map has grown since
+in the map editor (version 2, its decor and monsters as objects) and with
+tools/maps/place_slice_lamps.py (a street lamp per room): running this script again would lose them.
 """
 
 import json
@@ -40,7 +44,7 @@ def main():
     text += '    ".": ["sol"],\n'
     text += '    "#": ["sol", "mur"],\n'
     text += '    "b": {"tiles": ["sol", "brasero"], "point": "brasero"},\n'
-    text += '    "@": {"tiles": ["sol"], "point": "depart"}\n'
+    text += '    "@": {"tiles": ["sol"], "point": "start"}\n'
     text += "  },\n"
     text += '  "rows": [\n' + ",\n".join("    " + dump(r) for r in rows) + "\n  ]\n}\n"
     OUT.write_text(text, encoding="utf-8", newline="\n")

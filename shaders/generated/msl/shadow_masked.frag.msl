@@ -1,0 +1,29 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct main0_in
+{
+    float2 in_var_TEXCOORD0 [[user(locn0)]];
+    float2 in_var_TEXCOORD1 [[user(locn1), flat]];
+};
+
+fragment void main0(main0_in in [[stage_in]], texture2d<float> base_color_texture [[texture(0)]], sampler base_color_sampler [[sampler(0)]])
+{
+    float4 _31 = base_color_texture.sample(base_color_sampler, in.in_var_TEXCOORD0);
+    bool _40;
+    if (in.in_var_TEXCOORD1.y > 0.0)
+    {
+        _40 = (in.in_var_TEXCOORD1.x * _31.w) < in.in_var_TEXCOORD1.y;
+    }
+    else
+    {
+        _40 = false;
+    }
+    if (_40)
+    {
+        discard_fragment();
+    }
+}
+

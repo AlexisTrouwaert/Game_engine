@@ -33,12 +33,12 @@ bool on(const Variable* variable) {
 
 WorldDebugFlags WorldDebugFlags::declare(Variables& variables) {
     WorldDebugFlags flags;
-    flags.grid = &variables.add_bool("debug.grid", false, "cases bloquées (rouge : opaques, orange : transparentes)");
-    flags.clearance = &variables.add_bool("debug.clearance", false, "dégagement des cases (carré plus grand et plus vert : plus de place)");
-    flags.colliders = &variables.add_bool("debug.colliders", false, "cercles de collision (jaune : immobile ce tick)");
-    flags.paths = &variables.add_bool("debug.paths", false, "chemins restants");
-    flags.field = &variables.add_bool("debug.flowfield", false, "flèches du flow field");
-    flags.view = &variables.add_bool("debug.view", false, "cases du champ de vision");
+    flags.grid = &variables.add_bool("debug.grid", false, "blocked cells (red: opaque, orange: transparent)");
+    flags.clearance = &variables.add_bool("debug.clearance", false, "cell clearance (bigger and greener square: more room)");
+    flags.colliders = &variables.add_bool("debug.colliders", false, "collision circles (yellow: still this tick)");
+    flags.paths = &variables.add_bool("debug.paths", false, "remaining paths");
+    flags.field = &variables.add_bool("debug.flowfield", false, "flow field arrows");
+    flags.view = &variables.add_bool("debug.view", false, "field of view cells");
     return flags;
 }
 
@@ -95,7 +95,7 @@ void draw_world_debug(DebugLineBuffer& lines, const WorldDebugFlags& flags, cons
     const World& world = *sources.world;
     const entt::registry& registry = world.registry();
     if (on(flags.colliders)) {
-        for (auto [entity, collider] : registry.view<Collider>().each()) {
+        for (const auto& [entity, collider] : registry.view<Collider>().each()) {
             if (registry.all_of<Hidden>(entity)) {
                 continue;
             }
@@ -107,7 +107,7 @@ void draw_world_debug(DebugLineBuffer& lines, const WorldDebugFlags& flags, cons
         }
     }
     if (on(flags.paths)) {
-        for (auto [entity, mover] : registry.view<Mover>().each()) {
+        for (const auto& [entity, mover] : registry.view<Mover>().each()) {
             if (mover.mode != MoveMode::ToPoint || mover.next_point >= mover.path.size()) {
                 continue;
             }

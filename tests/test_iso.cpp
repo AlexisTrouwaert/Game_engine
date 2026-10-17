@@ -3,9 +3,10 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "moteur/iso.hpp"
+#include "iso.hpp"
+#include "moteur/tilemap.hpp"
 
-using moteur::IsoProjection;
+using bac_a_sable::IsoProjection;
 
 namespace {
 
@@ -81,12 +82,12 @@ TEST_CASE("the sprite box of a tile puts its top corner on the lattice") {
 
 TEST_CASE("tiles_in contains every tile whose center is in the area") {
     const IsoProjection iso(64.0f, 32.0f);
-    const moteur::Rect areas[] = {
+    const bac_a_sable::Rect areas[] = {
         {{-200.0f, -100.0f}, {300.0f, 250.0f}},
         {{50.0f, 50.0f}, {60.0f, 60.0f}},
         {{-1000.0f, 400.0f}, {-100.0f, 900.0f}},
     };
-    for (const moteur::Rect& area : areas) {
+    for (const bac_a_sable::Rect& area : areas) {
         const moteur::TileRange range = iso.tiles_in(area, 0);
         int missing = 0;
         for (int i = -60; i <= 60; ++i) {
@@ -104,7 +105,7 @@ TEST_CASE("tiles_in contains every tile whose center is in the area") {
 
 TEST_CASE("the margin widens the range on every side") {
     const IsoProjection iso(64.0f, 32.0f);
-    const moteur::Rect area{{-100.0f, 0.0f}, {100.0f, 200.0f}};
+    const bac_a_sable::Rect area{{-100.0f, 0.0f}, {100.0f, 200.0f}};
     const moteur::TileRange tight = iso.tiles_in(area, 0);
     const moteur::TileRange wide = iso.tiles_in(area, 2);
     CHECK(wide.min == tight.min - glm::ivec2(2));
@@ -129,4 +130,19 @@ TEST_CASE("an empty range is empty") {
 TEST_CASE("the tile size must be positive") {
     CHECK_THROWS_AS(IsoProjection(0.0f, 32.0f), std::invalid_argument);
     CHECK_THROWS_AS(IsoProjection(64.0f, -1.0f), std::invalid_argument);
+}
+
+TEST_CASE("TileMap clip of the visible range gives only tiles on screen") {
+    // A camera looking at the corner of the map: part of the visible range is outside it.
+    const IsoProjection iso(64.0f, 32.0f);
+    const moteur::TileMap map(100, 100);
+    const bac_a_sable::Rect view{{-640.0f, -360.0f}, {640.0f, 360.0f}};
+    const moteur::TileRange range = map.clip(iso.tiles_in(view, 2));
+    REQUIRE_FALSE(range.empty());
+    CHECK(range.min == glm::ivec2(0, 0));
+    CHECK(range.max.x < 100);
+    CHECK(range.max.y < 100);
+    // The origin of the world is on screen, so tile (0, 0) must be drawn.
+    CHECK(range.min.x <= 0);
+    CHECK(range.min.y <= 0);
 }

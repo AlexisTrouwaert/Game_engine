@@ -2,7 +2,7 @@
 #
 #   moteur_add_atlas(<target> NAME <name> SOURCES <folder>)
 #
-# Packs the PNG images of <folder> (relative to the project root) into an atlas named <name>, with
+# Packs the PNG images of <folder> (relative to the root of the calling project, or absolute) into an atlas named <name>, with
 # the atlas_packer tool, at every build where an image (or pivots.json) has changed. The result,
 # <name>.json and <name>_0.png, <name>_1.png..., lands in the assets/ folder next to the
 # executable of <target>, where TextureAtlas::load() finds it.
@@ -13,7 +13,7 @@ function(moteur_add_atlas target)
     cmake_parse_arguments(ARG "" "NAME;SOURCES" "" ${ARGN})
     get_target_property(binary_dir ${target} BINARY_DIR)
     set(out_dir "${binary_dir}/assets")
-    set(src_dir "${CMAKE_SOURCE_DIR}/${ARG_SOURCES}")
+    cmake_path(ABSOLUTE_PATH ARG_SOURCES BASE_DIRECTORY "${PROJECT_SOURCE_DIR}" OUTPUT_VARIABLE src_dir)
 
     # CONFIGURE_DEPENDS makes CMake notice added or removed images without being asked to reconfigure.
     file(GLOB_RECURSE inputs CONFIGURE_DEPENDS "${src_dir}/*.png" "${src_dir}/pivots.json")

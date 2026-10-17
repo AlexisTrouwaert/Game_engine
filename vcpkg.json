@@ -1,6 +1,6 @@
 {
   "name": "moteur",
-  "version-string": "0.1.0",
+  "version-string": "0.8.0",
   "builtin-baseline": "5f96cd15fd745122cf27e0524606d6c1efc5fd07",
   "dependencies": [
     "sdl3",
@@ -14,6 +14,7 @@
     "efsw",
     "miniaudio",
     "ozz-animation",
+    "zstd",
     {
       "name": "ktx",
       "features": ["tools"]
@@ -28,7 +29,7 @@
     },
     {
       "name": "winpixevent",
-      "platform": "windows"
+      "platform": "windows & !staticcrt"
     }
   ],
   "features": {

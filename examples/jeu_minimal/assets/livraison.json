@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "_note": "What the shipped version takes with it (moteur/cook.hpp): its bindings, its beep, its credits.",
+  "include": ["input/*.json", "audio/*.wav", "credits.json", "credits_moteur.json"]
+}

@@ -1,6 +1,10 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "base",
@@ -12,27 +16,40 @@
       "name": "windows-debug",
       "displayName": "Windows Debug",
       "inherits": "base",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "cl",
         "VCPKG_TARGET_TRIPLET": "x64-windows-static-md"
       },
       "vendor": {
-        "jetbrains.com/clion": { "format": 1, "toolchain": "Visual Studio" }
+        "jetbrains.com/clion": {
+          "format": 1,
+          "toolchain": "Visual Studio"
+        }
       }
     },
     {
       "name": "windows-release",
       "displayName": "Windows Release",
       "inherits": "windows-debug",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     },
     {
       "name": "macos-debug",
       "displayName": "macOS Debug",
       "inherits": "base",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
@@ -45,13 +62,108 @@
       "name": "macos-release",
       "displayName": "macOS Release",
       "inherits": "macos-debug",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "windows-shipping",
+      "displayName": "Windows Shipping (version livrée)",
+      "inherits": "windows-release",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "MOTEUR_SHIPPING": "ON"
+      }
+    },
+    {
+      "name": "macos-shipping",
+      "displayName": "macOS Shipping (version livrée)",
+      "inherits": "macos-release",
+      "cacheVariables": {
+        "MOTEUR_SHIPPING": "ON"
+      }
+    },
+    {
+      "name": "windows-asan",
+      "displayName": "Windows AddressSanitizer (analyses)",
+      "inherits": "windows-release",
+      "cacheVariables": {
+        "MOTEUR_ASAN": "ON"
+      }
+    },
+    {
+      "name": "macos-asan",
+      "displayName": "macOS AddressSanitizer + UBSan (analyses)",
+      "inherits": "macos-release",
+      "cacheVariables": {
+        "MOTEUR_ASAN": "ON"
+      }
+    },
+    {
+      "name": "windows-fuzz",
+      "displayName": "Windows fuzzing (libFuzzer + ASan)",
+      "inherits": "windows-release",
+      "cacheVariables": {
+        "MOTEUR_FUZZ": "ON",
+        "MOTEUR_BUILD_SANDBOX": "OFF",
+        "MOTEUR_BUILD_SLICE": "OFF",
+        "MOTEUR_BUILD_EXAMPLES": "OFF",
+        "MOTEUR_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "macos-fuzz",
+      "displayName": "macOS fuzzing (libFuzzer + ASan)",
+      "inherits": "macos-release",
+      "cacheVariables": {
+        "MOTEUR_FUZZ": "ON",
+        "MOTEUR_BUILD_SANDBOX": "OFF",
+        "MOTEUR_BUILD_SLICE": "OFF",
+        "MOTEUR_BUILD_EXAMPLES": "OFF",
+        "MOTEUR_BUILD_TESTS": "OFF"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "windows-debug", "configurePreset": "windows-debug" },
-    { "name": "windows-release", "configurePreset": "windows-release" },
-    { "name": "macos-debug", "configurePreset": "macos-debug" },
-    { "name": "macos-release", "configurePreset": "macos-release" }
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release"
+    },
+    {
+      "name": "macos-debug",
+      "configurePreset": "macos-debug"
+    },
+    {
+      "name": "macos-release",
+      "configurePreset": "macos-release"
+    },
+    {
+      "name": "windows-shipping",
+      "configurePreset": "windows-shipping"
+    },
+    {
+      "name": "macos-shipping",
+      "configurePreset": "macos-shipping"
+    },
+    {
+      "name": "windows-asan",
+      "configurePreset": "windows-asan"
+    },
+    {
+      "name": "macos-asan",
+      "configurePreset": "macos-asan"
+    },
+    {
+      "name": "windows-fuzz",
+      "configurePreset": "windows-fuzz"
+    },
+    {
+      "name": "macos-fuzz",
+      "configurePreset": "macos-fuzz"
+    }
   ]
 }

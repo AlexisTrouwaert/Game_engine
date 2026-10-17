@@ -206,3 +206,25 @@ TEST_CASE("Aabb: intersection with a sphere") {
     CHECK(moteur::intersects_sphere(box, {2.0f, 2.0f, 2.0f}, 1.74f));
     CHECK_FALSE(moteur::intersects_sphere(moteur::Aabb{}, {0.0f, 0.0f, 0.0f}, 100.0f));
 }
+
+TEST_CASE("Point shadow faces: a caster nearer than the light's shadow near plane is left out") {
+    // A gas lamp: the flame at 3.52 m, the lantern's base plate 0.2 m below it, the ground below.
+    const glm::vec3 flame(0.0f, 3.52f, 0.0f);
+    const glm::vec3 plate = flame + glm::vec3(0.0f, -0.2f, 0.0f);
+    const glm::vec3 ground(0.5f, 0.0f, 0.3f);
+    const auto depth = [&](const moteur::PointShadowFaces& faces, glm::vec3 point) {
+        const glm::vec4 clip = faces.view_projection[moteur::point_shadow_face(point - flame)] * glm::vec4(point, 1.0f);
+        return clip.z / clip.w;  // [0, 1] between the near and far planes
+    };
+    const moteur::PointShadowFaces automatic = moteur::point_shadow_faces(flame, 12.0f, 512);
+    const moteur::PointShadowFaces lamp = moteur::point_shadow_faces(flame, 12.0f, 512, 0.3f);
+    CHECK(depth(automatic, plate) >= 0.0f);  // automatic near plane (6 cm): the plate casts its shadow
+    CHECK(depth(lamp, plate) < 0.0f);        // 30 cm: clipped, it casts none
+    CHECK(depth(lamp, ground) >= 0.0f);      // what is further still does
+    CHECK(depth(lamp, ground) <= 1.0f);
+    // The same as the automatic one when given 0, and never nearer than 2 cm.
+    const moteur::PointShadowFaces zero = moteur::point_shadow_faces(flame, 12.0f, 512, 0.0f);
+    CHECK(zero.view_projection[3] == automatic.view_projection[3]);
+    const moteur::PointShadowFaces tiny = moteur::point_shadow_faces(flame, 12.0f, 512, 0.001f);
+    CHECK(depth(tiny, flame + glm::vec3(0.0f, -0.015f, 0.0f)) < 0.0f);
+}

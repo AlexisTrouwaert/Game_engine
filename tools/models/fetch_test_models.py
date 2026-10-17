@@ -4,7 +4,7 @@ environment into assets/environments/ (about 1.6 MB), neither kept in Git.
     python tools/models/fetch_test_models.py
 
 All come from Poly Haven (https://polyhaven.com), under CC0: public domain, no attribution
-required. Their authors are credited anyway, in assets/credits.json and in the "À propos" window of
+required. Their authors are credited anyway, in assets/credits.json and in the "About" window of
 the sandbox. Keep this list and that file in step.
 
 The environment is an equirectangular HDR image (the sandbox loads every .hdr of

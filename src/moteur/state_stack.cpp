@@ -207,17 +207,42 @@ void LoadingState::update(double) {
     if (done() || !error_.empty() || stack() == nullptr) {
         return;
     }
+    if (waiting_) {
+        if (!asked_) {
+            ready_ = steps_[done_].until();  // nobody asked waiting() (a game that does not forward it)
+        }
+        asked_ = false;
+        if (!ready_) {
+            return;  // a tick that does not count (see waiting())
+        }
+        // Ready: this tick goes on with the next step, as if the wait had not been (same ticks as
+        // a load without background work: replays and captures do not change).
+        SDL_Log("Loading: '%s' ready", label().c_str());
+        waiting_ = false;
+        ready_ = false;
+        ++done_;
+    }
+    const Uint64 start = SDL_GetPerformanceCounter();
+    const std::string step = label();
     try {
         if (done_ < steps_.size()) {
-            if (steps_[done_].run) {
-                steps_[done_].run();
+            Step& current = steps_[done_];
+            if (current.run) {
+                current.run();
             }
-            ++done_;
+            if (current.until && !current.until()) {
+                waiting_ = true;
+            } else {
+                ++done_;
+            }
         } else {
             std::unique_ptr<GameState> next = make_next_ ? make_next_() : nullptr;
             ++done_;
             stack()->replace(std::move(next));
         }
+        SDL_Log("Loading: '%s' in %.1f ms", step.c_str(),
+                static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 /
+                    static_cast<double>(SDL_GetPerformanceFrequency()));
     } catch (const std::exception& e) {
         error_ = e.what();
         failed(error_);
@@ -225,6 +250,15 @@ void LoadingState::update(double) {
     // The step's time is not owed to the game: without this, the next frame would run the ticks
     // it "missed", each with a step of its own, and the screen would not move in between.
     stack()->restart_clock();
+}
+
+bool LoadingState::waiting() {
+    if (!waiting_ || done_ >= steps_.size() || !error_.empty()) {
+        return false;
+    }
+    ready_ = steps_[done_].until();
+    asked_ = true;
+    return !ready_;
 }
 
 void LoadingState::render(Renderer& renderer, double) {

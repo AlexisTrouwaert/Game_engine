@@ -12,7 +12,7 @@
     "#": ["sol", "mur"],
     "=": ["sol", "barriere"],
     "%": ["sol", "herbe_haute"],
-    "@": {"tiles": ["sol"], "point": "depart"},
+    "@": {"tiles": ["sol"], "point": "start"},
     "s": {"tiles": ["sol"], "point": "monstres"},
     "*": {"tiles": ["sol"], "point": "but"}
   },

@@ -11,15 +11,20 @@ namespace moteur {
 // Lighting is computed on *linear* values (proportional to light energy). Images and screens store
 // *sRGB* values, spaced to match what the eye perceives: 0.5 in sRGB is only about 0.21 in linear.
 
-// The sRGB transfer functions, per component, on [0, 1].
+/// The exact sRGB transfer functions (IEC 61966-2-1, with the linear toe near 0), applied per
+/// component. Inputs are clamped to [0, 1] first, so HDR values above 1 come out as 1: tone map
+/// them (tonemap_pbr_neutral()) before converting to sRGB. Pure functions, callable from any thread.
+///@{
 float srgb_to_linear(float srgb);
 float linear_to_srgb(float linear);
 glm::vec3 srgb_to_linear(glm::vec3 srgb);
 glm::vec3 linear_to_srgb(glm::vec3 linear);
+///@}
 
-// Khronos PBR Neutral tone mapping: brings linear HDR values (lights can exceed 1.0) into [0, 1]
-// for the screen. Colors below about 0.76 pass almost unchanged (so materials keep the look they
-// have in Blender and other glTF viewers); brighter ones are compressed smoothly towards white.
+/// Khronos PBR Neutral tone mapping: brings linear HDR values (lights can exceed 1.0) into [0, 1]
+/// for the screen. Colors below about 0.76 pass almost unchanged (so materials keep the look they
+/// have in Blender and other glTF viewers); brighter ones are compressed smoothly towards white.
+/// The result is still linear: convert it with linear_to_srgb() for an 8-bit sRGB image.
 glm::vec3 tonemap_pbr_neutral(glm::vec3 color);
 
 }  // namespace moteur

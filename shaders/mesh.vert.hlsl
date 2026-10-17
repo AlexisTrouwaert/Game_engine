@@ -27,7 +27,8 @@ struct Input {
     float4 world0 : TEXCOORD4;
     float4 world1 : TEXCOORD5;
     float4 world2 : TEXCOORD6;
-    // Rows of its inverse transpose: keeps normals perpendicular under non-uniform scaling.
+    // Rows of its inverse transpose: keeps normals perpendicular under non-uniform scaling. The w of
+    // the first row is the alpha cutoff of the material (0: opaque; see alpha_test.hlsli).
     float4 normal0 : TEXCOORD7;
     float4 normal1 : TEXCOORD8;
     float4 normal2 : TEXCOORD9;
@@ -51,6 +52,7 @@ struct Output {
     nointerpolation float4 emissive : TEXCOORD6;
     float joint_weight : TEXCOORD7;  // weights view: the weight of debug.x; -1 for a mesh without skin
     nointerpolation float3 origin : TEXCOORD8;  // the instance's place: decides the cutout for the whole object
+    nointerpolation float alpha_cutoff : TEXCOORD9;  // 0: opaque material
     float4 position : SV_Position;
 };
 
@@ -85,5 +87,6 @@ Output main(Input input) {
     output.emissive = input.emissive;
     output.joint_weight = joint_weight;
     output.origin = float3(input.world0.w, input.world1.w, input.world2.w);
+    output.alpha_cutoff = input.normal0.w;
     return output;
 }

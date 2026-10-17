@@ -1,0 +1,60 @@
+﻿; The installer of a game (Inno Setup; cmake/PackageWindows.cmake fills it in for moteur_package).
+; Saved with a UTF-8 byte order mark: Inno Setup then reads it as UTF-8.
+;
+; - For all users (Program Files, administrator rights) by default; the first page lets the player
+;   install for themselves only (no rights needed; also /CURRENTUSER on the command line).
+; - An update installs over the previous version (same AppId), the old archives removed first.
+; - Uninstalling removes what was installed and nothing else: saves, settings, log and crash reports
+;   live in the player's folder (%APPDATA%\<organization>\<game>), which stays.
+
+[Setup]
+AppId={{@ISS_APP_ID@}
+AppName=@ISS_NAME@
+AppVersion=@ISS_VERSION@
+AppVerName=@ISS_NAME@ @ISS_VERSION@
+AppPublisher=@ISS_PUBLISHER@
+VersionInfoVersion=@ISS_VERSION@
+VersionInfoProductName=@ISS_NAME@
+DefaultDirName={autopf}\@ISS_NAME@
+DisableProgramGroupPage=yes
+DisableDirPage=auto
+DisableWelcomePage=yes
+PrivilegesRequired=admin
+PrivilegesRequiredOverridesAllowed=dialog commandline
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+; Windows 10 1903: the UTF-8 code page of the executable's manifest.
+MinVersion=10.0.18362
+OutputDir=@ISS_OUTPUT@
+OutputBaseFilename=@ISS_OUTPUT_NAME@
+@ISS_ICON@
+UninstallDisplayIcon={app}\@ISS_EXE@
+UninstallDisplayName=@ISS_NAME@
+; The archives are already compressed entry by entry (Zstandard): LZMA2 gains little but costs nothing.
+Compression=lzma2/max
+SolidCompression=yes
+WizardStyle=modern
+CloseApplications=yes
+RestartApplications=no
+@ISS_SIGN@
+
+[Languages]
+Name: "french"; MessagesFile: "compiler:Languages\French.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+[InstallDelete]
+; An update: the previous version's archives go, whatever their names were.
+Type: filesandordirs; Name: "{app}\archives"
+
+[Files]
+Source: "@ISS_SOURCE@\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{autoprograms}\@ISS_NAME@"; Filename: "{app}\@ISS_EXE@"
+Name: "{autodesktop}\@ISS_NAME@"; Filename: "{app}\@ISS_EXE@"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\@ISS_EXE@"; Description: "{cm:LaunchProgram,@ISS_NAME@}"; Flags: nowait postinstall skipifsilent

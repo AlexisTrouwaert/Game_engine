@@ -18,6 +18,11 @@ constexpr float kOrthographicDistance = 100.0f;
 // the near and far planes.
 constexpr float kDepthBeyondTarget = 150.0f;
 
+// True when the viewport has pixels (both sides positive): the pixel conversions divide by them.
+bool has_pixels(glm::vec2 viewport) {
+    return viewport.x > 0.0f && viewport.y > 0.0f;
+}
+
 }  // namespace
 
 void Camera3D::set_angles(float yaw_degrees, float pitch_degrees) {
@@ -83,7 +88,10 @@ Frustum Frustum::from_view_projection(const glm::mat4& m) {
     frustum.planes[4] = row(2);
     frustum.planes[5] = row(3) - row(2);
     for (glm::vec4& plane : frustum.planes) {
-        plane /= glm::length(glm::vec3(plane));
+        // A degenerate matrix gives planes without a normal: left all zero (they contain
+        // everything) rather than divided by zero.
+        const float length = glm::length(glm::vec3(plane));
+        plane = length > 0.0f ? plane / length : glm::vec4(0.0f);
     }
     return frustum;
 }
@@ -114,7 +122,10 @@ bool Frustum::intersects(const Aabb& box) const {
 
 Ray Camera3D::screen_ray(glm::vec2 pixel) const {
     // Window pixel -> clip space (y up), then back through the camera, on the near and far planes.
-    const glm::vec2 ndc(pixel.x / viewport_.x * 2.0f - 1.0f, 1.0f - pixel.y / viewport_.y * 2.0f);
+    // A viewport without pixels: the ray through the middle of the view.
+    const glm::vec2 ndc = has_pixels(viewport_)
+                              ? glm::vec2(pixel.x / viewport_.x * 2.0f - 1.0f, 1.0f - pixel.y / viewport_.y * 2.0f)
+                              : glm::vec2(0.0f);
     const glm::mat4 inverse = glm::inverse(view_projection());
     const glm::vec4 near_point = inverse * glm::vec4(ndc, 0.0f, 1.0f);
     const glm::vec4 far_point = inverse * glm::vec4(ndc, 1.0f, 1.0f);
@@ -128,6 +139,9 @@ std::optional<glm::vec3> Camera3D::ground_point(glm::vec2 pixel, float height) c
 }
 
 std::optional<glm::vec2> Camera3D::world_to_screen(glm::vec3 world) const {
+    if (!has_pixels(viewport_)) {
+        return std::nullopt;  // no pixel to land on
+    }
     const glm::vec4 clip = view_projection() * glm::vec4(world, 1.0f);
     if (clip.w <= 1e-6f) {
         return std::nullopt;
@@ -156,7 +170,8 @@ void Camera3D::follow(glm::vec3 goal, float dt, float half_life) {
 }
 
 glm::mat4 Camera3D::projection_matrix() const {
-    const float aspect = viewport_.y > 0.0f ? viewport_.x / viewport_.y : 1.0f;
+    // A viewport without pixels keeps a square view rather than a zero (or infinite) aspect ratio.
+    const float aspect = has_pixels(viewport_) ? viewport_.x / viewport_.y : 1.0f;
     const float far_plane = distance() + kDepthBeyondTarget;
     if (projection_ == Projection::Orthographic) {
         const float half_height = visible_height_ * 0.5f;

@@ -7,9 +7,24 @@
 //
 // With SKINNED defined (shadow_skinned.vert.hlsl): the vertices first follow the joints of their pose
 // (skinning.hlsli); 4 is the instance's emissive row (its palette), 5 and 6 the vertex's joints and weights.
+//
+// With MASKED defined (shadow_masked*.vert.hlsl, review of milestones 1 to 7, 3.1): an alpha-tested
+// material (glTF MASK) casts the shadow of its cut-out shape. The vertex's uv, the instance's base
+// color and its first normal row (w: the alpha cutoff) follow the inputs above, and go to the
+// fragment stage (shadow_masked.frag.hlsl), which drops what the cutoff removes.
 
 #ifdef SKINNED
 #include "skinning.hlsli"
+#endif
+
+#if defined(MASKED) && defined(SKINNED)
+#define UV_INPUT TEXCOORD7
+#define BASE_COLOR_INPUT TEXCOORD8
+#define CUTOFF_INPUT TEXCOORD9
+#elif defined(MASKED)
+#define UV_INPUT TEXCOORD4
+#define BASE_COLOR_INPUT TEXCOORD5
+#define CUTOFF_INPUT TEXCOORD6
 #endif
 
 cbuffer Frame : register(b0, space1) {
@@ -26,14 +41,40 @@ struct Input {
     uint4 joints : TEXCOORD5;
     float4 weights : TEXCOORD6;
 #endif
+#ifdef MASKED
+    float2 uv : UV_INPUT;
+    float4 base_color : BASE_COLOR_INPUT;  // a: the material's alpha factor
+    float4 normal0 : CUTOFF_INPUT;         // w: the alpha cutoff
+#endif
 };
 
-float4 main(Input input) : SV_Position {
+#ifdef MASKED
+struct Output {
+    float2 uv : TEXCOORD0;
+    nointerpolation float2 alpha : TEXCOORD1;  // x: alpha factor, y: cutoff
+    float4 position : SV_Position;
+};
+#endif
+
+float4 world_position_of(Input input) {
 #ifdef SKINNED
     const float4 p = float4(mul(skin_matrix((uint)input.emissive.w, input.joints, input.weights), float4(input.position, 1.0)), 1.0);
 #else
     const float4 p = float4(input.position, 1.0);
 #endif
-    const float3 world_position = float3(dot(input.world0, p), dot(input.world1, p), dot(input.world2, p));
-    return mul(light_view_projection, float4(world_position, 1.0));
+    return float4(dot(input.world0, p), dot(input.world1, p), dot(input.world2, p), 1.0);
 }
+
+#ifdef MASKED
+Output main(Input input) {
+    Output output;
+    output.position = mul(light_view_projection, world_position_of(input));
+    output.uv = input.uv;
+    output.alpha = float2(input.base_color.a, input.normal0.w);
+    return output;
+}
+#else
+float4 main(Input input) : SV_Position {
+    return mul(light_view_projection, world_position_of(input));
+}
+#endif

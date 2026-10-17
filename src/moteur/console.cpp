@@ -58,7 +58,7 @@ bool Console::split(std::string_view line, std::vector<std::string>& words, std:
         }
     }
     if (quoted) {
-        error = "guillemet non fermé";
+        error = "unclosed quote";
         return false;
     }
     if (in_word) {
@@ -108,11 +108,13 @@ void Console::submit(const std::string& line) {
     }
     const Command* command = find(words[0]);
     if (command == nullptr) {
-        error("commande inconnue : " + words[0] + " (help pour la liste)");
+        error("unknown command: " + words[0] + " (type help for the list)");
         return;
     }
     bool game = command->kind == Kind::Game;
-    if (words[0] == "set" && words.size() >= 2) {
+    // Changing a Logic variable changes the game: queued like a game command, so that it runs on a
+    // tick and the input recording keeps it.
+    if ((words[0] == "set" || words[0] == "reset" || words[0] == "toggle") && words.size() >= 2) {
         const Variable* variable = variables_.find(words[1]);
         game = variable != nullptr && (variable->flags() & Variable::Logic) != 0;
     }
@@ -152,7 +154,7 @@ void Console::run_game_command(const std::string& line) {
     std::vector<std::string> words;
     std::string problem;
     if (!split(line, words, problem) || words.empty()) {
-        error("commande de jeu illisible : " + line);
+        error("cannot parse the game command: " + line);
         return;
     }
     execute(words, true);
@@ -161,7 +163,7 @@ void Console::run_game_command(const std::string& line) {
 void Console::execute(const std::vector<std::string>& words, bool from_queue) {
     const Command* command = find(words[0]);
     if (command == nullptr) {
-        error("commande inconnue : " + words[0]);
+        error("unknown command: " + words[0]);
         return;
     }
     (void)from_queue;
@@ -169,7 +171,7 @@ void Console::execute(const std::vector<std::string>& words, bool from_queue) {
     try {
         command->handler(args, *this);
     } catch (const std::exception& e) {
-        error(words[0] + " : " + e.what());
+        error(words[0] + ": " + e.what());
     }
 }
 
@@ -240,81 +242,81 @@ std::string Console::complete_line(const std::string& line) const {
 }
 
 void Console::add_builtins() {
-    add("help", "[commande]", "liste les commandes, ou l'aide d'une commande", Kind::Tool, [](const Args& args, Console& c) {
+    add("help", "[command]", "lists the commands, or shows the help of one command", Kind::Tool, [](const Args& args, Console& c) {
         if (!args.empty()) {
             const Command* command = c.find(args[0]);
             if (command == nullptr) {
-                c.error("commande inconnue : " + args[0]);
+                c.error("unknown command: " + args[0]);
                 return;
             }
-            c.print(command->name + " " + command->usage + " : " + command->help +
-                    (command->kind == Kind::Game ? " (commande de jeu : au tick suivant)" : ""));
+            c.print(command->name + " " + command->usage + ": " + command->help +
+                    (command->kind == Kind::Game ? " (game command: runs on the next tick)" : ""));
             return;
         }
         for (const Command& command : c.commands_) {
-            c.print(command.name + (command.usage.empty() ? "" : " " + command.usage) + " : " + command.help);
+            c.print(command.name + (command.usage.empty() ? "" : " " + command.usage) + ": " + command.help);
         }
     });
-    add("set", "<variable> <valeur>", "change une variable", Kind::Tool, [](const Args& args, Console& c) {
+    add("set", "<variable> <value>", "sets a variable", Kind::Tool, [](const Args& args, Console& c) {
         if (args.size() != 2) {
-            c.error("usage : set <variable> <valeur>");
+            c.error("usage: set <variable> <value>");
             return;
         }
         Variable* variable = c.variables_.find(args[0]);
         if (variable == nullptr) {
-            c.error("variable inconnue : " + args[0] + " (vars pour la liste)");
+            c.error("unknown variable: " + args[0] + " (type vars for the list)");
             return;
         }
         std::string problem;
         if (!variable->set_text(args[1], problem)) {
-            c.error(args[0] + " : " + problem);
+            c.error(args[0] + ": " + problem);
             return;
         }
         c.print(variable->name() + " = " + variable->value_text());
     });
-    add("get", "<variable>", "affiche une variable", Kind::Tool, [](const Args& args, Console& c) {
+    add("get", "<variable>", "shows a variable", Kind::Tool, [](const Args& args, Console& c) {
         if (args.size() != 1) {
-            c.error("usage : get <variable>");
+            c.error("usage: get <variable>");
             return;
         }
         const Variable* variable = c.variables_.find(args[0]);
         if (variable == nullptr) {
-            c.error("variable inconnue : " + args[0]);
+            c.error("unknown variable: " + args[0]);
             return;
         }
-        c.print(variable->name() + " = " + variable->value_text() + " (défaut " + variable->default_text() + ") : " + variable->help());
+        c.print(variable->name() + " = " + variable->value_text() + " (default " + variable->default_text() + "): " + variable->help());
     });
-    add("reset", "<variable>", "remet une variable à sa valeur par défaut", Kind::Tool, [](const Args& args, Console& c) {
+    add("reset", "<variable>", "resets a variable to its default value", Kind::Tool, [](const Args& args, Console& c) {
         Variable* variable = args.size() == 1 ? c.variables_.find(args[0]) : nullptr;
         if (variable == nullptr) {
-            c.error("usage : reset <variable>");
+            c.error("usage: reset <variable>");
             return;
         }
         variable->reset();
         c.print(variable->name() + " = " + variable->value_text());
     });
-    add("toggle", "<variable>", "inverse une variable booléenne", Kind::Tool, [](const Args& args, Console& c) {
+    add("toggle", "<variable>", "flips a boolean variable", Kind::Tool, [](const Args& args, Console& c) {
         Variable* variable = args.size() == 1 ? c.variables_.find(args[0]) : nullptr;
         if (variable == nullptr || variable->type() != Variable::Type::Bool) {
-            c.error("usage : toggle <variable booléenne>");
+            c.error("usage: toggle <boolean variable>");
             return;
         }
         variable->set_bool(!variable->as_bool());
         c.print(variable->name() + " = " + variable->value_text());
     });
-    add("vars", "[préfixe]", "liste les variables", Kind::Tool, [](const Args& args, Console& c) {
+    add("vars", "[prefix]", "lists the variables", Kind::Tool, [](const Args& args, Console& c) {
         for (const Variable* variable : c.variables_.list(args.empty() ? std::string_view() : std::string_view(args[0]))) {
-            c.print(variable->name() + " = " + variable->value_text() + (variable->is_default() ? "" : " *") + " : " + variable->help());
+            c.print(variable->name() + " = " + variable->value_text() + (variable->is_default() ? "" : " *") + ": " + variable->help());
         }
     });
-    add("echo", "<texte>", "affiche un texte", Kind::Tool, [](const Args& args, Console& c) {
+    add("echo", "<text>", "prints a text", Kind::Tool, [](const Args& args, Console& c) {
         std::string text;
         for (const std::string& word : args) {
             text += (text.empty() ? "" : " ") + word;
         }
         c.print(text);
     });
-    add("clear", "", "efface la console", Kind::Tool, [](const Args&, Console& c) { c.clear(); });
+    add("clear", "", "clears the console", Kind::Tool, [](const Args&, Console& c) { c.clear(); });
 }
 
 }  // namespace moteur

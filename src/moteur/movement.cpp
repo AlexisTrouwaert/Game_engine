@@ -1,5 +1,6 @@
 #include "moteur/movement.hpp"
 
+#include "moteur/fixed_timestep.hpp"
 #include "moteur/profiler.hpp"
 
 #include <algorithm>
@@ -13,7 +14,7 @@ namespace moteur {
 namespace {
 
 constexpr float kDefaultRadius = 0.3f;
-constexpr int kBlockedTicks = 30;       // half a second at 60 Hz barely moving: blocked
+constexpr double kBlockedSeconds = 0.5;  // barely moving for this long: blocked
 constexpr float kSlowShare = 0.2f;      // "barely": under this share of its speed
 
 // The entities with a Mover, in the order of their identifiers.
@@ -82,7 +83,7 @@ glm::quat facing_rotation(glm::vec2 facing) {
 
 void plan_paths(entt::registry& registry, const NavGrid& grid, const ClearanceMap& clearance, int max_paths,
                 MovementStats& stats, int max_nodes) {
-    MOTEUR_PROFILE("chemins");
+    MOTEUR_PROFILE("paths");
     for (const entt::entity entity : sorted_movers(registry)) {
         Mover& mover = registry.get<Mover>(entity);
         if (!mover.needs_path || mover.mode != MoveMode::ToPoint) {
@@ -105,9 +106,10 @@ void plan_paths(entt::registry& registry, const NavGrid& grid, const ClearanceMa
         mover.next_point = 0;
         mover.path_status = result.status;
         mover.slow_ticks = 0;
-        mover.state = result.status == PathStatus::None ? MoveState::NoPath
-                      : mover.path.empty()               ? MoveState::Arrived
-                                                         : MoveState::Moving;
+        // An empty path ends at once: Arrived only if it is at the goal (a Partial one is not).
+        mover.state = !mover.path.empty()                 ? MoveState::Moving
+                      : result.status == PathStatus::Found ? MoveState::Arrived
+                                                           : MoveState::NoPath;
     }
 }
 
@@ -118,7 +120,7 @@ void move_movers(entt::registry& registry, const NavGrid& grid, float dt, const 
 
 void move_movers(entt::registry& registry, const NavGrid& grid, float dt, std::span<const FlowField* const> fields,
                  MovementStats& stats) {
-    MOTEUR_PROFILE("déplacements");
+    MOTEUR_PROFILE("movement");
     for (const entt::entity entity : sorted_movers(registry)) {
         Mover& mover = registry.get<Mover>(entity);
         ++stats.movers;
@@ -168,7 +170,8 @@ void move_movers(entt::registry& registry, const NavGrid& grid, float dt, std::s
                 }
                 wanted = at - start;
                 if (mover.next_point >= mover.path.size()) {
-                    mover.state = MoveState::Arrived;
+                    // The end of its path: the goal, or as near as it could go (Partial, None).
+                    mover.state = mover.path_status == PathStatus::Found ? MoveState::Arrived : MoveState::NoPath;
                     mover.mode = MoveMode::Stop;
                 } else {
                     mover.state = MoveState::Moving;
@@ -191,7 +194,9 @@ void move_movers(entt::registry& registry, const NavGrid& grid, float dt, std::s
                     mover.state = MoveState::Blocked;  // outside the field
                     break;
                 }
-                wanted = direction * std::min(budget, length_of(to_target) - mover.stop_distance);
+                // Never past the field's end (aim(): the target, or the cell moved off a target in a wall).
+                wanted = direction * std::min({budget, length_of(to_target) - mover.stop_distance,
+                                               length_of(field->aim() - start)});
                 mover.state = MoveState::Moving;
                 break;
             }
@@ -212,13 +217,13 @@ void move_movers(entt::registry& registry, const NavGrid& grid, float dt, std::s
 }
 
 void finish_movers(entt::registry& registry, float dt) {
-    MOTEUR_PROFILE("déplacements : fin");
+    MOTEUR_PROFILE("movement: finish");
     for (const entt::entity entity : sorted_movers(registry)) {
         Mover& mover = registry.get<Mover>(entity);
         const glm::vec2 travelled = plane_position(registry, entity) - mover.tick_start;
         mover.actual_speed = dt > 0.0f ? length_of(travelled) / dt : 0.0f;
         if (mover.state == MoveState::Moving && mover.actual_speed < mover.speed * kSlowShare) {
-            if (++mover.slow_ticks >= kBlockedTicks) {
+            if (++mover.slow_ticks >= ticks_from_seconds(kBlockedSeconds)) {
                 mover.state = MoveState::Blocked;
                 mover.slow_ticks = 0;
                 if (mover.mode == MoveMode::ToPoint) {

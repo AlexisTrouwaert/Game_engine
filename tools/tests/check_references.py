@@ -13,6 +13,10 @@ BUILD_DIR: the build to test (default: build/windows-release, or build/macos-rel
 wanted). --quick skips the second save point and the editor. The player's key bindings of the 3D
 demo are moved aside while it runs (they change the help line of the captures). Exit code 0 when
 everything matches.
+
+The captures need the test assets, which are not in Git: tools/models/fetch_test_models.py,
+fetch_test_characters.py, tools/audio/fetch_test_sounds.py, and the ARPG's first assets
+(tools/models/fetch_arpg_models.py: the slice's cobblestones and street lamps, since 2026-10-17).
 """
 
 import hashlib

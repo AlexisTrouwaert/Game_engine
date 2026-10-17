@@ -14,6 +14,7 @@
 #include <set>
 #include <tuple>
 #include <stdexcept>
+#include <string_view>
 
 #include "moteur/ktx_texture.hpp"
 #include "moteur/paths.hpp"
@@ -338,6 +339,16 @@ KeyTrack<T> read_keys(const cgltf_animation_sampler& sampler, std::size_t compon
     if (times.empty() || values.size() / components < times.size() * (cubic ? 3 : 1)) {
         throw std::runtime_error("an animation sampler has fewer values than times");
     }
+    // A clip of more than an hour is no clip: such times (or infinite ones) only come from a damaged
+    // file, and would make the 60 Hz sampling below run for ever (found by long fuzzing, milestone 8
+    // part 8).
+    constexpr float kMaxSeconds = 3600.0f;
+    for (const float time : times) {
+        if (!std::isfinite(time) || std::fabs(time) > kMaxSeconds) {
+            throw std::runtime_error("an animation sampler has a time beyond " + std::to_string(static_cast<int>(kMaxSeconds)) +
+                                     " s: " + std::to_string(time));
+        }
+    }
     for (std::size_t i = 1; i < times.size(); ++i) {
         if (!(times[i] > times[i - 1])) {
             throw std::runtime_error("an animation sampler has times that do not increase");
@@ -447,13 +458,18 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
         }
         const std::unique_ptr<cgltf_data, CgltfDeleter> gltf(raw);
 
-        if (gltf->extensions_required_count > 0) {
-            // Nothing required is supported yet (Draco or meshopt compression, quantized meshes...).
-            std::string names;
-            for (cgltf_size i = 0; i < gltf->extensions_required_count; ++i) {
-                names += (i > 0 ? ", " : "") + std::string(gltf->extensions_required[i]);
+        // A required extension the reader does not know would be read wrong: refused. Those below
+        // are read (a KTX2-only texture must list KHR_texture_basisu); not Draco or meshopt
+        // compression, quantized meshes...
+        std::string unsupported;
+        for (cgltf_size i = 0; i < gltf->extensions_required_count; ++i) {
+            const std::string_view extension = gltf->extensions_required[i];
+            if (extension != "KHR_texture_basisu" && extension != "KHR_materials_emissive_strength") {
+                unsupported += (unsupported.empty() ? "" : ", ") + std::string(extension);
             }
-            throw std::runtime_error("required extensions not supported: " + names);
+        }
+        if (!unsupported.empty()) {
+            throw std::runtime_error("required extensions not supported: " + unsupported);
         }
         // cgltf builds external paths from the directory of this "file" name.
         const std::string gltf_path = base_directory + "model.gltf";
@@ -544,6 +560,14 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
             }
             material.emissive_image = image_of(source.emissive_texture, true, material.name + " emissive");
             material.double_sided = source.double_sided;
+            if (source.alpha_mode == cgltf_alpha_mode_mask) {
+                // glTF's default cutoff is 0.5; a cutoff of 0 would keep everything: the smallest one that cuts.
+                material.alpha_cutoff = source.alpha_cutoff > 0.0f ? source.alpha_cutoff : 1.0f / 512.0f;
+            } else if (source.alpha_mode == cgltf_alpha_mode_blend) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Model '%s': material '%s' is BLEND (transparent), not supported yet: drawn opaque",
+                            name.c_str(), material.name.c_str());
+            }
             model.materials.push_back(std::move(material));
         }
 
@@ -620,6 +644,11 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
             const cgltf_skin& source = gltf->skins[s];
             SkinData skin;
             skin.name = source.name != nullptr ? source.name : "skin " + std::to_string(s);
+            // glTF requires at least one joint; without any, a vertex's default joint 0 would point
+            // into an empty palette (found by fuzzing, milestone 8 part 8).
+            if (source.joints_count == 0) {
+                throw std::runtime_error("skin '" + skin.name + "' has no joints");
+            }
             if (source.joints_count > 256) {
                 throw std::runtime_error("skin '" + skin.name + "' has " + std::to_string(source.joints_count) +
                                          " joints (256 at most)");
@@ -660,7 +689,8 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
             }
             for (cgltf_size p = 0; p < node->mesh->primitives_count; ++p) {
                 const cgltf_primitive& primitive = node->mesh->primitives[p];
-                const std::string part_name = node_name + "/" + mesh_name + "#" + std::to_string(p);
+                std::string part_name = node_name;  // "node/mesh#primitive"
+                part_name.append("/").append(mesh_name).append("#") += std::to_string(p);
                 if (primitive.type != cgltf_primitive_type_triangles) {
                     SDL_Log("Model '%s': part '%s' is not made of triangles, skipped", name.c_str(), part_name.c_str());
                     continue;
@@ -816,17 +846,22 @@ ModelData load_gltf(const std::string& path, const GltfOptions& gltf_options) {
     return parse_gltf(file.data(), file.size(), path, directory, gltf_options);  // a .glb's buffer points into `file`
 }
 
+TextureSettings model_texture_settings(const ModelImage& image) {
+    TextureSettings settings;
+    settings.srgb = image.srgb;
+    settings.mipmaps = true;
+    settings.premultiply = false;
+    settings.normal_map = image.normal;
+    return settings;
+}
+
 Model Model::create(Renderer& renderer, const ModelData& data, const std::string& name,
                     const TextureSource& texture_source) {
     Model model;
     // Colors in sRGB, data (normals, roughness, occlusion) as stored; mipmaps for all; straight alpha
     // (3D surfaces do not blend like sprites).
     for (const ModelImage& image : data.images) {
-        TextureSettings settings;
-        settings.srgb = image.srgb;
-        settings.mipmaps = true;
-        settings.premultiply = false;
-        settings.normal_map = image.normal;
+        const TextureSettings settings = model_texture_settings(image);
         if (texture_source && !image.file.empty()) {
             model.textures.push_back(texture_source(image, settings));
             continue;
@@ -835,7 +870,7 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
         if (!image.ktx2.empty()) {
             const CompressedImage decoded = decode_ktx2(image.ktx2.data(), image.ktx2.size(), image.name, settings,
                                                         renderer.compressed_formats());
-            texture = std::make_shared<Texture>(renderer.create_texture(decoded, image.name.c_str()));
+            texture = std::make_shared<Texture>(create_compressed_texture(renderer, decoded, image.name.c_str()));
         } else if (!image.image.pixels.empty()) {
             texture = std::make_shared<Texture>(renderer.create_texture(image.image, settings, image.name.c_str()));
         } else {
@@ -856,6 +891,7 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
         material.occlusion_strength = source.occlusion_strength;
         material.emissive = source.emissive;
         material.double_sided = source.double_sided;
+        material.alpha_cutoff = source.alpha_cutoff;
         material.base_color_texture = texture(source.base_color_image);
         material.metallic_roughness_texture = texture(source.metallic_roughness_image);
         material.normal_texture = texture(source.normal_image);

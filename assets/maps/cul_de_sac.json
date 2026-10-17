@@ -8,7 +8,7 @@
   "legend": {
     ".": ["sol"],
     "#": ["sol", "mur"],
-    "@": {"tiles": ["sol"], "point": "depart"},
+    "@": {"tiles": ["sol"], "point": "start"},
     "*": {"tiles": ["sol"], "point": "but"}
   },
   "rows": [

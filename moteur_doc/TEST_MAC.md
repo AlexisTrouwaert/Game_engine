@@ -346,7 +346,7 @@ Construit et vérifié sous Windows. À faire sur le Mac au fil des parties.
 - [ ] Tests unitaires : **255** cas, en Debug et en Release (`test_state_stack`).
 - [ ] Capture de la démo 3D : `--no-input` donne `fdc076d9c3ae`, `--replay-input tests/data/demo3d_replay.json` donne `952477744ffb` sous Windows (même commande, avec `--pixel-size 1280 720`). Seule la ligne de statistiques a changé : la capture attend que ses chiffres viennent d'une image gelée, et le survol gelé suit le pointeur du dernier tick. Lancer chaque commande trois fois : même hachage.
 - [ ] `--states-cycles 100` : « assets and GPU objects stable », « 0 pauses where the world moved », et la mémoire du processus sans tendance (dernière ligne : écart entre les minimums du début et de la fin ; Windows : 192 à 197 Mo). Le noter ici. En Debug, `--states-cycles 5` sans message de la couche de validation Metal.
-- [ ] Menu DEBUG > Tests moteur > « États de jeu » : Jouer, Échap met en pause (le monde reste visible, figé, assombri), Échap reprend, « Retour au titre », « Quitter le test ». Avec une manette : Start met en pause et reprend.
+- [ ] Menu DEBUG > Engine tests (autrefois « Tests moteur ») > « Playable slice (game states) » (autrefois « États de jeu ») : Jouer, Échap met en pause (le monde reste visible, figé, assombri), Échap reprend, « Retour au titre », « Quitter ». Avec une manette : Start met en pause et reprend.
 
 **Partie 7 : audio**
 
@@ -357,7 +357,7 @@ Avant : `python3 tools/audio/fetch_test_sounds.py` (sons de test, hors de Git).
 - [ ] Le log de démarrage dit `Audio: <sortie>, <Hz>, <canaux>, <ms> of buffer` : relever le tampon (Windows : 30 ms).
 - [ ] `--audio-burst --run-seconds 3` : au plus 21 voix, `output peak 0.9` (Windows : mélange 2,1 à 2,6, limiteur ×0,35 à 0,42).
 - [ ] Menu « Audio », à l'oreille : le feu tourne de gauche à droite, plus faible au loin, sans craquement ; les pas ; les clics ; les musiques du titre et du jeu en fondu enchaîné ; l'ambiance ; les volumes et pauses par groupe.
-- [ ] « États de jeu » : musique du titre, puis du jeu ; la pause la baisse ; « Retour au titre » la remplace en fondu.
+- [ ] « Playable slice (game states) » : musique du titre, puis du jeu ; la pause la baisse ; « Retour au titre » la remplace en fondu.
 - [ ] Casque (ou AirPods) branché puis débranché pendant la scène « Audio » : pas de plantage, le son passe sur les haut-parleurs (log `Audio: now playing on ...` ou `started again`).
 - [ ] La fenêtre perd le focus : le son se coupe, et revient au retour.
 
@@ -365,7 +365,7 @@ Avant : `python3 tools/audio/fetch_test_sounds.py` (sons de test, hors de Git).
 
 - [ ] Tests unitaires : **272** cas, en Debug et en Release (`test_debug_tools`).
 - [ ] `--menu-test 6` (démo 3D) : DEBUG > Inspecteur d'entités montre la créature 0 et ses composants (Transform, Marcheur, Santé...), encadrée en jaune dans le monde ; clic du milieu sur une autre créature : l'inspecteur la suit ; changer sa position la déplace, et le panneau dit « Modifié à la main ».
-- [ ] Les fenêtres Assets, Entrées, Audio, États de jeu (`--menu-test 8` pour les états) s'ouvrent et se ferment ; au relancement, les mêmes sont ouvertes, aux mêmes places (`imgui.ini` dans `~/Library/Application Support/moteur/bac_a_sable/`).
+- [ ] Les fenêtres Assets, Input, Audio, Game States (`--menu-test 8` pour les états) s'ouvrent et se ferment ; au relancement, les mêmes sont ouvertes, aux mêmes places (`imgui.ini` dans `~/Library/Application Support/moteur/bac_a_sable/`).
 - [ ] Assets : « Recharger » sur une texture de tonneau écrit `reloaded` dans le log, sans erreur Metal en Debug.
 - [ ] Captures de la démo 3D inchangées (`fdc076d9c3ae`, `952477744ffb`), avec le profil de touches par défaut : un profil « zqsd » enregistré change la ligne d'aide, donc la capture.
 
@@ -392,7 +392,7 @@ Détails dans [JALON_5_ANIMATION_3D.md](JALON_5_ANIMATION_3D.md).
 **Partie 3 : squelettes et clips glTF**
 
 - [ ] Tests unitaires : **285** cas en Debug et en Release (`test_skeleton` : les positions du modèle de référence retrouvées par ozz, en implémentation scalaire sur ARM ; les cas KayKit et Khronos demandent `fetch_test_characters.py`, sinon ils sont sautés avec un message).
-- [ ] DEBUG > Tests moteur > **Animation** (`--menu-test 10`) : six personnages côte à côte, leur squelette animé par-dessus (les maillages restent en pose de repos jusqu'à la partie 5), RiggedFigure debout, l'épée et le bouclier du chevalier qui suivent ses mains ; aucune erreur Metal en Debug.
+- [ ] DEBUG > Engine tests > **Animation** (`--menu-test 10`) : six personnages côte à côte, leur squelette animé par-dessus (les maillages restent en pose de repos jusqu'à la partie 5), RiggedFigure debout, l'épée et le bouclier du chevalier qui suivent ses mains ; aucune erreur Metal en Debug.
 - [ ] Rechargement à chaud : réécrire `assets/models/skinned_reference.glb` (`python3 tools/models/make_skinned_reference_model.py`) pendant que la scène tourne : `model`, `skeleton` et `clips` « reloaded » dans le log.
 - [ ] Captures de référence de la tranche et de la démo 3D inchangées par rapport aux relevés Mac du jalon 4.
 
@@ -400,7 +400,7 @@ Détails dans [JALON_5_ANIMATION_3D.md](JALON_5_ANIMATION_3D.md).
 
 - [ ] Tests unitaires : **291** cas en Debug et en Release (`test_animator`).
 - [ ] Démo 2D (`--demo --seed 42 --freeze-after 30 --no-input --capture`) : même image qu'avant la partie (l'`AnimationPlayer` passe par la nouvelle horloge ; deux lancements, même hachage).
-- [ ] Scène « Animation » sur l'écran du Mac (ProMotion 120 Hz si c'est le cas) : les squelettes bougent sans saccade ; avec `--fixed-hz 10`, décocher « Interpolation » fait sauter le mouvement dix fois par seconde, la recocher le rend fluide.
+- [ ] Scène « Animation » sur l'écran du Mac (ProMotion 120 Hz si c'est le cas) : les squelettes bougent sans saccade ; avec `--tick-rate 10`, décocher « Interpolation » fait sauter le mouvement dix fois par seconde, la recocher le rend fluide.
 - [ ] DEBUG > Inspecteur d'entités, monde « Animation » : l'`Animator` d'un personnage (clip, temps en ticks, vitesse modifiable).
 
 **Partie 5 : skinning sur le GPU**
@@ -455,7 +455,7 @@ Détails dans [JALON_6_MONDE_ET_DEPLACEMENT.md](JALON_6_MONDE_ET_DEPLACEMENT.md)
 
 - [ ] Les MSL exportés sous Windows sont à jour (`mesh.frag.msl` : brouillard et tramage, sampler 8 ; `billboard.vert.msl`, `billboard.frag.msl` : brouillard).
 - [ ] Tests unitaires : **351** cas en Debug et en Release (`test_map_data`, `test_world_grid`, `test_particles`). Les chemins, coûts, champs de vision et collisions sont calculés en entiers ou en opérations exactement arrondies : mêmes résultats que sous Windows. Noter les temps affichés par « Worst cases, measured » et « 20 000 particles, measured » (Windows : A\* 3,9 ms, flow field 5,8 ms, dégagement 3,7 ms, vision 0,015 ms, particules 0,17 ms).
-- [ ] DEBUG > Tests moteur > **Monde** (`--world`) sur chaque carte : le héros va au clic par les portes, glisse au clavier, les monstres (M, B) poursuivent et entourent le héros, le brouillard se lève, les murs se trament devant le héros, les feux et les effets (E) s'affichent ; aucune erreur Metal en Debug, avec `--aa none`, `fxaa`, `msaa4`.
+- [ ] DEBUG > Engine tests > **World** (`--world`) sur chaque carte : le héros va au clic par les portes, glisse au clavier, les monstres (M, B) poursuivent et entourent le héros, le brouillard se lève, les murs se trament devant le héros, les feux et les effets (E) s'affichent ; aucune erreur Metal en Debug, avec `--aa none`, `fxaa`, `msaa4`.
 - [ ] Rechargement à chaud : modifier une carte de `assets/maps/` ou un effet de `assets/effects/` pendant que la scène tourne : « map ... reloaded », « particle effect ... reloaded », la scène suit.
 - [ ] Captures : démo 2D `bd91e8b2c616`, démo 3D `fdc076d9c3ae` et rejeu `952477744ffb` (inchangées sous Windows) ; tranche `--states --replay-input tests/data/slice_replay.json --freeze-after 340 --run-seconds 9 --pixel-size 1280 720 --capture slice.png` → `f5421305c50a` sous Windows ; deux lancements, même hachage sur le Mac.
 - [ ] Charge : `--world-crowd 500 --world-map arene --run-seconds 10 --report` (Windows : 0,43 ms de logique par tick), `--world-fires 800 --world-map arene --run-seconds 8 --report` (Windows : 3,6 ms de CPU par image pour 19 000 particules, 23 draw calls).
@@ -478,13 +478,43 @@ Détails dans [JALON_7_OUTILS_ET_DONNEES.md](JALON_7_OUTILS_ET_DONNEES.md).
 - [ ] Tests unitaires : **389** cas en Debug et en Release (les nouveaux tests écrivent dans le dossier temporaire).
 - [ ] **MSL** : les shaders `mesh.frag` (seconde cible : la distance), `billboard.vert` et `billboard.frag` (particules douces) viennent du MSL exporté sous Windows ; aucune erreur Metal en sans anticrénelage, FXAA, MSAA 2x et 4x (`--aa`). Vérifier que le format `R16_FLOAT` est accepté comme cible multiéchantillonnée (sinon `supports()` grise les modes MSAA : le noter).
 - [ ] **Références** : `python3 tools/tests/check_references.py build/macos-release --record` la première fois (le Mac n'a pas encore de références : comparer les images à celles de Windows à l'œil), puis sans `--record` : tout correspond ; le **test d'exactitude** (A = B = C) doit passer sans référence.
-- [ ] **Console** (touche ² : sur un clavier Mac, la touche à gauche du 1, par position) : `help`, complétion (Tab), historique ; dans la tranche `god`, `spawn squelette_sbire 5`, `tp 20 20`, `kill all`, `heal`, `fog off`, `set time.scale 0.5`, `save`, `load`. Journal dans `~/Library/Application Support/moteur/bac_a_sable/journal.txt`.
+- [ ] **Console** (touche ² : sur un clavier Mac, la touche à gauche du 1, par position) : `help`, complétion (Tab), historique ; dans la tranche `god`, `spawn squelette_sbire 5`, `tp 20 20`, `kill all`, `heal`, `fog off`, `set time.scale 0.5`, `save`, `load`. Journal dans `~/Library/Application Support/moteur/bac_a_sable/log.txt`.
 - [ ] **Profiler** : fenêtre DEBUG > Profiler pendant un combat (zones `tranche : …`) ; `profile start` / `profile stop /tmp/p.json` s'ouvre dans ui.perfetto.dev.
 - [ ] **Sauvegardes** : pause > Sauvegarder (emplacement 1, vignette visible), retour au titre, Continuer : même partie ; Charger liste les emplacements ; `save.auto 10` puis jouer : deux sauvegardes automatiques tour à tour ; un fichier `.sav` tronqué à la main est marqué illisible et sa copie de secours se charge. Les écritures atomiques (`rename` après `fsync`) sous APFS : aucune erreur.
 - [ ] **Éditeur** : `editeur tranche`, puis `editeur salle_portes --self-test` (réussi) ; peindre, annuler, poser un arbre, enregistrer (le fichier des sources change d'une ligne), modifier le fichier dans un autre éditeur pendant que l'éditeur est ouvert : avertissement, pas d'écrasement ; F5 : la scène « Monde » sur la carte, Échap revient ; vue de dessus (T).
 - [ ] **Graphe d'animation** : la tranche joue attaques, coups reçus et chutes comme sous Windows ; fenêtre Animation : états, paramètres, dernières transitions ; un seuil changé dans `animations/kaykit.json` pendant le jeu est pris aussitôt.
 - [ ] **Particules douces** : la fumée de mort et la poussière des pas ne coupent plus net contre le sol.
 - [ ] **Chemins** : un dossier de préférences avec un accent (nom d'utilisateur) ne gêne ni le journal, ni les sauvegardes, ni les vignettes.
+
+## Jalon 8 : Consolidation
+
+Détails dans [JALON_8_CONSOLIDATION.md](JALON_8_CONSOLIDATION.md). Les commandes partent du dossier `moteur/`.
+
+**Vérification complète (partie 2 et suivantes)**
+
+- [ ] `python3 tools/ci/verify.py` : Debug, Release, exemple extérieur, références (`--record` la première fois sur le Mac), analyse statique (clang-tidy de Xcode ou de Homebrew), tests sous ASan, référence de l'API (Doxygen : `brew install doxygen`), configuration livrée et paquet `.dmg`. Noter chaque étape qui échoue et son message.
+
+**Robustesse (partie 8)**
+
+- [ ] **Rapport de plantage** (code POSIX jamais compilé jusqu'ici) : `tranche --test-plantage acces`, `abort`, `exception`, `assertion`, `gpu` : un rapport `.txt` chacun dans `~/Library/Application Support/moteur/tranche/crash_reports/`, le message en français, code de sortie 1 ; `python3 tools/crash/read_report.py RAPPORT.txt build/macos-shipping/packages/symbols/tranche-0.8.0-macos-arm64/` donne fonction, fichier et ligne (atos).
+- [ ] **ASan et UBSan** : preset `macos-asan`, `moteur_tests` propre ; la tranche rejouée (`--replay-input tests/data/slice_replay.json --freeze-after 340 --run-seconds 9`) sans erreur.
+- [ ] **Options d'affichage** : plein écran (sur macOS, un espace à part), retour en fenêtré, changement d'écran avec deux écrans, retour aux réglages précédents après 15 s sans confirmation ; `display.json` relu au lancement.
+- [ ] **Options audio et commandes** (partie 12) : les volumes s'entendent aussitôt et restent au relancement (`audio.json`) ; une touche changée (clavier, puis manette) marche en jeu et reste au relancement (`demo3d_bindings.json`) ; une touche déjà prise est retirée de l'autre action ; « Rétablir les touches par défaut ».
+
+**Mesures (partie 4) : la machine minimale**
+
+- [ ] `python3 tools/measures/measure.py build/macos-release` : les quatre scènes (fight, crowd, crossing, loading) et leurs budgets : 16,7 ms au 99ᵉ centile, fil principal ≤ 8 ms, aucune image > 33 ms, processus ≤ 2 Go, GPU ≤ 1,5 Go, chargement ≤ 5 s. Garder le dossier `build/measures/...` : c'est la référence du M3.
+
+**Paquet macOS (partie 11)**
+
+- [ ] `cmake --preset macos-shipping` puis `cmake --build build/macos-shipping --target tranche_package` : `build/macos-shipping/packages/tranche-0.8.0-macos-arm64.dmg` et le dossier `symbols/` (programme et `.dSYM`).
+- [ ] `codesign --verify --deep --strict --verbose=2 "Tranche jouable.app"` (dans la `.dmg` montée) : accepté (signature ad hoc).
+- [ ] **Comme un joueur** : la `.dmg` téléchargée par un navigateur (pour avoir l'attribut de quarantaine, par exemple déposée sur un service de fichiers puis téléchargée), sur un compte utilisateur neuf du Mac : glisser l'app dans Applications, double clic, refus de Gatekeeper, puis **Réglages système > Confidentialité et sécurité > Ouvrir quand même** ; la tranche se lance, l'icône s'affiche dans le Dock.
+- [ ] La tranche **installée** se joue du titre au retour au titre, **au clavier-souris et à la manette**, avec sauvegarde, chargement et options ; rien ne s'écrit dans le bundle (la signature reste valide après la partie : refaire `codesign --verify`).
+
+**Rattrapage (partie 12)**
+
+- [ ] Les sections des jalons 2 à 7 ci-dessus : chaque case faite ou expliquée (ce que la vérification complète couvre déjà peut être coché d'office : compilation, tests unitaires, références).
 
 ## Après le Mac : les tests qui restent à faire
 
@@ -506,7 +536,7 @@ Ces points ne sont **pas vérifiés non plus sous Windows**. Ils ne dépendent p
 | **Une police plus grande ou un très long texte** | Testé seulement avec 236 glyphes et des textes courts |
 | **La taille des atlas PNG** | L'encodeur de stb compresse moins bien que les outils habituels, sans importance sur les volumes actuels |
 | **Deux écrans de densités différentes** | Un seul écran utilisé |
-| **Le packaging en `.app`** | Le chemin des ressources est relatif à l'exécutable ; dans un paquet Mac, il sera différent |
+| **Le packaging en `.app`** | Écrit au jalon 8 (partie 11 : `Contents/Resources`, que `SDL_GetBasePath()` donne dans un bundle) ; à vérifier sur le Mac (section du jalon 8 ci-dessus) |
 
 ### Une amélioration qui rendrait tous ces contrôles portables
 
@@ -518,7 +548,7 @@ Le jalon 1 et toutes les parties du jalon 2 sont faites, les parties 6 (animatio
 
 - [ ] Les tests unitaires : **135** cas (dont 21 nouveaux : `test_animation.cpp`, `test_tilemap.cpp`), en Debug et en Release.
 - [ ] `--demo` : les créatures marchent (les jambes bougent, chacune à son rythme), sont retournées quand elles vont vers la gauche, font demi-tour devant les murs, et le compteur « pas (événements d'animation) » augmente.
-- [ ] **Menu** : lancer `bac_a_sable` sans argument. vcpkg compile d'abord Dear ImGui (nouvelle dépendance). Vérifier : barre DEBUG > Tests moteur (sous-menu), accents lisibles et nets sur Retina, chaque scène se lance et s'arrête (bouton et Échap), **Accueil** revient à l'accueil, aucune erreur Metal dans la console.
+- [ ] **Menu** : lancer `bac_a_sable` sans argument. vcpkg compile d'abord Dear ImGui (nouvelle dépendance). Vérifier : barre DEBUG > Engine tests (sous-menu), accents lisibles et nets sur Retina, chaque scène se lance et s'arrête (bouton et Échap), **Home** revient à l'accueil, aucune erreur Metal dans la console.
 - [ ] **Modèles 3D** : `python3 tools/models/fetch_test_models.py`, puis la scène « Rendu 3D » : le modèle de référence et les quatre modèles Poly Haven s'affichent avec leurs textures, à leur taille ; les shaders `mesh` (PBR), `tonemap` et `shadow` utilisent le MSL exporté ; avec `--sun 235 40`, les ombres partent de la base des objets, sans acné, et ne scintillent pas quand la caméra bouge ; relever le format de la carte d'ombre (D32 ou D16) ; la grille de sphères et les dômes en relief du modèle de référence ont le même aspect que sous Windows ; couleurs comparables à Windows ; le curseur « Résolution de rendu » du panneau change la netteté de la 3D mais pas celle du texte (c'est lui qui doit donner de la marge sur un M3). **Aide > À propos** liste les licences.
 - [ ] **Anticrénelage** (jalon 3, partie 12 bis) : dans la démo 3D, `--aa fxaa`, `--aa msaa2` et `--aa msaa4` (et la liste « Anticrénelage » du panneau « Rendu », à changer pendant que la scène tourne) : les bords des murs deviennent lisses, aucune erreur Metal ; aucun mode grisé dans la liste. Relever les temps avec `--gpu-timing --no-vsync --report` pour chaque mode (Windows : total 2,04 / 2,45 / 2,30 / 2,40 ms).
 - [ ] `--demo --seed 42 --freeze-after 30 --no-input --capture demo.png` : deux lancements donnent le même fichier. Sous Windows (1280×720) : `bd91e8b2c616`. Le Mac capture en 2560×1440, donc les deux fichiers ne peuvent pas être identiques ; comparer à l'œil.

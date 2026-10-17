@@ -27,7 +27,8 @@ std::uint32_t pack_color(glm::vec4 color) {
 }
 
 SpriteBatcher::SpriteBatcher(std::uint32_t max_quads_per_run)
-    : max_quads_per_run_(std::max<std::uint32_t>(max_quads_per_run, 1)) {}
+    // Capped: a longer run could not be drawn with the renderers' 16-bit indices.
+    : max_quads_per_run_(std::clamp<std::uint32_t>(max_quads_per_run, 1, kMaxQuadsPerRun)) {}
 
 void SpriteBatcher::begin() {
     // clear() keeps the memory, so a steady scene does not allocate after the first frames.

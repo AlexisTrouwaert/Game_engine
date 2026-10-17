@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Info.plist of a game's .app (cmake/PackageMacos.cmake fills it in for moteur_package). -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>fr</string>
+    <key>CFBundleDisplayName</key>
+    <string>@PLIST_NAME@</string>
+    <key>CFBundleName</key>
+    <string>@PLIST_NAME@</string>
+    <key>CFBundleExecutable</key>
+    <string>@PLIST_EXE@</string>
+    <key>CFBundleIdentifier</key>
+    <string>@PLIST_IDENTIFIER@</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@PLIST_VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@PLIST_VERSION@</string>
+    <key>CFBundleIconFile</key>
+    <string>@PLIST_ICON@</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>@PLIST_MINIMUM@</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.games</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>@PLIST_COPYRIGHT@</string>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>GCSupportsControllerUserInteraction</key>
+    <true/>
+</dict>
+</plist>

@@ -22,7 +22,7 @@
 class WorldTest;
 
 // The map editor (milestone 7, parts 7 and 8): a tool of the engine, in the sandbox's menu
-// (DEBUG > Tests moteur) and as its own program (editeur, or bac_a_sable --editeur). It edits a
+// (DEBUG > Engine tests) and as its own program (editeur, or bac_a_sable --editeur). It edits a
 // MapDocument and writes the maps of assets/maps back into the source tree.
 //
 // - The map in 3D as the game builds it (floor, walls, objects), seen from above or at an angle.

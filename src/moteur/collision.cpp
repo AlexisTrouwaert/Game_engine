@@ -228,7 +228,7 @@ CollisionStats separate_colliders(entt::registry& registry, const NavGrid& grid,
         Collider collider;
     };
     std::vector<Item> items;
-    for (auto [entity, transform, collider] : registry.view<Transform, Collider>().each()) {
+    for (const auto& [entity, transform, collider] : registry.view<Transform, Collider>().each()) {
         const glm::vec2 p(transform.position.x, transform.position.z);
         items.push_back({entity, p, p, collider});
     }

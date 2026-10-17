@@ -1,0 +1,87 @@
+# The Windows package of a game (cmake -P, run by the target <game>_package; see cmake/Package.cmake).
+# Inputs (-D): TARGET NAME VERSION PUBLISHER ICON EXE PDB LICENSES COOK WORK OUTPUT APP_ID ISCC SIGN_COMMAND.
+
+cmake_minimum_required(VERSION 3.25)
+
+set(_stem "${TARGET}-${VERSION}-windows-x64")
+set(_stage "${WORK}/stage/${NAME}")
+get_filename_component(_exe_name "${EXE}" NAME)
+
+# 1. What is installed: the program, its packed assets, the license texts. Nothing else: what the game
+#    writes goes to the player's folder (saves, settings, log, crash reports), never next to it.
+file(REMOVE_RECURSE "${WORK}/stage")
+file(MAKE_DIRECTORY "${_stage}")
+file(GLOB _packs "${COOK}/archives/*.pak")
+if(NOT _packs)
+    message(FATAL_ERROR "package: no archive in ${COOK}/archives (did the cooking fail?)")
+endif()
+file(COPY "${EXE}" DESTINATION "${_stage}")
+file(COPY ${_packs} DESTINATION "${_stage}/archives")
+file(COPY "${LICENSES}/" DESTINATION "${_stage}/licenses")
+
+# 2. Signed before anything copies it (the installer and the portable archive carry the signed file).
+function(sign file)
+    if(NOT SIGN_COMMAND)
+        return()
+    endif()
+    separate_arguments(_command WINDOWS_COMMAND "${SIGN_COMMAND}")
+    execute_process(COMMAND ${_command} "${file}" RESULT_VARIABLE _result)
+    if(NOT _result EQUAL 0)
+        message(FATAL_ERROR "package: signing '${file}' failed (${_result})")
+    endif()
+endfunction()
+if(SIGN_COMMAND)
+    sign("${_stage}/${_exe_name}")
+else()
+    message(STATUS "package: not signed (MOTEUR_SIGN_COMMAND is empty): SmartScreen will warn the players")
+endif()
+
+# 3. The program and its symbols, kept per version: what reads a crash report of this version.
+file(MAKE_DIRECTORY "${OUTPUT}/symbols/${_stem}")
+file(COPY "${_stage}/${_exe_name}" DESTINATION "${OUTPUT}/symbols/${_stem}")
+if(EXISTS "${PDB}")
+    file(COPY "${PDB}" DESTINATION "${OUTPUT}/symbols/${_stem}")
+else()
+    message(WARNING "package: no PDB (${PDB}): crash reports of this version will have no function names")
+endif()
+
+# 4. The portable archive: the same folder, zipped.
+file(REMOVE "${OUTPUT}/${_stem}.zip")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E tar cf "${OUTPUT}/${_stem}.zip" --format=zip "${NAME}"
+                WORKING_DIRECTORY "${WORK}/stage" RESULT_VARIABLE _result)
+if(NOT _result EQUAL 0)
+    message(FATAL_ERROR "package: the portable archive failed")
+endif()
+message(STATUS "package: ${OUTPUT}/${_stem}.zip")
+
+# 5. The installer.
+if(NOT ISCC)
+    message(WARNING "package: no installer (Inno Setup not found)")
+    return()
+endif()
+set(ISS_APP_ID "${APP_ID}")
+set(ISS_NAME "${NAME}")
+set(ISS_VERSION "${VERSION}")
+set(ISS_PUBLISHER "${PUBLISHER}")
+set(ISS_EXE "${_exe_name}")
+file(TO_NATIVE_PATH "${_stage}" ISS_SOURCE)
+file(TO_NATIVE_PATH "${OUTPUT}" ISS_OUTPUT)
+set(ISS_OUTPUT_NAME "${_stem}-setup")
+set(ISS_ICON "")
+if(ICON)
+    file(TO_NATIVE_PATH "${ICON}.ico" _ico)
+    set(ISS_ICON "SetupIconFile=${_ico}")
+endif()
+set(ISS_SIGN "")
+set(_sign_args "")
+if(SIGN_COMMAND)
+    set(ISS_SIGN "SignTool=moteur\nSignedUninstaller=yes")
+    list(APPEND _sign_args "/Smoteur=${SIGN_COMMAND} $f")
+endif()
+configure_file("${CMAKE_CURRENT_LIST_DIR}/windows/installer.iss.in" "${WORK}/installer.iss" @ONLY)
+file(REMOVE "${OUTPUT}/${_stem}-setup.exe")
+execute_process(COMMAND "${ISCC}" /Q ${_sign_args} "${WORK}/installer.iss" RESULT_VARIABLE _result)
+if(NOT _result EQUAL 0)
+    message(FATAL_ERROR "package: Inno Setup failed (${_result})")
+endif()
+message(STATUS "package: ${OUTPUT}/${_stem}-setup.exe")

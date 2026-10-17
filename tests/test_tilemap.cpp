@@ -67,21 +67,6 @@ TEST_CASE("TileMap clip keeps the part of a range inside the map") {
     CHECK(map.clip(moteur::TileRange{}).empty());
 }
 
-TEST_CASE("TileMap clip of the visible range gives only tiles on screen") {
-    // A camera looking at the corner of the map: part of the visible range is outside it.
-    const moteur::IsoProjection iso(64.0f, 32.0f);
-    const moteur::TileMap map(100, 100);
-    const moteur::Rect view{{-640.0f, -360.0f}, {640.0f, 360.0f}};
-    const moteur::TileRange range = map.clip(iso.tiles_in(view, 2));
-    REQUIRE_FALSE(range.empty());
-    CHECK(range.min == glm::ivec2(0, 0));
-    CHECK(range.max.x < 100);
-    CHECK(range.max.y < 100);
-    // The origin of the world is on screen, so tile (0, 0) must be drawn.
-    CHECK(range.min.x <= 0);
-    CHECK(range.min.y <= 0);
-}
-
 TEST_CASE("TileMap walkable looks at every layer") {
     moteur::Tileset tileset;
     const moteur::TileId ground = tileset.add({"ground", true, false});

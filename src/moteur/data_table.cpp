@@ -1,5 +1,8 @@
 #include "moteur/data_table.hpp"
 
+#include "moteur/cbor_check.hpp"
+#include "moteur/paths.hpp"
+
 #include "moteur/profiler.hpp"
 
 #include <SDL3/SDL.h>
@@ -9,6 +12,8 @@
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <string>
+#include <string_view>
 
 namespace moteur {
 
@@ -36,6 +41,14 @@ bool read_bytes(const std::filesystem::path& path, std::string& out) {
     text << file.rdbuf();
     out = text.str();
     return true;
+}
+
+// "first<separator>second" in one buffer: the file keys and the issue locations below.
+std::string joined(const std::string& first, std::string_view separator, std::string_view second) {
+    std::string result;
+    result.reserve(first.size() + separator.size() + second.size());
+    result.append(first).append(separator).append(second);
+    return result;
 }
 
 void hash_bytes(std::uint64_t& hash, const void* data, std::size_t size) {
@@ -73,7 +86,7 @@ DataRows DataTableBase::read_json(const std::string& root, const std::string& di
     const std::filesystem::path folder = utf8_path(root + directory);
     std::error_code error;
     if (!std::filesystem::is_directory(folder, error)) {
-        issues.error(directory, "dossier de la table " + name + " introuvable");
+        issues.error(directory, "directory of the table " + name + " not found");
         return result;
     }
     std::vector<std::string> names;
@@ -93,11 +106,11 @@ DataRows DataTableBase::read_json(const std::string& root, const std::string& di
     std::map<std::string, Raw> raws;  // sorted by identifier
     std::vector<nlohmann::json> defaults;
     for (const std::string& file_name : names) {
-        const std::string key = directory + "/" + file_name;
+        const std::string key = joined(directory, "/", file_name);
         result.files.push_back(key);
         std::string bytes;
         if (!read_bytes(folder / utf8_path(file_name), bytes)) {
-            issues.error(key, "lecture impossible");
+            issues.error(key, "cannot read the file");
             continue;
         }
         hash_bytes(result.source_hash, key.data(), key.size());
@@ -106,29 +119,29 @@ DataRows DataTableBase::read_json(const std::string& root, const std::string& di
         try {
             json = nlohmann::json::parse(bytes);
         } catch (const nlohmann::json::exception& e) {
-            issues.error(key, std::string("JSON invalide : ") + e.what());
+            issues.error(key, std::string("invalid JSON: ") + e.what());
             continue;
         }
         if (!json.is_object() || !json.contains("version") || json["version"] != kTableVersion) {
-            issues.error(key, "attendu un objet avec \"version\": " + std::to_string(kTableVersion));
+            issues.error(key, "expected an object with \"version\": " + std::to_string(kTableVersion));
             continue;
         }
         nlohmann::json file_defaults = nlohmann::json::object();
         if (json.contains("defaults")) {
             if (!json["defaults"].is_object()) {
-                issues.error(key + " > defaults", "attendu un objet");
+                issues.error(key + " > defaults", "expected an object");
                 continue;
             }
             file_defaults = json["defaults"];
             drop_comments(file_defaults);
         }
         if (!json.contains("rows") || !json["rows"].is_object()) {
-            issues.error(key, "attendu un objet \"rows\"");
+            issues.error(key, "expected a \"rows\" object");
             continue;
         }
         for (const auto& [field, value] : json.items()) {
             if (field != "version" && field != "defaults" && field != "rows" && !(field.size() > 0 && field[0] == '_')) {
-                issues.warning(key + " > " + field, "champ inconnu au niveau du fichier");
+                issues.warning(joined(key, " > ", field), "unknown field at file level");
             }
         }
         defaults.push_back(std::move(file_defaults));
@@ -137,15 +150,15 @@ DataRows DataTableBase::read_json(const std::string& root, const std::string& di
                 continue;  // a comment
             }
             if (id.empty()) {
-                issues.error(key, "une ligne a un identifiant vide");
+                issues.error(key, "a row has an empty identifier");
                 continue;
             }
             if (!row.is_object()) {
-                issues.error(key + " > " + id, "une ligne doit être un objet");
+                issues.error(joined(key, " > ", id), "a row must be an object");
                 continue;
             }
             if (const auto found = raws.find(id); found != raws.end()) {
-                issues.error(key + " > " + id, "identifiant déjà défini dans " + found->second.file);
+                issues.error(joined(key, " > ", id), "identifier already defined in " + found->second.file);
                 continue;
             }
             raws.emplace(id, Raw{row, key, defaults.size() - 1});
@@ -166,7 +179,7 @@ DataRows DataTableBase::read_json(const std::string& root, const std::string& di
         }
         const Raw& raw = raws.at(id);
         if (s == State::Doing) {
-            issues.error(raw.file + " > " + id + " > base", "héritage circulaire");
+            issues.error(raw.file + " > " + id + " > base", "circular inheritance");
             s = State::Failed;
             return false;
         }
@@ -176,14 +189,14 @@ DataRows DataTableBase::read_json(const std::string& root, const std::string& di
             const nlohmann::json& base = raw.row["base"];
             if (!base.is_string() || raws.count(base.get<std::string>()) == 0) {
                 issues.error(raw.file + " > " + id + " > base",
-                             base.is_string() ? "« " + base.get<std::string>() + " » n'existe pas dans la table " + name
-                                              : "attendu l'identifiant d'une ligne");
+                             base.is_string() ? "'" + base.get<std::string>() + "' does not exist in the table " + name
+                                              : "expected the identifier of a row");
                 state[id] = State::Failed;
                 return false;
             }
             if (!resolve(base.get<std::string>())) {
                 if (state[id] != State::Failed) {
-                    issues.error(raw.file + " > " + id + " > base", "sa base « " + base.get<std::string>() + " » est invalide");
+                    issues.error(raw.file + " > " + id + " > base", "its base '" + base.get<std::string>() + "' is invalid");
                 }
                 state[id] = State::Failed;
                 return false;
@@ -232,22 +245,26 @@ std::vector<std::uint8_t> DataTableBase::encode(const std::string& name, const D
 DataRows DataTableBase::decode(const std::vector<std::uint8_t>& bytes, const std::string& name, DataIssues& issues) {
     DataRows rows;
     if (bytes.size() < 8 || !std::equal(kMagic, kMagic + 4, bytes.begin())) {
-        issues.error(name + ".mdat", "pas une table compilée");
+        issues.error(name + ".mdat", "not a compiled table");
         return rows;
     }
     std::uint32_t version = 0;
     for (int i = 0; i < 4; ++i) {
-        version |= static_cast<std::uint32_t>(bytes[static_cast<std::size_t>(4 + i)]) << (8 * i);
+        version |= static_cast<std::uint32_t>(bytes[4 + static_cast<std::size_t>(i)]) << (8 * i);
     }
     if (version != kBinaryVersion) {
-        issues.error(name + ".mdat", "version " + std::to_string(version) + " du format compilé inconnue (attendu " +
-                                         std::to_string(kBinaryVersion) + ") : recompiler les données");
+        issues.error(name + ".mdat", "unknown compiled format version " + std::to_string(version) + " (expected " +
+                                         std::to_string(kBinaryVersion) + "): recompile the data");
+        return rows;
+    }
+    if (std::string structure_error; !check_cbor_structure(bytes.data() + 8, bytes.size() - 8, structure_error)) {
+        issues.error(name + ".mdat", "unreadable: " + structure_error);
         return rows;
     }
     try {
         const nlohmann::json payload = nlohmann::json::from_cbor(bytes.begin() + 8, bytes.end());
         if (payload.at("table").get<std::string>() != name) {
-            issues.error(name + ".mdat", "contient la table " + payload.at("table").get<std::string>());
+            issues.error(name + ".mdat", "holds the table " + payload.at("table").get<std::string>());
             return rows;
         }
         rows.source_hash = payload.at("source_hash").get<std::uint64_t>();
@@ -256,11 +273,11 @@ DataRows DataTableBase::decode(const std::vector<std::uint8_t>& bytes, const std
         rows.row_files = payload.at("row_files").get<std::vector<std::string>>();
         rows.files = payload.at("files").get<std::vector<std::string>>();
         if (rows.rows.size() != rows.ids.size() || rows.row_files.size() != rows.ids.size()) {
-            issues.error(name + ".mdat", "contenu incohérent");
+            issues.error(name + ".mdat", "inconsistent content");
             return DataRows{};
         }
     } catch (const nlohmann::json::exception& e) {
-        issues.error(name + ".mdat", std::string("illisible : ") + e.what());
+        issues.error(name + ".mdat", std::string("unreadable: ") + e.what());
         return DataRows{};
     }
     return rows;
@@ -295,7 +312,7 @@ bool DataTableBase::stable_order(const DataTableBase& fresh, std::vector<std::ui
         const auto index = fresh.index_of(ids_[i]);
         if (!index) {
             issues.error(row_files_[i] + " > " + ids_[i],
-                         "ligne retirée : rechargement refusé (une ligne peut être utilisée ; redémarrer pour retirer des lignes)");
+                         "row removed: reload refused (the row may be in use; restart to remove rows)");
             ok = false;
             continue;
         }
@@ -358,13 +375,14 @@ DataRows DataTables::read(const std::string& root, const DataTableBase& table, D
     if (source_ == DataSource::Json) {
         return DataTableBase::read_json(root, table.directory(), table.name(), issues);
     }
-    std::string bytes;
     const std::string path = compiled_directory_ + table.name() + ".mdat";
-    if (!read_bytes(utf8_path(path), bytes)) {
-        issues.error(path, "table compilée introuvable");
+    if (!file_exists(path)) {  // in the archives (shipped game) or on disk
+        issues.error(path, "compiled table not found");
         return DataRows{};
     }
-    return DataTableBase::decode(std::vector<std::uint8_t>(bytes.begin(), bytes.end()), table.name(), issues);
+    const FileData file = read_file(path);
+    const auto* bytes = static_cast<const std::uint8_t*>(file.data());
+    return DataTableBase::decode(std::vector<std::uint8_t>(bytes, bytes + file.size()), table.name(), issues);
 }
 
 const DataIssues& DataTables::load_all(const std::string& root) {
@@ -391,16 +409,16 @@ const DataIssues& DataTables::load_all(const std::string& root) {
             static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency()));
     for (const DataIssue& issue : issues_.all()) {
         if (issue.level == DataIssue::Level::Error) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Data: %s : %s", issue.where.c_str(), issue.message.c_str());
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Data: %s: %s", issue.where.c_str(), issue.message.c_str());
         } else {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Data: %s : %s", issue.where.c_str(), issue.message.c_str());
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Data: %s: %s", issue.where.c_str(), issue.message.c_str());
         }
     }
     return issues_;
 }
 
 bool DataTables::reload_table(const std::string& root, DataTableBase& table) {
-    MOTEUR_PROFILE("données : rechargement");
+    MOTEUR_PROFILE("data: reload");
     DataIssues issues;
     DataRows rows = read(root, table, issues);
     std::unique_ptr<DataTableBase> fresh = issues.has_errors() ? nullptr : table.build(std::move(rows), issues);
@@ -419,7 +437,7 @@ bool DataTables::reload_table(const std::string& root, DataTableBase& table) {
                      table.name().c_str());
     }
     for (const DataIssue& issue : issues.all()) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Data: %s : %s", issue.where.c_str(), issue.message.c_str());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Data: %s: %s", issue.where.c_str(), issue.message.c_str());
     }
     issues_ = std::move(issues);
     return ok;
@@ -443,7 +461,7 @@ bool DataTables::reload(const std::string& root, const std::string& name) {
     DataTableBase* table = find(name);
     if (table == nullptr) {
         issues_.clear();
-        issues_.error(name, "pas de table de ce nom");
+        issues_.error(name, "no table of this name");
         return false;
     }
     return reload_table(root, *table);
@@ -474,7 +492,7 @@ bool DataTables::compile(const std::string& root, const std::string& directory, 
         std::ofstream file(utf8_path(path), std::ios::binary | std::ios::trunc);
         file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         if (!file) {
-            issues.error(path, "écriture impossible");
+            issues.error(path, "cannot write the file");
             return false;
         }
         SDL_Log("Data: compiled '%s' (%zu rows, %zu bytes)", table->name().c_str(), table->size(), bytes.size());

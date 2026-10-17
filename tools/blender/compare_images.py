@@ -71,12 +71,12 @@ def main():
     with open(scene_path, encoding="utf-8") as f:
         description = json.load(f)
     names = [os.path.basename(m["path"]).split("_1k")[0] for m in description["models"]]
-    names += [f"sphère {i + 1}" for i in range(len(description["spheres"]))]
+    names += [f"sphere {i + 1}" for i in range(len(description["spheres"]))]
     mask = [a > 128 for a in blender.getchannel("A").tobytes()]
     runs = column_runs(mask, width, height)
     if len(runs) != len(names):
         print(f"{len(runs)} objects found in Blender's alpha, {len(names)} expected: names may not match")
-    print(f"{'objet':<22}{'moteur (sRGB)':<18}{'Blender (sRGB)':<18}écart")
+    print(f"{'object':<22}{'engine (sRGB)':<18}{'Blender (sRGB)':<18}difference")
     for index, (x0, x1) in enumerate(runs):
         name = names[index] if index < len(names) else f"objet {index + 1}"
         a = mean_color(engine, mask, width, x0, x1, height)

@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
+#include <string>
 
 namespace moteur {
 
@@ -103,7 +105,9 @@ void FieldOfView::mark(glm::ivec2 cell) {
         return;
     }
     const int side = 2 * radius_ + 1;
-    std::uint8_t& seen = window_[static_cast<std::size_t>((d.y + radius_) * side + (d.x + radius_))];
+    // Inside the disc: |d.x| and |d.y| are at most the radius, so the window indices are not negative.
+    std::uint8_t& seen = window_[static_cast<std::size_t>(d.y + radius_) * static_cast<std::size_t>(side) +
+                                 static_cast<std::size_t>(d.x + radius_)];
     if (!seen) {
         seen = 1;
         cells_.push_back(cell);
@@ -111,12 +115,12 @@ void FieldOfView::mark(glm::ivec2 cell) {
 }
 
 void FieldOfView::compute(const NavGrid& grid, glm::ivec2 origin, int radius) {
-    MOTEUR_PROFILE("champ de vision");
+    MOTEUR_PROFILE("field of view");
     origin_ = origin;
     radius_ = std::max(radius, 0);
     version_ = grid.version();
     const int side = 2 * radius_ + 1;
-    window_.assign(static_cast<std::size_t>(side * side), 0);
+    window_.assign(static_cast<std::size_t>(side) * static_cast<std::size_t>(side), 0);
     cells_.clear();
     mark(origin);
     for (int quadrant = 0; quadrant < 4; ++quadrant) {
@@ -170,11 +174,17 @@ bool FieldOfView::visible(glm::ivec2 cell) const {
         return false;
     }
     const int side = 2 * radius_ + 1;
-    return window_[static_cast<std::size_t>((d.y + radius_) * side + (d.x + radius_))] != 0;
+    return window_[static_cast<std::size_t>(d.y + radius_) * static_cast<std::size_t>(side) +
+                   static_cast<std::size_t>(d.x + radius_)] != 0;
 }
 
-ExploredMap::ExploredMap(int width, int height)
-    : width_(width), height_(height), cells_(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0) {}
+ExploredMap::ExploredMap(int width, int height) : width_(width), height_(height) {
+    if (width < 0 || height < 0) {
+        // Converted to std::size_t, a negative size would ask for an enormous allocation.
+        throw std::invalid_argument("ExploredMap: negative size " + std::to_string(width) + " x " + std::to_string(height));
+    }
+    cells_.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0);
+}
 
 int ExploredMap::add(const FieldOfView& view) {
     int added = 0;
@@ -182,7 +192,7 @@ int ExploredMap::add(const FieldOfView& view) {
         if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_) {
             continue;
         }
-        std::uint8_t& seen = cells_[static_cast<std::size_t>(cell.y * width_ + cell.x)];
+        std::uint8_t& seen = cells_[static_cast<std::size_t>(cell.y) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(cell.x)];
         if (!seen) {
             seen = 1;
             ++added;
@@ -196,7 +206,7 @@ bool ExploredMap::mark(glm::ivec2 cell) {
     if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_) {
         return false;
     }
-    std::uint8_t& seen = cells_[static_cast<std::size_t>(cell.y * width_ + cell.x)];
+    std::uint8_t& seen = cells_[static_cast<std::size_t>(cell.y) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(cell.x)];
     if (seen) {
         return false;
     }
@@ -209,7 +219,7 @@ bool ExploredMap::explored(glm::ivec2 cell) const {
     if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_) {
         return false;
     }
-    return cells_[static_cast<std::size_t>(cell.y * width_ + cell.x)] != 0;
+    return cells_[static_cast<std::size_t>(cell.y) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(cell.x)] != 0;
 }
 
 }  // namespace moteur

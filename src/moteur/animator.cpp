@@ -1,5 +1,6 @@
 #include "moteur/animator.hpp"
 
+#include "moteur/fixed_timestep.hpp"
 #include "moteur/profiler.hpp"
 
 #include <entt/entity/registry.hpp>
@@ -190,7 +191,7 @@ Animator::Motion Animator::make_motion(const std::string& name, const PlayOption
 }
 
 int Animator::event_tick(const ClipEvent& event, const SkeletalClip& clip, int cycle) const {
-    const int tick = static_cast<int>(std::lround(event.time * static_cast<float>(kClipTicksPerSecond)));
+    const int tick = static_cast<int>(ticks_from_seconds(event.time));
     if (tick > cycle) {
         throw std::runtime_error("Animation set '" + set->source() + "': clip '" + clip.name() + "': event '" +
                                  event.name + "' at " + std::to_string(event.time) + " s is past its end (" +
@@ -527,7 +528,7 @@ void Animator::pose(float alpha, PoseRequest& out) const {
 }
 
 void advance_animators(entt::registry& registry, int ticks, std::vector<AnimatorEvent>* events) {
-    MOTEUR_PROFILE("animation : avance");
+    MOTEUR_PROFILE("animation: advance");
     for (auto [entity, animator] : registry.view<Animator>().each()) {
         animator.advance(ticks, events, entity);
     }

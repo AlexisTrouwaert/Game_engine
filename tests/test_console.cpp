@@ -17,7 +17,7 @@ TEST_CASE("Console::split keeps quoted words and reports an unclosed quote") {
     REQUIRE(moteur::Console::split(R"(echo "")", words, error));
     CHECK(words == std::vector<std::string>{"echo", ""});
     CHECK_FALSE(moteur::Console::split(R"(echo "oups)", words, error));
-    CHECK(error == "guillemet non fermé");
+    CHECK(error == "unclosed quote");
 }
 
 TEST_CASE("Variables are typed, bounded, and parsed from text") {
@@ -33,7 +33,7 @@ TEST_CASE("Variables are typed, bounded, and parsed from text") {
     CHECK(count.set_text("7", error));
     CHECK(count.as_int() == 7);
     CHECK_FALSE(count.set_text("11", error));
-    CHECK(error.find("entre 0 et 10") != std::string::npos);
+    CHECK(error.find("between 0 and 10") != std::string::npos);
     CHECK_FALSE(count.set_text("2.5", error));
     CHECK_FALSE(scale.set_text("vite", error));
     CHECK(scale.set_text("0.5", error));
@@ -58,7 +58,7 @@ TEST_CASE("Archived variables round-trip, including those declared later") {
     vars.add_int("tool.size", 2, 1, 9, "");  // not archived
     vars.set_pending("set audio.mute \"1\"\nset later.value \"42\"\nset tool.size 5\n");
     CHECK(vars.find("audio.mute")->as_bool());  // already declared: applied at once
-    CHECK(vars.find("tool.size")->as_int() == 5);
+    CHECK(vars.find("tool.size")->as_int() == 2);  // not archived: the file does not set it
     moteur::Variable& later = vars.add_int("later.value", 0, 0, 100, "", moteur::Variable::Archive);
     CHECK(later.as_int() == 42);  // applied when declared
     const std::string text = vars.archived_text();
@@ -101,7 +101,7 @@ TEST_CASE("Tool commands run at once, game commands are queued for the next tick
     console.submit("nimporte quoi");
     CHECK(console.lines().back().level == moteur::Console::Level::Error);
     console.submit("set debug.paths 7");
-    CHECK(console.lines().back().text.find("attendu 0 ou 1") != std::string::npos);
+    CHECK(console.lines().back().text.find("expected 0 or 1") != std::string::npos);
     CHECK(console.history().size() == 5);
 }
 

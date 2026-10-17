@@ -10,7 +10,7 @@
     ".": ["sol"],
     "#": ["sol", "mur"],
     "o": ["sol", "pilier"],
-    "@": {"tiles": ["sol"], "point": "depart"},
+    "@": {"tiles": ["sol"], "point": "start"},
     "s": {"tiles": ["sol"], "point": "monstres"},
     "*": {"tiles": ["sol"], "point": "but"}
   },

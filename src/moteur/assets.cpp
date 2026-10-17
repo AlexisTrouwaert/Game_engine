@@ -2,14 +2,19 @@
 
 #include <SDL3/SDL.h>
 
+#if !defined(MOTEUR_SHIPPING)
 #include <efsw/efsw.hpp>
+#endif
 
+#include <any>
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <system_error>
 #include <utility>
 
+#include "moteur/jobs.hpp"
 #include "moteur/ktx_texture.hpp"
 #include "moteur/paths.hpp"
 
@@ -62,7 +67,7 @@ Texture make_placeholder_texture(Renderer& renderer) {
     for (int y = 0; y < kSize; ++y) {
         for (int x = 0; x < kSize; ++x) {
             const bool on = ((x / 2) + (y / 2)) % 2 == 0;
-            std::uint8_t* pixel = &image.pixels[static_cast<std::size_t>((y * kSize + x) * 4)];
+            std::uint8_t* pixel = &image.pixels[(static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4];
             pixel[0] = on ? 255 : 0;
             pixel[1] = 0;
             pixel[2] = on ? 255 : 0;
@@ -90,6 +95,10 @@ Model make_placeholder_model(Renderer& renderer) {
 
 }  // namespace
 
+#if defined(MOTEUR_SHIPPING)
+// The shipped game does not watch its files (no efsw): see enable_hot_reload().
+class Assets::Watcher {};
+#else
 // Receives efsw's notifications on its own thread; update() takes them on the main thread.
 class Assets::Watcher : public efsw::FileWatchListener {
 public:
@@ -144,6 +153,7 @@ private:
     std::map<std::string, Uint64> changed_;  // relative path -> time of the last change
     efsw::FileWatcher watcher_;              // last: stopped (its thread joined) before the rest goes
 };
+#endif
 
 Assets::Assets(Renderer& renderer, std::string root)
     : renderer_(renderer),
@@ -159,7 +169,6 @@ Assets::Assets(Renderer& renderer, std::string root)
                     [](const Environment& environment) { return environment.gpu_bytes; }),
       fonts_("font", {}, [](const Font& font) { return font.gpu_bytes(); }),
       atlases_("atlas", {}, [](const TextureAtlas& atlas) { return atlas.gpu_bytes(); }),
-      animations_("animations"),
       sounds_("sound", [] { return placeholder_sound(); }, [](const Sound& sound) { return sound.bytes(); }),
       musics_("music", [] { return Music{}; }, [](const Music& music) { return music.memory(); }),
       // Players point to skeletons and clips: a reload keeps them where they are.
@@ -185,8 +194,7 @@ std::string Assets::file_path(std::string_view path) const {
 }
 
 bool Assets::exists(std::string_view path) const {
-    std::error_code error;
-    return std::filesystem::is_regular_file(utf8_path(file_path(path)), error);
+    return file_exists(file_path(path));  // in the archives, or on disk
 }
 
 std::string Assets::model_error(std::string_view path) const {
@@ -199,15 +207,127 @@ std::string Assets::key_of(std::string_view path) const {
     return key;
 }
 
+// --- Loading in the background ------------------------------------------------------------------
+
+// What a prefetch leaves for the main thread: one of these, by the kind of asset.
+struct DecodedTexture {
+    std::optional<CompressedImage> compressed;  // a KTX2 file
+    Image image;                                // any other image
+};
+
+struct PreparedModel {
+    ModelData data;
+    std::vector<std::pair<std::string, DecodedTexture>> textures;  // texture keys of its image files
+};
+
+struct Assets::Prepared {
+    JobHandle job;
+    std::any value;                  // DecodedTexture, PreparedModel, Skeleton, ClipLibrary, Sound
+    std::vector<std::string> files;  // the files it read, for the hot reload
+};
+
+namespace {
+
+DecodedTexture decode_texture_file(const std::string& path, const std::string& key, const TextureSettings& settings,
+                                   const CompressedFormats& formats) {
+    const FileData file = read_file(path);
+    DecodedTexture decoded;
+    if (is_ktx2(file.data(), file.size())) {
+        decoded.compressed = decode_ktx2(file.data(), file.size(), key, settings, formats);
+    } else {
+        decoded.image = decode_image(file.data(), file.size(), key);
+    }
+    return decoded;
+}
+
+}  // namespace
+
+void Assets::prefetch(const std::string& prepared_key, std::function<void(Prepared&)> work) {
+    if (prepared_.contains(prepared_key)) {
+        return;
+    }
+    auto prepared = std::make_shared<Prepared>();
+    prepared->job = jobs().submit([prepared, work = std::move(work)] { work(*prepared); });
+    prepared_.emplace(prepared_key, std::move(prepared));
+}
+
+std::shared_ptr<Assets::Prepared> Assets::take_prepared(const std::string& prepared_key) {
+    const auto found = prepared_.find(prepared_key);
+    if (found == prepared_.end()) {
+        return nullptr;
+    }
+    std::shared_ptr<Prepared> prepared = std::move(found->second);
+    prepared_.erase(found);
+    jobs().wait(prepared->job);  // rethrows the decoding's error, inside the cache's loader
+    return prepared;
+}
+
+std::size_t Assets::prefetching() const {
+    std::size_t running = 0;
+    for (const auto& [key, prepared] : prepared_) {
+        (void)key;
+        running += prepared->job.done() ? 0 : 1;
+    }
+    return running;
+}
+
+void Assets::prefetch_texture(std::string_view path, const TextureSettings& settings) {
+    const std::string key = normalize_asset_path(path);
+    const std::string cache_key = texture_key(key, settings);
+    if (textures_.contains(cache_key)) {
+        return;
+    }
+    prefetch("texture:" + cache_key, [path = root_ + key, key, settings, formats = renderer_.compressed_formats()](Prepared& out) {
+        out.value = decode_texture_file(path, key, settings, formats);
+    });
+}
+
+void Assets::prefetch_model(std::string_view path) {
+    const std::string key = normalize_asset_path(path);
+    if (models_.contains(key)) {
+        return;
+    }
+    prefetch("model:" + key, [root = root_, key, prefer_ktx2 = prefer_ktx2_, formats = renderer_.compressed_formats()](Prepared& out) {
+        GltfOptions options;
+        options.decode_external_images = false;  // through the texture cache, below
+        options.prefer_ktx2 = prefer_ktx2;
+        PreparedModel model;
+        model.data = load_gltf(root + key, options);
+        // Its image files, decoded as the texture cache will ask for them (failures are left to the
+        // cache, which shows its placeholder and logs).
+        const std::string directory = directory_of(key);
+        for (const ModelImage& image : model.data.images) {
+            if (image.file.empty()) {
+                continue;
+            }
+            const std::string image_key = normalize_asset_path(directory + image.file);
+            const TextureSettings settings = model_texture_settings(image);
+            try {
+                model.textures.emplace_back(texture_key(image_key, settings),
+                                            decode_texture_file(root + image_key, image_key, settings, formats));
+            } catch (const std::exception&) {  // NOLINT(bugprone-empty-catch): reported by the texture cache
+                // Not prefetched: the texture cache decodes it again when asked, then shows its
+                // placeholder and logs the error once; logging here too would report it twice.
+            }
+        }
+        out.value = std::move(model);
+    });
+}
+
 Asset<Texture> Assets::texture(std::string_view path, const TextureSettings& settings) {
     const std::string key = normalize_asset_path(path);
     return textures_.get(texture_key(key, settings), [this, key, settings](std::vector<std::string>& files) {
         files.push_back(key);
         check_asset_case(root_, key);
+        if (const std::shared_ptr<Prepared> prepared = take_prepared("texture:" + texture_key(key, settings))) {
+            DecodedTexture& decoded = std::any_cast<DecodedTexture&>(prepared->value);
+            return decoded.compressed ? create_compressed_texture(renderer_, *decoded.compressed, key.c_str())
+                                      : renderer_.create_texture(decoded.image, settings, key.c_str());
+        }
         const FileData file = read_file(root_ + key);
         if (is_ktx2(file.data(), file.size())) {
-            return renderer_.create_texture(
-                decode_ktx2(file.data(), file.size(), key, settings, renderer_.compressed_formats()), key.c_str());
+            return create_compressed_texture(
+                renderer_, decode_ktx2(file.data(), file.size(), key, settings, renderer_.compressed_formats()), key.c_str());
         }
         return renderer_.create_texture(decode_image(file.data(), file.size(), key), settings, key.c_str());
     });
@@ -219,10 +339,23 @@ Asset<Model> Assets::model(std::string_view path) {
         files.push_back(key);
         check_asset_case(root_, key);
         const std::string directory = directory_of(key);
-        GltfOptions options;
-        options.decode_external_images = false;  // through the texture cache, below
-        options.prefer_ktx2 = prefer_ktx2_;
-        const ModelData data = load_gltf(root_ + key, options);
+        ModelData data;
+        if (const std::shared_ptr<Prepared> prepared = take_prepared("model:" + key)) {
+            PreparedModel& model = std::any_cast<PreparedModel&>(prepared->value);
+            data = std::move(model.data);
+            for (auto& [texture_cache_key, decoded] : model.textures) {  // for the texture cache, just below
+                if (!textures_.contains(texture_cache_key) && !prepared_.contains("texture:" + texture_cache_key)) {
+                    auto ready = std::make_shared<Prepared>();
+                    ready->value = std::move(decoded);
+                    prepared_.emplace("texture:" + texture_cache_key, std::move(ready));
+                }
+            }
+        } else {
+            GltfOptions options;
+            options.decode_external_images = false;  // through the texture cache, below
+            options.prefer_ktx2 = prefer_ktx2_;
+            data = load_gltf(root_ + key, options);
+        }
         for (const std::string& file : data.files) {
             files.push_back(normalize_asset_path(directory + file));
         }
@@ -257,10 +390,15 @@ Asset<TextureAtlas> Assets::atlas(std::string_view path) {
     });
 }
 
-Asset<AnimationLibrary> Assets::animations(std::string_view path) {
-    const std::string key = key_of(path);
-    return animations_.get(key, [this, key](std::vector<std::string>&) {  // no files: never reloaded
-        return AnimationLibrary::load(root_ + key);
+void Assets::prefetch_sound(std::string_view path) {
+    const std::string key = normalize_asset_path(path);
+    if (sounds_.contains(key)) {
+        return;
+    }
+    prefetch("sound:" + key, [path = root_ + key, key](Prepared& out) {
+        const FileData file = read_file(path);
+        const auto* bytes = static_cast<const std::uint8_t*>(file.data());
+        out.value = decode_sound({bytes, file.size()}, key);
     });
 }
 
@@ -269,6 +407,9 @@ Asset<Sound> Assets::sound(std::string_view path) {
     return sounds_.get(key, [this, key](std::vector<std::string>& files) {
         files.push_back(key);
         check_asset_case(root_, key);
+        if (const std::shared_ptr<Prepared> prepared = take_prepared("sound:" + key)) {
+            return std::move(std::any_cast<Sound&>(prepared->value));
+        }
         const FileData file = read_file(root_ + key);
         const auto* bytes = static_cast<const std::uint8_t*>(file.data());
         return decode_sound({bytes, file.size()}, key);
@@ -304,11 +445,36 @@ ModelData read_animation_file(const std::string& root, const std::string& key, s
 
 }  // namespace
 
+void Assets::prefetch_skeleton(std::string_view path) {
+    const std::string key = normalize_asset_path(path);
+    if (skeletons_.contains(key)) {
+        return;
+    }
+    prefetch("skeleton:" + key, [root = root_, key](Prepared& out) {
+        out.value = std::make_shared<Skeleton>(Skeleton::create(read_animation_file(root, key, out.files).skeleton, key));
+    });
+}
+
+void Assets::prefetch_clips(std::string_view path) {
+    const std::string key = normalize_asset_path(path);
+    if (clips_.contains(key)) {
+        return;
+    }
+    prefetch("clips:" + key, [root = root_, key](Prepared& out) {
+        const ModelData data = read_animation_file(root, key, out.files);
+        out.value = std::make_shared<ClipLibrary>(ClipLibrary::create(data.skeleton, data.clips, key));
+    });
+}
+
 Asset<Skeleton> Assets::skeleton(std::string_view path) {
     const std::string key = normalize_asset_path(path);
     return skeletons_.get(key, [this, key](std::vector<std::string>& files) {
         files.push_back(key);
         check_asset_case(root_, key);
+        if (const std::shared_ptr<Prepared> prepared = take_prepared("skeleton:" + key)) {
+            files.insert(files.end(), prepared->files.begin(), prepared->files.end());
+            return std::move(*std::any_cast<std::shared_ptr<Skeleton>&>(prepared->value));
+        }
         return Skeleton::create(read_animation_file(root_, key, files).skeleton, key);
     });
 }
@@ -318,6 +484,10 @@ Asset<ClipLibrary> Assets::clips(std::string_view path) {
     return clips_.get(key, [this, key](std::vector<std::string>& files) {
         files.push_back(key);
         check_asset_case(root_, key);
+        if (const std::shared_ptr<Prepared> prepared = take_prepared("clips:" + key)) {
+            files.insert(files.end(), prepared->files.begin(), prepared->files.end());
+            return std::move(*std::any_cast<std::shared_ptr<ClipLibrary>&>(prepared->value));
+        }
         const ModelData data = read_animation_file(root_, key, files);
         return ClipLibrary::create(data.skeleton, data.clips, key);
     });
@@ -354,13 +524,15 @@ Asset<ParticleEffect> Assets::particle_effect(std::string_view path) {
 }
 
 std::size_t Assets::collect_garbage() {
+    // Prefetched files nobody took: dropped once decoded (a job still running keeps its own
+    // reference to the result, which goes with it).
+    std::erase_if(prepared_, [](const auto& entry) { return entry.second->job.done(); });
     // Models first: they hold textures, which become free once the models are gone.
     std::size_t freed = models_.collect_garbage();
     freed += textures_.collect_garbage();
     freed += environments_.collect_garbage();
     freed += fonts_.collect_garbage();
     freed += atlases_.collect_garbage();
-    freed += animations_.collect_garbage();
     freed += sounds_.collect_garbage();
     freed += musics_.collect_garbage();
     freed += skeletons_.collect_garbage();
@@ -375,6 +547,10 @@ std::size_t Assets::collect_garbage() {
 }
 
 bool Assets::enable_hot_reload(const std::string& source_directory) {
+#if defined(MOTEUR_SHIPPING)
+    SDL_Log("Assets: no hot reload in the shipping configuration ('%s' ignored)", source_directory.c_str());
+    return false;
+#else
     watcher_.reset();
     auto watcher = std::make_unique<Watcher>(utf8_path(source_directory).lexically_normal());
     if (!watcher->start()) {
@@ -383,9 +559,11 @@ bool Assets::enable_hot_reload(const std::string& source_directory) {
     watcher_ = std::move(watcher);
     SDL_Log("Assets: hot reload from '%s'", source_directory.c_str());
     return true;
+#endif
 }
 
 void Assets::update() {
+#if !defined(MOTEUR_SHIPPING)
     if (!watcher_) {
         return;
     }
@@ -415,6 +593,7 @@ void Assets::update() {
             listener(key);
         }
     }
+#endif
 }
 
 void Assets::reload_file(const std::string& key) {
@@ -474,33 +653,33 @@ AssetTypeStats stats_of(const AssetCache<T>& cache) {
 
 std::vector<AssetTypeStats> Assets::stats() const {
     return {stats_of(textures_), stats_of(models_), stats_of(environments_),
-            stats_of(fonts_),    stats_of(atlases_), stats_of(animations_), stats_of(sounds_), stats_of(musics_),
+            stats_of(fonts_),    stats_of(atlases_), stats_of(sounds_), stats_of(musics_),
             stats_of(skeletons_), stats_of(clips_), stats_of(animation_sets_), stats_of(maps_), stats_of(effects_)};
 }
 
 std::vector<std::vector<AssetInfo>> Assets::infos() const {
     return {textures_.infos(), models_.infos(), environments_.infos(),
-            fonts_.infos(),    atlases_.infos(), animations_.infos(), sounds_.infos(), musics_.infos(),
+            fonts_.infos(),    atlases_.infos(), sounds_.infos(), musics_.infos(),
             skeletons_.infos(), clips_.infos(), animation_sets_.infos(), maps_.infos(), effects_.infos()};
 }
 
-bool Assets::reload(std::size_t type, const std::string& key) {
-    switch (type) {  // the order of stats()
-        case 0: return textures_.reload(key);
-        case 1: return models_.reload(key);
-        case 2: return environments_.reload(key);
-        case 3: return fonts_.reload(key);
-        case 4:  // atlases and animations: never reloaded (their sprites are referenced directly)
-        case 5: return false;
-        case 6: return sounds_.reload(key);
-        case 7: return musics_.reload(key);
-        case 8: return skeletons_.reload(key);
-        case 9: return clips_.reload(key);
-        case 10: return animation_sets_.reload(key);
-        case 11: return maps_.reload(key);
-        case 12: return effects_.reload(key);
-        default: return false;
+bool Assets::reload(AssetType type, const std::string& key) {
+    switch (type) {
+        case AssetType::Texture: return textures_.reload(key);
+        case AssetType::Model: return models_.reload(key);
+        case AssetType::Environment: return environments_.reload(key);
+        case AssetType::Font: return fonts_.reload(key);
+        case AssetType::Atlas: return false;  // never reloaded: its sprites are referenced directly
+        case AssetType::Sound: return sounds_.reload(key);
+        case AssetType::Music: return musics_.reload(key);
+        case AssetType::Skeleton: return skeletons_.reload(key);
+        case AssetType::Clips: return clips_.reload(key);
+        case AssetType::AnimationSet: return animation_sets_.reload(key);
+        case AssetType::Map: return maps_.reload(key);
+        case AssetType::Effect: return effects_.reload(key);
+        case AssetType::Count: break;
     }
+    return false;
 }
 
 }  // namespace moteur

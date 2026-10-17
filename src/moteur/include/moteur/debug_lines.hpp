@@ -12,34 +12,42 @@
 
 namespace moteur {
 
-// One end of a debug line, laid out exactly as it is sent to the GPU.
+/// One end of a debug line, laid out exactly as it is sent to the GPU.
 struct DebugLineVertex {
-    glm::vec3 position;  // world, metres
-    glm::vec4 color;     // linear, may exceed 1
+    glm::vec3 position;  ///< world, metres
+    glm::vec4 color;     ///< linear, may exceed 1
 };
 static_assert(sizeof(DebugLineVertex) == 28, "DebugLineVertex is uploaded as is: keep it tightly packed");
 
-// Lines to look at what the engine does (milestone 3, part 12): boxes, frustums, rays, axes.
-// Plain CPU code, testable without a GPU. Each line is either hidden by the meshes in front of it
-// (`on_top = false`) or drawn over everything.
+/// Lines to look at what the engine does (milestone 3, part 12): boxes, frustums, rays, axes.
+/// Plain CPU code, testable without a GPU. Each line is either hidden by the meshes in front of it
+/// (`on_top = false`) or drawn over everything. Positions are in world space (metres), colors
+/// linear and may exceed 1. Not thread-safe: record from one thread at a time (the frame's).
 class DebugLineBuffer {
 public:
+    /// Forgets every line, keeping the memory. The Renderer calls it when a frame ends.
     void clear();
+    /// One segment from `from` to `to`.
     void line(glm::vec3 from, glm::vec3 to, glm::vec4 color, bool on_top = false);
-    // The 12 edges of a box.
+    /// The 12 edges of a box. An empty box (Aabb::empty()) adds nothing.
     void box(const Aabb& box, glm::vec4 color, bool on_top = false);
-    // The 12 edges of what a view-projection matrix sees (depth in [0, 1]): a camera, a shadow map.
+    /// The 12 edges of what a view-projection matrix sees (depth in [0, 1]): a camera, a shadow map.
     void frustum(const glm::mat4& view_projection, glm::vec4 color, bool on_top = false);
-    // X in red, Y in green, Z in blue, `length` metres from `origin`.
+    /// X in red, Y in green, Z in blue, `length` metres from `origin`.
     void axes(glm::vec3 origin, float length, bool on_top = true);
-    // A circle in the plane perpendicular to `normal`, drawn with `segments` lines.
+    /// A circle in the plane perpendicular to `normal` (any length but zero), drawn with
+    /// `segments` lines (at least 3), `radius` metres.
     void circle(glm::vec3 center, glm::vec3 normal, float radius, glm::vec4 color, int segments = 32, bool on_top = false);
-    // Three circles, one per axis plane.
+    /// Three circles of 32 segments, one per axis plane.
     void sphere(glm::vec3 center, float radius, glm::vec4 color, bool on_top = false);
 
-    // Two vertices per line: those hidden by the meshes, and those drawn on top.
+    /// Two vertices per line: those hidden by the meshes, and those drawn on top. Valid until
+    /// the next call that adds a line or clears the buffer.
+    ///@{
     const std::vector<DebugLineVertex>& depth_tested() const { return depth_tested_; }
     const std::vector<DebugLineVertex>& on_top() const { return on_top_; }
+    ///@}
+    /// Number of lines recorded, both kinds together.
     std::size_t line_count() const { return (depth_tested_.size() + on_top_.size()) / 2; }
 
 private:
@@ -47,24 +55,36 @@ private:
     std::vector<DebugLineVertex> on_top_;
 };
 
-// Draws a DebugLineBuffer in the "scene" pass, after the meshes and billboards, with the camera
-// given to set_camera(), or else the one given to MeshRenderer::set_camera(). Lines are one pixel
-// wide (SDL_GPU has no line width). Recorded again every frame, like everything else.
-//
-//   renderer.debug_lines().lines().box(bounds, {0, 1, 0, 1});
+/// Draws a DebugLineBuffer in the "scene" pass, after the meshes and billboards, with the camera
+/// given to set_camera(), or else the one given to MeshRenderer::set_camera(). Lines are one pixel
+/// wide (SDL_GPU has no line width). Recorded again every frame, like everything else: the
+/// Renderer owns the instance (Renderer::debug_lines()) and clears its lines when a frame ends.
+/// Without a camera of its own, the lines are drawn only on frames where the meshes are drawn
+/// (MeshRenderer::set_camera() given and meshes recorded).
+///
+/// ```
+/// renderer.debug_lines().lines().box(bounds, {0, 1, 0, 1});
+/// ```
 class DebugLineRenderer {
 public:
+    /// `color_format` and `depth_format`: the targets of the "scene" pass it draws in. Created by
+    /// the Renderer; a game has no reason to make one. Throws std::runtime_error if a pipeline
+    /// cannot be created.
     DebugLineRenderer(Renderer& renderer, SDL_GPUTextureFormat color_format, SDL_GPUTextureFormat depth_format);
 
+    /// The view-projection matrix (depth in [0, 1]) the lines of this frame are drawn with,
+    /// instead of the meshes' camera. Forgotten when the frame ends.
     void set_camera(const glm::mat4& view_projection) {
         view_projection_ = view_projection;
         has_camera_ = true;
     }
+    /// The lines of the current frame, to add to. The reference lives as long as this renderer.
     DebugLineBuffer& lines() { return lines_; }
+    /// True if this frame has something to draw: a camera and at least one line.
     bool has_work() const { return has_camera_ && lines_.line_count() > 0; }
 
 private:
-    friend class Renderer;  // drives prepare(), render() and clear(); gives the meshes' camera
+    friend class Renderer;  ///< drives prepare(), render() and clear(); gives the meshes' camera
 
     void prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats);
     void render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass, RenderStats& stats);
@@ -73,7 +93,7 @@ private:
         has_camera_ = false;
     }
 
-    // For `samples` per pixel (MSAA): made again by the Renderer when the anti-aliasing changes.
+    /// For `samples` per pixel (MSAA): made again by the Renderer when the anti-aliasing changes.
     void create_pipelines(SDL_GPUSampleCount samples);
 
     Renderer& renderer_;
@@ -85,7 +105,7 @@ private:
     GpuGraphicsPipeline on_top_pipeline_;
     GpuBuffer vertex_buffer_;
     GpuTransferBuffer transfer_buffer_;
-    std::size_t capacity_ = 0;  // vertices
+    std::size_t capacity_ = 0;  ///< vertices
     DebugLineBuffer lines_;
     glm::mat4 view_projection_{1.0f};
     bool has_camera_ = false;

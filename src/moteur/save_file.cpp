@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <stdexcept>
 
+#include "moteur/cbor_check.hpp"
 #include "moteur/file_io.hpp"
 
 namespace moteur {
@@ -40,6 +42,10 @@ std::vector<std::uint8_t> encode_json(const nlohmann::json& value, SaveEncoding 
 
 nlohmann::json decode_json(const std::uint8_t* begin, const std::uint8_t* end, SaveEncoding encoding) {
     if (encoding == SaveEncoding::Cbor) {
+        // Checked first: nlohmann reads nested CBOR recursively (see cbor_check.hpp).
+        if (std::string error; !check_cbor_structure(begin, static_cast<std::size_t>(end - begin), error)) {
+            throw std::runtime_error(error);
+        }
         return nlohmann::json::from_cbor(begin, end);
     }
     return nlohmann::json::parse(begin, end);
@@ -53,32 +59,32 @@ struct Parts {
 
 bool split(const std::vector<std::uint8_t>& bytes, Parts& parts, std::string& error) {
     if (bytes.size() < 4 + 4 + 1 + 4 + 4 + 4 || std::memcmp(bytes.data(), kMagic, 4) != 0) {
-        error = "pas une sauvegarde";
+        error = "not a save file";
         return false;
     }
     std::size_t at = 4;
     std::uint32_t format = 0;
     get_u32(bytes, at, format);
     if (format > SaveGame::kFormatVersion) {
-        error = "sauvegarde d'un format plus récent (" + std::to_string(format) + ") : mettre le jeu à jour";
+        error = "save file from a newer format (" + std::to_string(format) + "): update the game";
         return false;
     }
     const std::uint8_t encoding = bytes[at++];
     if (encoding > 1) {
-        error = "encodage inconnu";
+        error = "unknown encoding";
         return false;
     }
     parts.encoding = static_cast<SaveEncoding>(encoding);
     std::uint32_t header_size = 0, body_size = 0;
     if (!get_u32(bytes, at, header_size) || at + header_size > bytes.size()) {
-        error = "sauvegarde tronquée";
+        error = "save file truncated";
         return false;
     }
     parts.header_at = at;
     parts.header_size = header_size;
     at += header_size;
     if (!get_u32(bytes, at, body_size) || at + body_size + 4 != bytes.size()) {
-        error = "sauvegarde tronquée";
+        error = "save file truncated";
         return false;
     }
     parts.body_at = at;
@@ -87,7 +93,7 @@ bool split(const std::vector<std::uint8_t>& bytes, Parts& parts, std::string& er
     std::uint32_t stored = 0;
     get_u32(bytes, at, stored);
     if (crc32(bytes.data(), bytes.size() - 4) != stored) {
-        error = "sauvegarde abîmée (somme de contrôle fausse)";
+        error = "save file damaged (checksum mismatch)";
         return false;
     }
     return true;
@@ -119,15 +125,19 @@ int SaveMigrations::current(const std::string& section) const {
 bool SaveMigrations::upgrade(const std::string& section, int& version, nlohmann::json& data, std::string& error) const {
     const int target = current(section);
     if (version > target) {
-        error = "section " + section + " en version " + std::to_string(version) + ", plus récente que le jeu (" +
+        error = "section " + section + " at version " + std::to_string(version) + ", newer than the game (" +
                 std::to_string(target) + ")";
         return false;
     }
     const auto found = steps_.find(section);
+    if (version < target && found == steps_.end()) {  // below 1, and the section has no step at all
+        error = "section " + section + ": no migration from version " + std::to_string(version);
+        return false;
+    }
     while (version < target) {
         const auto step = found->second.find(version);
         if (step == found->second.end()) {
-            error = "section " + section + " : aucune migration depuis la version " + std::to_string(version);
+            error = "section " + section + ": no migration from version " + std::to_string(version);
             return false;
         }
         step->second(data);
@@ -152,6 +162,7 @@ int SaveGame::section_version(const std::string& name) const {
 
 std::vector<std::string> SaveGame::section_names() const {
     std::vector<std::string> names;
+    names.reserve(sections_.size());
     for (const auto& [name, section] : sections_) {
         names.push_back(name);
     }
@@ -190,8 +201,8 @@ std::optional<SaveHeader> SaveGame::decode_header(const std::vector<std::uint8_t
     try {
         const std::uint8_t* begin = bytes.data() + parts.header_at;
         return header_from(decode_json(begin, begin + parts.header_size, parts.encoding));
-    } catch (const nlohmann::json::exception& e) {
-        error = std::string("en-tête illisible : ") + e.what();
+    } catch (const std::exception& e) {  // nlohmann's, or the CBOR check's
+        error = std::string("unreadable header: ") + e.what();
         return std::nullopt;
     }
 }
@@ -215,8 +226,8 @@ std::optional<SaveGame> SaveGame::decode(const std::vector<std::uint8_t>& bytes,
             }
             save.sections_[name] = std::move(section);
         }
-    } catch (const nlohmann::json::exception& e) {
-        error = std::string("contenu illisible : ") + e.what();
+    } catch (const std::exception& e) {  // nlohmann's, or the CBOR check's
+        error = std::string("unreadable content: ") + e.what();
         return std::nullopt;
     }
     return save;
@@ -241,7 +252,7 @@ std::vector<SaveSlots::Slot> SaveSlots::list() const {
         if (const auto bytes = read_file_bytes(slot.path)) {
             header = SaveGame::decode_header(*bytes, slot.error);
         } else {
-            slot.error = "lecture impossible";
+            slot.error = "cannot read the file";
         }
         if (!header) {
             std::string backup_error;
@@ -276,13 +287,13 @@ std::optional<SaveGame> SaveSlots::read(const std::string& name, std::string& er
     if (from_backup != nullptr) {
         *from_backup = false;
     }
-    std::string main_error = "fichier absent";
+    std::string main_error = "file missing";
     if (const auto bytes = read_file_bytes(path(name))) {
         if (auto save = SaveGame::decode(*bytes, main_error, migrations)) {
             return save;
         }
     }
-    std::string backup_error = "pas de copie de secours";
+    std::string backup_error = "no backup";
     if (const auto bytes = read_file_bytes(path(name) + ".bak")) {
         if (auto save = SaveGame::decode(*bytes, backup_error, migrations)) {
             if (from_backup != nullptr) {
@@ -291,7 +302,7 @@ std::optional<SaveGame> SaveSlots::read(const std::string& name, std::string& er
             return save;
         }
     }
-    error = main_error + " ; copie de secours : " + backup_error;
+    error = main_error + "; backup: " + backup_error;
     return std::nullopt;
 }
 

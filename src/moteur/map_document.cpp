@@ -75,10 +75,10 @@ std::vector<TileId> trimmed(std::vector<TileId> stack) {
 
 const char* direction_name(MapConnector::Direction direction) {
     switch (direction) {
-        case MapConnector::Direction::North: return "nord";
-        case MapConnector::Direction::East: return "est";
-        case MapConnector::Direction::South: return "sud";
-        default: return "ouest";
+        case MapConnector::Direction::North: return "north";
+        case MapConnector::Direction::East: return "east";
+        case MapConnector::Direction::South: return "south";
+        default: return "west";
     }
 }
 
@@ -156,7 +156,7 @@ bool MapDocument::set_tile(int layer, glm::ivec2 cell, TileId id) {
     }
     const bool own_action = !current_;
     if (own_action) {
-        begin_action("modification");
+        begin_action("edit");
     }
     current_->tiles.push_back({layer, cell, slot, id});
     slot = id;
@@ -237,7 +237,7 @@ TileId MapDocument::add_tile_type(const TileType& type) {
         return existing;
     }
     const bool own = !current_;
-    if (own) begin_action("type de tuile");
+    if (own) begin_action("tile type");
     touch_extras();
     types_.push_back(type);
     changed();
@@ -249,8 +249,12 @@ void MapDocument::set_tile_type(TileId id, const TileType& type) {
     if (id == kNoTile || id > types_.size()) {
         return;
     }
+    // Names are the file's keys: an empty one, or one another type has, would not read back.
+    if (const TileId named = tile_id(type.name); type.name.empty() || (named != kNoTile && named != id)) {
+        return;
+    }
     const bool own = !current_;
-    if (own) begin_action("type de tuile");
+    if (own) begin_action("tile type");
     touch_extras();
     types_[id - 1] = type;
     changed();
@@ -259,7 +263,7 @@ void MapDocument::set_tile_type(TileId id, const TileType& type) {
 
 void MapDocument::set_symbol(const MapSymbol& symbol) {
     const bool own = !current_;
-    if (own) begin_action("légende");
+    if (own) begin_action("legend");
     touch_extras();
     MapSymbol clean = symbol;
     clean.tiles = trimmed(clean.tiles);
@@ -339,7 +343,7 @@ const MapObject* MapDocument::object(const std::string& id) const {
 
 std::string MapDocument::add_object(MapObject object) {
     const bool own = !current_;
-    if (own) begin_action("objet");
+    if (own) begin_action("object");
     touch_extras();
     if (object.id.empty() || this->object(object.id) != nullptr) {
         do {
@@ -359,7 +363,7 @@ void MapDocument::update_object(const MapObject& object) {
         return;
     }
     const bool own = !current_;
-    if (own) begin_action("objet");
+    if (own) begin_action("object");
     touch_extras();
     *found = object;
     changed();
@@ -371,7 +375,7 @@ void MapDocument::remove_object(const std::string& id) {
         return;
     }
     const bool own = !current_;
-    if (own) begin_action("suppression");
+    if (own) begin_action("delete");
     touch_extras();
     std::erase_if(objects_, [&](const MapObject& o) { return o.id == id; });
     changed();
@@ -380,7 +384,7 @@ void MapDocument::remove_object(const std::string& id) {
 
 void MapDocument::set_connectors(std::vector<MapConnector> connectors) {
     const bool own = !current_;
-    if (own) begin_action("connecteurs");
+    if (own) begin_action("connectors");
     touch_extras();
     connectors_ = std::move(connectors);
     changed();
@@ -404,7 +408,7 @@ void MapDocument::set_chunk(bool value) {
         return;
     }
     const bool own = !current_;
-    if (own) begin_action("morceau");
+    if (own) begin_action("chunk");
     touch_extras();
     chunk = value;
     changed();
@@ -465,8 +469,12 @@ int MapDocument::fill(glm::ivec2 start, const std::vector<TileId>& stack) {
         return 0;
     }
     std::vector<std::uint8_t> seen(static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_), 0);
+    // Index in `seen` of a cell of the map (non-negative coordinates).
+    const auto flat = [this](glm::ivec2 c) {
+        return static_cast<std::size_t>(c.y) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(c.x);
+    };
     std::deque<glm::ivec2> open{start};
-    seen[static_cast<std::size_t>(start.y * width_ + start.x)] = 1;
+    seen[flat(start)] = 1;
     int count = 0;
     while (!open.empty()) {
         const glm::ivec2 cell = open.front();
@@ -475,8 +483,8 @@ int MapDocument::fill(glm::ivec2 start, const std::vector<TileId>& stack) {
         ++count;
         for (const glm::ivec2 d : {glm::ivec2(1, 0), glm::ivec2(-1, 0), glm::ivec2(0, 1), glm::ivec2(0, -1)}) {
             const glm::ivec2 n = cell + d;
-            if (contains(n) && !seen[static_cast<std::size_t>(n.y * width_ + n.x)] && this->stack(n) == from) {
-                seen[static_cast<std::size_t>(n.y * width_ + n.x)] = 1;
+            if (contains(n) && !seen[flat(n)] && this->stack(n) == from) {
+                seen[flat(n)] = 1;
                 open.push_back(n);
             }
         }
@@ -488,7 +496,7 @@ void MapDocument::resize(int left, int top, int right, int bottom, const std::ve
     const int width = std::max(1, width_ + left + right);
     const int height = std::max(1, height_ + top + bottom);
     const bool own = !current_;
-    if (own) begin_action("redimensionnement");
+    if (own) begin_action("resize");
     touch_extras(true);
     current_->resized = true;
     std::vector<TileId> cells(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * static_cast<std::size_t>(layers_), kNoTile);
@@ -609,22 +617,22 @@ const std::string& MapDocument::undo_name() const {
 std::vector<MapDocument::Issue> MapDocument::validate() const {
     std::vector<Issue> issues;
     const auto all_points = points();
-    const auto start = all_points.find("depart");
+    const auto start = all_points.find(kStartPoint);
     if (!chunk && start == all_points.end()) {
-        issues.push_back({Issue::Level::Error, "pas de point « depart »", {}});
+        issues.push_back({Issue::Level::Error, std::string("no '") + kStartPoint + "' point", {}});
     }
     MapData map;
     try {
         map = to_map_data();
     } catch (const std::exception& e) {
-        issues.push_back({Issue::Level::Error, std::string("carte illisible : ") + e.what(), {}});
+        issues.push_back({Issue::Level::Error, std::string("invalid map: ") + e.what(), {}});
         return issues;
     }
     const NavGrid grid(map.tiles(), map.tileset());
     if (start != all_points.end()) {
         const glm::ivec2 from = start->second.front();
         if (!grid.walkable(from)) {
-            issues.push_back({Issue::Level::Error, "le départ est sur une case bloquée", {from}});
+            issues.push_back({Issue::Level::Error, "the start is on a blocked cell", {from}});
         } else {
             const ClearanceMap clearance(grid);
             FlowField field;
@@ -638,7 +646,7 @@ std::vector<MapDocument::Issue> MapDocument::validate() const {
                 }
             }
             if (!unreachable.cells.empty()) {
-                unreachable.message = std::to_string(unreachable.cells.size()) + " case(s) praticable(s) inaccessible(s) depuis le départ";
+                unreachable.message = std::to_string(unreachable.cells.size()) + " walkable cell(s) unreachable from the start";
                 issues.push_back(std::move(unreachable));
             }
         }
@@ -646,14 +654,14 @@ std::vector<MapDocument::Issue> MapDocument::validate() const {
     for (const MapObject& object : objects_) {
         if (object.position.x < 0.0f || object.position.z < 0.0f || object.position.x > static_cast<float>(width_) ||
             object.position.z > static_cast<float>(height_)) {
-            issues.push_back({Issue::Level::Warning, "objet " + object.id + " hors de la carte", {}});
+            issues.push_back({Issue::Level::Warning, "object " + object.id + " outside the map", {}});
         }
     }
     for (const MapConnector& connector : connectors_) {
         const bool edge = connector.cell.x == 0 || connector.cell.y == 0 || connector.cell.x == width_ - 1 ||
                           connector.cell.y == height_ - 1;
         if (!edge || !grid.walkable(connector.cell)) {
-            issues.push_back({Issue::Level::Warning, "connecteur " + connector.name + " pas sur une case praticable du bord",
+            issues.push_back({Issue::Level::Warning, "connector " + connector.name + " not on a walkable edge cell",
                               {connector.cell}});
         }
     }
@@ -691,7 +699,7 @@ std::string MapDocument::to_json() const {
                 symbols.push_back({character, s, point});
                 found = static_cast<int>(symbols.size()) - 1;
             }
-            cell_symbol[static_cast<std::size_t>(j * width_ + i)] = found;
+            cell_symbol[static_cast<std::size_t>(j) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(i)] = found;
         }
     }
     const auto tile_names = [this](const std::vector<TileId>& stack) {
@@ -736,7 +744,9 @@ std::string MapDocument::to_json() const {
     for (int j = 0; j < height_; ++j) {
         std::string row;
         for (int i = 0; i < width_; ++i) {
-            row += symbols[static_cast<std::size_t>(cell_symbol[static_cast<std::size_t>(j * width_ + i)])].character;
+            const int symbol =
+                cell_symbol[static_cast<std::size_t>(j) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(i)];
+            row += symbols[static_cast<std::size_t>(symbol)].character;
         }
         out += "    " + json_text(row) + (j + 1 < height_ ? ",\n" : "\n");
     }

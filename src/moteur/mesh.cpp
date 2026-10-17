@@ -158,28 +158,34 @@ MeshData make_sphere(float radius, int segments, int rings) {
 }
 
 Mesh Mesh::create(Renderer& renderer, const MeshData& data, const char* name) {
+    // Every message names the mesh the same way, a nameless one included.
+    const std::string label = name != nullptr && *name != '\0' ? "Mesh '" + std::string(name) + "'" : "Mesh (unnamed)";
+    // Every check before the first upload: a refused mesh stages nothing.
     if (data.vertices.empty() || data.indices.empty()) {
-        throw std::invalid_argument(std::string("Mesh '") + (name != nullptr ? name : "") + "' has no geometry");
+        throw std::invalid_argument(label + " has no geometry");
     }
-    const std::string base = name != nullptr ? name : "mesh";
-    Mesh mesh;
-    mesh.vertices = renderer.create_buffer(SDL_GPU_BUFFERUSAGE_VERTEX, data.vertices.data(),
-                                           data.vertices.size() * sizeof(Vertex3D), (base + ".vertices").c_str());
-    mesh.indices = renderer.create_buffer(SDL_GPU_BUFFERUSAGE_INDEX, data.indices.data(),
-                                          data.indices.size() * sizeof(std::uint32_t), (base + ".indices").c_str());
-    mesh.index_count = static_cast<std::uint32_t>(data.indices.size());
-    mesh.bounds = data.bounds();
-    mesh.gpu_bytes = data.vertices.size() * sizeof(Vertex3D) + data.indices.size() * sizeof(std::uint32_t);
-    if (!data.skin.empty()) {
-        if (data.skin.size() != data.vertices.size()) {
-            throw std::invalid_argument("Mesh '" + base + "' has " + std::to_string(data.skin.size()) + " skin entries for " +
-                                        std::to_string(data.vertices.size()) + " vertices");
+    if (!data.skin.empty() && data.skin.size() != data.vertices.size()) {
+        throw std::invalid_argument(label + " has " + std::to_string(data.skin.size()) + " skin entries for " +
+                                    std::to_string(data.vertices.size()) + " vertices");
+    }
+    try {
+        Mesh mesh;
+        mesh.vertices = renderer.create_geometry(SDL_GPU_BUFFERUSAGE_VERTEX, data.vertices.data(),
+                                                 data.vertices.size() * sizeof(Vertex3D));
+        mesh.indices = renderer.create_geometry(SDL_GPU_BUFFERUSAGE_INDEX, data.indices.data(),
+                                                data.indices.size() * sizeof(std::uint32_t));
+        mesh.index_count = static_cast<std::uint32_t>(data.indices.size());
+        mesh.bounds = data.bounds();
+        mesh.gpu_bytes = data.vertices.size() * sizeof(Vertex3D) + data.indices.size() * sizeof(std::uint32_t);
+        if (!data.skin.empty()) {
+            mesh.skin = renderer.create_geometry(SDL_GPU_BUFFERUSAGE_VERTEX, data.skin.data(),
+                                                 data.skin.size() * sizeof(VertexSkin));
+            mesh.gpu_bytes += data.skin.size() * sizeof(VertexSkin);
         }
-        mesh.skin = renderer.create_buffer(SDL_GPU_BUFFERUSAGE_VERTEX, data.skin.data(),
-                                           data.skin.size() * sizeof(VertexSkin), (base + ".skin").c_str());
-        mesh.gpu_bytes += data.skin.size() * sizeof(VertexSkin);
+        return mesh;
+    } catch (const std::runtime_error& e) {  // the GPU refused a buffer: say for which mesh
+        throw std::runtime_error(label + ": " + e.what());
     }
-    return mesh;
 }
 
 }  // namespace moteur

@@ -61,15 +61,32 @@ GpuTexture create_depth_texture(SDL_GPUDevice* device, SDL_GPUTextureFormat form
     if (raw == nullptr) {
         throw std::runtime_error(std::string("SDL_CreateGPUTexture (") + name + ") failed: " + SDL_GetError());
     }
-    return GpuTexture(device, raw);
+    return GpuTexture(device, raw, texture_memory_bytes(info), texture_memory_kind(info));
 }
 
 // FNV-1a over raw bytes: the signature of a point light's shadow.
+// Eight bytes at a time (milestone 8, part 5): the palettes of the animated characters in reach of
+// each light are hashed every frame (about 2 KB each), and byte by byte that took 6 ms per frame
+// in the slice's crowded fight. Only telling a change matters here, not the hash's spread.
 void hash_bytes(std::uint64_t& hash, const void* data, std::size_t size) {
     const auto* bytes = static_cast<const unsigned char*>(data);
-    for (std::size_t i = 0; i < size; ++i) {
+    std::size_t i = 0;
+    for (; i + 8 <= size; i += 8) {
+        std::uint64_t word;
+        std::memcpy(&word, bytes + i, 8);
+        hash = (hash ^ word) * 1099511628211ull;
+        hash ^= hash >> 29;
+    }
+    for (; i < size; ++i) {
         hash = (hash ^ bytes[i]) * 1099511628211ull;
     }
+}
+
+// Hashes which object `pointer` designates (its address), not the object's content: the same
+// bytes as the pointer itself.
+void hash_address(std::uint64_t& hash, const void* pointer) {
+    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    hash_bytes(hash, &address, sizeof(address));
 }
 
 constexpr int kMaterialTextures = 5;  // then the environment in slot 5, the shadow maps in 6 and 7, the fog in 8
@@ -292,6 +309,11 @@ MeshRenderer::MeshRenderer(Renderer& renderer, SDL_GPUTextureFormat color_format
         shadow.rasterizer_state.enable_depth_bias = false;
         shadow.rasterizer_state.depth_bias_constant_factor = 0.0f;
         shadow.rasterizer_state.depth_bias_slope_factor = 0.0f;
+        // Clipped at the near plane, not clamped (the sun's pipelines clamp: what is behind its
+        // near plane must still cast): a point light's near plane leaves out what surrounds the
+        // light itself (a lantern around its flame, PointLight::shadow_near). Clamped, that geometry
+        // would be drawn all the same, and its shadow would cover the ground below.
+        shadow.rasterizer_state.enable_depth_clip = true;
         shadow.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
         point_single_sided_ = create_shadow("point shadow pipeline");
         shadow.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
@@ -301,6 +323,75 @@ MeshRenderer::MeshRenderer(Renderer& renderer, SDL_GPUTextureFormat color_format
         point_skinned_single_sided_ = create_skinned(point_skinned_vertex, "point shadow pipeline (skinned)");
         shadow.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
         point_skinned_double_sided_ = create_skinned(point_skinned_vertex, "point shadow pipeline (skinned, double sided)");
+
+        // Alpha-tested materials (review of milestones 1 to 7, 3.1): the inputs above, then the vertex's uv,
+        // the instance's base color (its alpha factor) and first normal row (w: the cutoff); the fragment
+        // stage samples the base color texture and drops what the cutoff removes. Locations stay
+        // contiguous (see shadow.vert.hlsl).
+        {
+            ShaderInfo masked_fragment_info;
+            masked_fragment_info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
+            masked_fragment_info.samplers = 1;
+            ShaderInfo point_masked_fragment_info = masked_fragment_info;
+            point_masked_fragment_info.uniform_buffers = 1;
+            const GpuShader masked_vertex[2] = {renderer.load_shader("shadow_masked.vert", shadow_vertex_info),
+                                                renderer.load_shader("shadow_masked_skinned.vert", skinned_shadow_info)};
+            const GpuShader point_masked_vertex[2] = {
+                renderer.load_shader("point_shadow_masked.vert", shadow_vertex_info),
+                renderer.load_shader("point_shadow_masked_skinned.vert", skinned_shadow_info)};
+            const GpuShader masked_fragment = renderer.load_shader("shadow_masked.frag", masked_fragment_info);
+            const GpuShader point_masked_fragment = renderer.load_shader("point_shadow_masked.frag", point_masked_fragment_info);
+            constexpr int kUv = 2, kBaseColor = 4 + 6, kNormal0 = 4 + 3;  // in MeshVertexInput
+            SDL_GPUVertexAttribute masked_attributes[7] = {shadow_attributes[0], shadow_attributes[1], shadow_attributes[2],
+                                                           shadow_attributes[3], input.attributes[kUv],
+                                                           input.attributes[kBaseColor], input.attributes[kNormal0]};
+            SDL_GPUVertexAttribute masked_skinned_attributes[10] = {
+                skinned_attributes[0], skinned_attributes[1], skinned_attributes[2], skinned_attributes[3],
+                skinned_attributes[4], skinned_attributes[5], skinned_attributes[6], input.attributes[kUv],
+                input.attributes[kBaseColor], input.attributes[kNormal0]};
+            for (Uint32 i = 4; i < 7; ++i) {
+                masked_attributes[i].location = i;
+            }
+            for (Uint32 i = 7; i < 10; ++i) {
+                masked_skinned_attributes[i].location = i;
+            }
+            const auto create_masked = [&](const GpuShader& vertex, const GpuShader& fragment, bool skinned, bool point,
+                                           bool double_sided, const char* name) {
+                SDL_GPUGraphicsPipelineCreateInfo info = shadow;
+                info.vertex_shader = vertex.get();
+                info.fragment_shader = fragment.get();
+                info.vertex_input_state.vertex_buffer_descriptions = input.buffers;
+                info.vertex_input_state.num_vertex_buffers = skinned ? 3 : 2;
+                info.vertex_input_state.vertex_attributes = skinned ? masked_skinned_attributes : masked_attributes;
+                info.vertex_input_state.num_vertex_attributes = skinned ? 10 : 7;
+                info.rasterizer_state.cull_mode = double_sided ? SDL_GPU_CULLMODE_NONE : SDL_GPU_CULLMODE_BACK;
+                // The sun's slope bias; none for point lights (their bias is a length, see above).
+                info.rasterizer_state.enable_depth_bias = !point;
+                info.rasterizer_state.depth_bias_constant_factor = point ? 0.0f : 1.0f;
+                info.rasterizer_state.depth_bias_slope_factor = point ? 0.0f : 2.0f;
+                info.rasterizer_state.enable_depth_clip = point;  // see the point shadow pipelines above
+                const NameProperty name_property(SDL_PROP_GPU_GRAPHICSPIPELINE_CREATE_NAME_STRING, name);
+                info.props = name_property.id();
+                SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device_, &info);
+                if (pipeline == nullptr) {
+                    throw std::runtime_error(std::string("SDL_CreateGPUGraphicsPipeline (") + name + ") failed: " + SDL_GetError());
+                }
+                return GpuGraphicsPipeline(device_, pipeline);
+            };
+            static const char* const kNames[2][2][2] = {
+                {{"shadow pipeline (masked)", "shadow pipeline (masked, double sided)"},
+                 {"shadow pipeline (masked, skinned)", "shadow pipeline (masked, skinned, double sided)"}},
+                {{"point shadow pipeline (masked)", "point shadow pipeline (masked, double sided)"},
+                 {"point shadow pipeline (masked, skinned)", "point shadow pipeline (masked, skinned, double sided)"}}};
+            for (int skinned = 0; skinned < 2; ++skinned) {
+                for (int sides = 0; sides < 2; ++sides) {
+                    shadow_masked_[skinned][sides] = create_masked(masked_vertex[skinned], masked_fragment, skinned != 0,
+                                                                   false, sides != 0, kNames[0][skinned][sides]);
+                    point_masked_[skinned][sides] = create_masked(point_masked_vertex[skinned], point_masked_fragment,
+                                                                  skinned != 0, true, sides != 0, kNames[1][skinned][sides]);
+                }
+            }
+        }
 
         // Clearing one tile: a triangle at the far depth, no vertex input, always written.
         ShaderInfo clear_vertex_info;
@@ -495,7 +586,7 @@ void MeshRenderer::draw(const Model& model, const glm::mat4& world) {
 }
 
 void MeshRenderer::prepare_shadows() {
-    const int size = std::clamp(shadow_options_.resolution, 256, 8192);
+    const int size = std::clamp(std::min(shadow_options_.resolution, cap_resolution_), 256, 8192);
     if (!shadow_map_ || shadow_map_size_ != size) {
         SDL_GPUTextureCreateInfo info = {};
         info.type = SDL_GPU_TEXTURETYPE_2D;
@@ -512,7 +603,7 @@ void MeshRenderer::prepare_shadows() {
         if (raw == nullptr) {
             throw std::runtime_error(std::string("SDL_CreateGPUTexture (shadow map) failed: ") + SDL_GetError());
         }
-        shadow_map_ = GpuTexture(device_, raw);
+        shadow_map_ = GpuTexture(device_, raw, texture_memory_bytes(info), texture_memory_kind(info));
         shadow_map_size_ = size;
     }
     ShadowSettings settings;
@@ -555,7 +646,7 @@ void MeshRenderer::ensure_palette_capacity(std::size_t rows) {
 }
 
 void MeshRenderer::prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats) {
-    MOTEUR_PROFILE("maillages : préparation");
+    MOTEUR_PROFILE("meshes: prepare");
     stats.dropped_lights += dropped_lights_;
     if (fog_dirty_ && fog_texture_) {
         void* mapped = SDL_MapGPUTransferBuffer(device_, fog_transfer_.get(), true);
@@ -587,15 +678,22 @@ void MeshRenderer::prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats) {
     const auto frustum = [this](const glm::mat4& view_projection) {
         return culling_ ? Frustum::from_view_projection(view_projection) : Frustum{};
     };
-    main_batcher_.build(draws_, frustum(view_projection_), MeshBatcher::Pass::Main);
+    {
+        MOTEUR_PROFILE("meshes: scene batches");
+        main_batcher_.build(draws_, frustum(view_projection_), MeshBatcher::Pass::Main);
+    }
     stats.meshes_submitted += static_cast<int>(main_batcher_.submitted());
     const bool shadows = wants_shadows();
     if (shadows) {
+        MOTEUR_PROFILE("meshes: shadow batches");
         prepare_shadows();
         shadow_batcher_.build(draws_, frustum(shadow_frame_.view_projection), MeshBatcher::Pass::Shadow);
         stats.shadow_casters_submitted += static_cast<int>(shadow_batcher_.submitted());
     }
-    prepare_point_shadows(stats);
+    {
+        MOTEUR_PROFILE("meshes: point shadows");
+        prepare_point_shadows(stats);
+    }
 
     // The instances, one pass after the other: scene, sun, then each face of each point light drawn.
     const std::size_t main_count = main_batcher_.visible();
@@ -661,7 +759,7 @@ void MeshRenderer::prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats) {
 void MeshRenderer::prepare_point_shadows(RenderStats& stats) {
     point_jobs_.clear();
     point_renders_ = 0;
-    const int budget = std::clamp(shadow_options_.point_budget, 0, kMaxShadowedPointLights);
+    const int budget = std::clamp(std::min(shadow_options_.point_budget, cap_point_budget_), 0, kMaxShadowedPointLights);
     std::vector<PointShadowCandidate> candidates;
     std::vector<int> candidate_light;  // index in lights_ of each candidate
     for (std::size_t i = 0; i < lights_.size(); ++i) {
@@ -688,7 +786,7 @@ void MeshRenderer::prepare_point_shadows(RenderStats& stats) {
     }
 
     // The atlas: six tiles across (the faces), a row per light of the budget.
-    const int tile = std::clamp(shadow_options_.point_resolution, 64, 2048);
+    const int tile = std::clamp(std::min(shadow_options_.point_resolution, cap_point_resolution_), 64, 2048);
     if (!point_atlas_ || tile != point_tile_ || budget != point_rows_) {
         point_atlas_ = create_depth_texture(device_, shadow_format_, 6 * tile, budget * tile, "point shadow atlas");
         point_tile_ = tile;
@@ -702,6 +800,8 @@ void MeshRenderer::prepare_point_shadows(RenderStats& stats) {
         point_casters_.resize(selected.size());
     }
     std::vector<std::uint64_t> signatures;
+    {
+    MOTEUR_PROFILE("point shadows: signatures");
     for (std::size_t k = 0; k < selected.size(); ++k) {
         const PointLight& light = lights_[static_cast<std::size_t>(candidate_light[static_cast<std::size_t>(selected[k])])];
         std::vector<std::uint32_t>& casters = point_casters_[k];
@@ -709,23 +809,34 @@ void MeshRenderer::prepare_point_shadows(RenderStats& stats) {
         std::uint64_t hash = 14695981039346656037ull;
         hash_bytes(hash, &light.position, sizeof(light.position));
         hash_bytes(hash, &light.range, sizeof(light.range));
+        hash_bytes(hash, &light.shadow_near, sizeof(light.shadow_near));
         hash_bytes(hash, &tile, sizeof(tile));
+        int last_palette = -1;  // the parts of a character follow each other and share its palette
         for (std::size_t i = 0; i < draws_.size(); ++i) {
             const MeshDraw& draw = draws_[i];
             if (!draw.material.casts_shadow || (culling_ && !intersects_sphere(draw.bounds, light.position, light.range))) {
                 continue;
             }
             casters.push_back(static_cast<std::uint32_t>(i));
-            const Mesh* mesh = draw.mesh;
-            hash_bytes(hash, &mesh, sizeof(mesh));
+            hash_address(hash, draw.mesh);
             hash_bytes(hash, &draw.world, sizeof(draw.world));
             hash_bytes(hash, &draw.material.double_sided, sizeof(bool));
-            if (draw.palette >= 0) {  // an animated character: its pose
-                hash_bytes(hash, &palette_rows_[static_cast<std::size_t>(draw.palette) * 3],
-                           static_cast<std::size_t>(draw.palette_size) * 3 * sizeof(glm::vec4));
+            if (draw.material.alpha_cutoff > 0.0f) {  // the cut-out shape casts the shadow
+                hash_bytes(hash, &draw.material.alpha_cutoff, sizeof(float));
+                hash_bytes(hash, &draw.material.base_color.a, sizeof(float));
+                hash_address(hash, draw.material.base_color_texture);
+            }
+            if (draw.palette >= 0) {  // an animated character: its pose (once, not once per part)
+                hash_bytes(hash, &draw.palette, sizeof(draw.palette));
+                if (draw.palette != last_palette) {
+                    hash_bytes(hash, &palette_rows_[static_cast<std::size_t>(draw.palette) * 3],
+                               static_cast<std::size_t>(draw.palette_size) * 3 * sizeof(glm::vec4));
+                    last_palette = draw.palette;
+                }
             }
         }
         signatures.push_back(hash);
+    }
     }
     const std::vector<PointShadowSlots::Assignment> assignments = point_slots_.assign(signatures);
 
@@ -736,7 +847,7 @@ void MeshRenderer::prepare_point_shadows(RenderStats& stats) {
         job.light = candidate_light[static_cast<std::size_t>(selected[k])];
         job.row = assignments[k].slot;
         job.render = assignments[k].render;
-        job.faces = point_shadow_faces(light.position, light.range, tile);
+        job.faces = point_shadow_faces(light.position, light.range, tile, light.shadow_near);
         if (job.render) {
             job.first_batcher = static_cast<std::size_t>(point_renders_) * 6;
             if (point_batchers_.size() < job.first_batcher + 6) {
@@ -804,11 +915,15 @@ void MeshRenderer::render_point_shadows(SDL_GPUCommandBuffer* commands, SDL_GPUR
             const SDL_GPUGraphicsPipeline* bound_pipeline = nullptr;
             for (const MeshBatch& batch : batcher.batches()) {
                 SDL_GPUGraphicsPipeline* pipeline =
-                    batch.skinned ? (batch.material->double_sided ? point_skinned_double_sided_.get() : point_skinned_single_sided_.get())
+                    batch.masked ? point_masked_[batch.skinned ? 1 : 0][batch.material->double_sided ? 1 : 0].get()
+                    : batch.skinned ? (batch.material->double_sided ? point_skinned_double_sided_.get() : point_skinned_single_sided_.get())
                                   : (batch.material->double_sided ? point_double_sided_.get() : point_single_sided_.get());
                 if (pipeline != bound_pipeline) {
                     SDL_BindGPUGraphicsPipeline(pass, pipeline);
                     bound_pipeline = pipeline;
+                }
+                if (batch.masked) {
+                    bind_cutout_texture(pass, *batch.material);
                 }
                 draw_batch(pass, batch, offset + batch.first_instance);
                 ++stats.draw_calls;
@@ -828,11 +943,15 @@ void MeshRenderer::render_shadows(SDL_GPUCommandBuffer* commands, SDL_GPURenderP
     const SDL_GPUGraphicsPipeline* bound_pipeline = nullptr;
     for (const MeshBatch& batch : shadow_batcher_.batches()) {
         SDL_GPUGraphicsPipeline* pipeline =
-            batch.skinned ? (batch.material->double_sided ? shadow_skinned_double_sided_.get() : shadow_skinned_single_sided_.get())
+            batch.masked ? shadow_masked_[batch.skinned ? 1 : 0][batch.material->double_sided ? 1 : 0].get()
+            : batch.skinned ? (batch.material->double_sided ? shadow_skinned_double_sided_.get() : shadow_skinned_single_sided_.get())
                           : (batch.material->double_sided ? shadow_double_sided_.get() : shadow_single_sided_.get());
         if (pipeline != bound_pipeline) {
             SDL_BindGPUGraphicsPipeline(pass, pipeline);
             bound_pipeline = pipeline;
+        }
+        if (batch.masked) {
+            bind_cutout_texture(pass, *batch.material);
         }
         draw_batch(pass, batch, base + batch.first_instance);
         ++stats.draw_calls;
@@ -962,13 +1081,21 @@ void MeshRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pas
     stats.triangles += main_batcher_.triangles();
 }
 
+void MeshRenderer::bind_cutout_texture(SDL_GPURenderPass* pass, const Material& material) {
+    // Bound for every masked batch: no binding is assumed to survive a pipeline change.
+    const Texture* texture = material.base_color_texture != nullptr ? material.base_color_texture : &white_;
+    const SDL_GPUTextureSamplerBinding binding = {texture->gpu.get(), material_sampler_.get()};
+    SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
+}
+
 void MeshRenderer::draw_batch(SDL_GPURenderPass* pass, const MeshBatch& batch, std::size_t first_instance) {
     // Each batch binds its own slice of the instance buffer: the instance index then starts at 0 in
     // the shader on every backend (first_instance is not reliable for that on all of them).
+    // The mesh's data are ranges of the geometry pools: bound at their offsets.
     const SDL_GPUBufferBinding buffers[3] = {
-        {batch.mesh->vertices.get(), 0},
+        {batch.mesh->vertices.buffer(), batch.mesh->vertices.offset()},
         {instance_buffer_.get(), static_cast<Uint32>(first_instance * sizeof(MeshInstance))},
-        {batch.mesh->skin.get(), 0},
+        {batch.mesh->skin.buffer(), batch.mesh->skin.offset()},
     };
     SDL_BindGPUVertexBuffers(pass, 0, buffers, batch.skinned ? 3 : 2);
     if (batch.skinned) {
@@ -976,7 +1103,7 @@ void MeshRenderer::draw_batch(SDL_GPURenderPass* pass, const MeshBatch& batch, s
         SDL_GPUBuffer* palettes = palette_buffer_.get();
         SDL_BindGPUVertexStorageBuffers(pass, 0, &palettes, 1);
     }
-    const SDL_GPUBufferBinding indices = {batch.mesh->indices.get(), 0};
+    const SDL_GPUBufferBinding indices = {batch.mesh->indices.buffer(), batch.mesh->indices.offset()};
     SDL_BindGPUIndexBuffer(pass, &indices, SDL_GPU_INDEXELEMENTSIZE_32BIT);
     SDL_DrawGPUIndexedPrimitives(pass, batch.mesh->index_count, batch.count, 0, 0, 0);
 }

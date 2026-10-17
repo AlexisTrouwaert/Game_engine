@@ -9,13 +9,15 @@
 #include <iostream>
 #include <string>
 
+#include "moteur/fixed_timestep.hpp"
+
 namespace {
 
 constexpr float kMapMetres = 32.0f;  // the map shows this far from the listener, each way
 constexpr int kBurstSounds = 200;
-constexpr int kBurstTicks = 60;      // one second at 60 ticks per second
+constexpr double kBurstSeconds = 1.0;
 
-const char* const kGroupNames[] = {"Musique", "Effets", "Ambiance", "Interface"};
+const char* const kGroupNames[] = {"Music", "Effects", "Ambience", "Interface"};
 
 }  // namespace
 
@@ -95,7 +97,7 @@ void AudioTest::update(double dt) {
     // The burst: as many impacts per tick as needed to spread 200 over one second, all around.
     if (burst_left_ > 0) {
         ++burst_tick_;
-        const int due = kBurstSounds * std::min(burst_tick_, kBurstTicks) / kBurstTicks - (kBurstSounds - burst_left_);
+        const int due = kBurstSounds * std::min(burst_tick_, static_cast<int>(moteur::ticks_from_seconds(kBurstSeconds))) / static_cast<int>(moteur::ticks_from_seconds(kBurstSeconds)) - (kBurstSounds - burst_left_);
         for (int i = 0; i < due; ++i) {
             random_ = random_ * 1664525u + 1013904223u;
             const float angle = static_cast<float>(random_ >> 8) / 16777216.0f * 6.2831853f;
@@ -126,7 +128,7 @@ void AudioTest::render(moteur::Renderer& renderer, double) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 10.0f, viewport->WorkPos.y + 10.0f),
                             ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    ImGui::Begin("Carte des sons", nullptr,
+    ImGui::Begin("Sound map", nullptr,
                  ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoCollapse);
     draw_map();
@@ -153,10 +155,10 @@ void AudioTest::draw_map() {
     draw->AddCircle(centre, a.min_distance * scale, IM_COL32(140, 140, 170, 255), 48);
     draw->AddLine(ImVec2(centre.x - a.pan_distance * scale, origin.y + size - 12.0f),
                   ImVec2(centre.x + a.pan_distance * scale, origin.y + size - 12.0f), IM_COL32(120, 120, 140, 255), 2.0f);
-    draw->AddText(ImVec2(origin.x + 6.0f, origin.y + size - 30.0f), IM_COL32(150, 150, 170, 255), "panoramique complet");
-    draw->AddText(ImVec2(centre.x + a.min_distance * scale + 3.0f, centre.y - 8.0f), IM_COL32(150, 150, 170, 255), "plein");
+    draw->AddText(ImVec2(origin.x + 6.0f, origin.y + size - 30.0f), IM_COL32(150, 150, 170, 255), "full pan");
+    draw->AddText(ImVec2(centre.x + a.min_distance * scale + 3.0f, centre.y - 8.0f), IM_COL32(150, 150, 170, 255), "full");
     draw->AddText(ImVec2(centre.x + a.max_distance * scale - 40.0f, centre.y - 8.0f), IM_COL32(110, 110, 130, 255),
-                  "muet");
+                  "silent");
     for (const glm::vec3& p : recent_) {
         draw->AddCircleFilled(to_screen(p), 3.0f, IM_COL32(200, 200, 220, 140));
     }
@@ -166,32 +168,32 @@ void AudioTest::draw_map() {
     draw->AddCircleFilled(to_screen(fire_position_), 7.0f, IM_COL32(255, 150, 40, 255));
     draw->AddTriangleFilled(ImVec2(centre.x, centre.y - 8.0f), ImVec2(centre.x - 6.0f, centre.y + 6.0f),
                             ImVec2(centre.x + 6.0f, centre.y + 6.0f), IM_COL32(120, 255, 140, 255));
-    ImGui::TextDisabled("Triangle vert : l'auditeur ; orange : le feu ; clic : un impact à cet endroit.");
+    ImGui::TextDisabled("Green triangle: the listener; orange: the fire; click: an impact at that spot.");
 }
 
 void AudioTest::draw_controls() {
     moteur::Audio& audio = app_.audio();
     const moteur::AudioStats stats = audio.stats();
-    ImGui::Text("Sortie : %s, %d Hz, %d canaux, tampon %.1f ms%s", stats.device_name.c_str(), stats.sample_rate,
-                stats.channels, static_cast<double>(stats.device_latency_ms), stats.device ? "" : " (arrêtée)");
-    ImGui::Text("Voix : %d / %d (jusqu'à %d par son), flux : %d, musiques : %d", stats.voices, audio.limits.max_voices,
+    ImGui::Text("Output: %s, %d Hz, %d channels, buffer %.1f ms%s", stats.device_name.c_str(), stats.sample_rate,
+                stats.channels, static_cast<double>(stats.device_latency_ms), stats.device ? "" : " (stopped)");
+    ImGui::Text("Voices: %d / %d (up to %d per sound), streams: %d, music: %d", stats.voices, audio.limits.max_voices,
                 audio.limits.max_per_sound, stats.streams, stats.musics);
-    ImGui::Text("Jouées %zu, fusionnées %zu, remplacées %zu ; non jouées : %zu inaudibles, %zu limite par son, %zu limite "
-                "totale",
+    ImGui::Text("Played %zu, merged %zu, stolen %zu; not played: %zu inaudible, %zu per-sound limit, %zu total "
+                "limit",
                 stats.played, stats.merged, stats.stolen, stats.dropped_inaudible, stats.dropped_sound_limit,
                 stats.dropped_voice_limit);
-    ImGui::Text("Crête du mélange %.2f, de la sortie %.2f%s ; limiteur jusqu'à x%.2f", static_cast<double>(stats.mix_peak),
-                static_cast<double>(stats.peak), stats.peak >= 1.0f ? " (saturation)" : "",
+    ImGui::Text("Mix peak %.2f, output peak %.2f%s; limiter down to x%.2f", static_cast<double>(stats.mix_peak),
+                static_cast<double>(stats.peak), stats.peak >= 1.0f ? " (clipping)" : "",
                 static_cast<double>(stats.limiter_gain));
     ImGui::SameLine();
-    if (ImGui::SmallButton("Remettre à zéro")) {
+    if (ImGui::SmallButton("Reset")) {
         audio.reset_peak();
     }
 
     if (ImGui::CollapsingHeader("Volumes", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::PushItemWidth(200.0f);
         float master = audio.master_volume();
-        if (ImGui::SliderFloat("Général", &master, 0.0f, 1.0f, "%.2f")) {
+        if (ImGui::SliderFloat("Master", &master, 0.0f, 1.0f, "%.2f")) {
             audio.set_master_volume(master);
         }
         for (int i = 0; i < moteur::kSoundGroupCount; ++i) {
@@ -207,14 +209,14 @@ void AudioTest::draw_controls() {
             }
         }
         bool mute = audio.mute_in_background();
-        if (ImGui::Checkbox("Muet quand la fenêtre n'a pas le focus", &mute)) {
+        if (ImGui::Checkbox("Mute when the window is not focused", &mute)) {
             audio.set_mute_in_background(mute);
         }
         ImGui::PopItemWidth();
     }
 
-    if (ImGui::CollapsingHeader("Sons", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::Button("Pas")) {
+    if (ImGui::CollapsingHeader("Sounds", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Button("Footstep")) {
             moteur::PlaySound step;
             step.pitch_variation = 0.05f;
             audio.play(footsteps_, step);
@@ -224,58 +226,58 @@ void AudioTest::draw_controls() {
             play_impact({0.0f, 0.0f, -2.0f});
         }
         ImGui::SameLine();
-        if (ImGui::Button("Clic (interface)")) {
+        if (ImGui::Button("Click (interface)")) {
             moteur::PlaySound ui;
             ui.group = moteur::SoundGroup::Interface;
             audio.play(click_, ui);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Validation (interface)")) {
+        if (ImGui::Button("Confirm (interface)")) {
             moteur::PlaySound ui;
             ui.group = moteur::SoundGroup::Interface;
             audio.play(confirm_, ui);
         }
-        ImGui::Checkbox("Quelqu'un marche près de l'auditeur", &walking_);
-        if (ImGui::Button(burst_left_ > 0 ? "Rafale en cours..." : "Rafale : 200 impacts en une seconde")) {
+        ImGui::Checkbox("Someone walks near the listener", &walking_);
+        if (ImGui::Button(burst_left_ > 0 ? "Burst in progress..." : "Burst: 200 impacts in one second")) {
             start_burst();
         }
-        ImGui::TextDisabled("Voix au plus : %d", max_voices_);
+        ImGui::TextDisabled("Most voices: %d", max_voices_);
     }
 
-    if (ImGui::CollapsingHeader("Feu qui tourne", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Circling fire", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::PushItemWidth(200.0f);
-        ImGui::Checkbox("Tourner", &orbit_);
-        ImGui::SliderFloat("Rayon (m)", &orbit_radius_, 0.0f, 35.0f, "%.1f");
-        ImGui::SliderFloat("Vitesse (rad/s)", &orbit_speed_, 0.0f, 3.0f, "%.2f");
+        ImGui::Checkbox("Circle", &orbit_);
+        ImGui::SliderFloat("Radius (m)", &orbit_radius_, 0.0f, 35.0f, "%.1f");
+        ImGui::SliderFloat("Speed (rad/s)", &orbit_speed_, 0.0f, 3.0f, "%.2f");
         ImGui::PopItemWidth();
         const moteur::Placement placement = moteur::place_sound(audio.listener(), fire_position_, audio.attenuation);
-        ImGui::Text("Gain %.2f, panoramique %+.2f", static_cast<double>(placement.gain), static_cast<double>(placement.pan));
+        ImGui::Text("Gain %.2f, pan %+.2f", static_cast<double>(placement.gain), static_cast<double>(placement.pan));
     }
 
-    if (ImGui::CollapsingHeader("Musique et ambiance", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Music and ambience", ImGuiTreeNodeFlags_DefaultOpen)) {
         const moteur::Music* playing = audio.music();
-        ImGui::Text("Musique : %s", playing != nullptr ? playing->name.c_str() : "aucune");
-        if (ImGui::Button("Titre")) {
+        ImGui::Text("Music: %s", playing != nullptr ? playing->name.c_str() : "none");
+        if (ImGui::Button("Title")) {
             audio.play_music(title_music_);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Jeu")) {
+        if (ImGui::Button("Game")) {
             audio.play_music(game_music_);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Arrêt")) {
+        if (ImGui::Button("Stop")) {
             audio.stop_music();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Baisser (pause)")) {
+        if (ImGui::Button("Lower (pause)")) {
             audio.set_music_volume(0.35f);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Remonter")) {
+        if (ImGui::Button("Restore")) {
             audio.set_music_volume(1.0f);
         }
         bool ambience = audio.playing(ambience_voice_);
-        if (ImGui::Checkbox("Ambiance (flux en boucle)", &ambience)) {
+        if (ImGui::Checkbox("Ambience (looping stream)", &ambience)) {
             if (ambience) {
                 moteur::PlaySound options;
                 options.group = moteur::SoundGroup::Ambience;

@@ -62,12 +62,14 @@ void Profiler::end_frame() {
     }
     in_frame_ = false;
     MOTEUR_PROFILE_FRAME();
-    // Whole-run totals: the time of each zone in this frame (a zone run twice adds up).
+    // Whole-run totals: the time of each zone in this frame (a zone run twice adds up, and so do
+    // zones of the same name text at different addresses).
     per_frame_.clear();
     for (const Zone& zone : frame_.zones) {
-        auto found = std::find_if(per_frame_.begin(), per_frame_.end(), [&zone](const auto& e) { return e.first == zone.name; });
+        const char* name = canonical_name(zone.name);
+        auto found = std::find_if(per_frame_.begin(), per_frame_.end(), [name](const auto& e) { return e.first == name; });
         if (found == per_frame_.end()) {
-            per_frame_.push_back({zone.name, {0.0, 0}});
+            per_frame_.push_back({name, {0.0, 0}});
             found = per_frame_.end() - 1;
         }
         found->second.first += milliseconds(zone.end - zone.start);
@@ -90,6 +92,16 @@ void Profiler::end_frame() {
     }
 }
 
+const char* Profiler::canonical_name(const char* name) {
+    const auto known = canonical_.find(name);
+    if (known != canonical_.end()) {
+        return known->second;
+    }
+    const char* canonical = by_text_.try_emplace(name, name).first->second;
+    canonical_.emplace(name, canonical);
+    return canonical;
+}
+
 std::vector<Profiler::Summary> Profiler::summary() const {
     std::unordered_map<std::string, Totals> stats;
     for (const Frame& frame : history_) {
@@ -107,6 +119,7 @@ std::vector<Profiler::Summary> Profiler::summary() const {
         }
     }
     std::vector<Summary> result;
+    result.reserve(stats.size());
     for (const auto& [name, totals] : stats) {
         result.push_back({name, totals.ms.mean(), totals.ms.percentile(99.0), totals.ms.max(), totals.calls / totals.frames});
     }
@@ -118,11 +131,8 @@ std::vector<Profiler::Summary> Profiler::summary() const {
 
 std::vector<Profiler::Summary> Profiler::totals() const {
     std::vector<Summary> result;
-    for (const auto& [name, totals] : totals_) {
-        const auto same = std::find_if(result.begin(), result.end(), [name](const Summary& s) { return s.name == name; });
-        if (same != result.end()) {
-            continue;  // the same name at another place: shown once (the first)
-        }
+    result.reserve(totals_.size());
+    for (const auto& [name, totals] : totals_) {  // one entry per name text (canonical_name())
         result.push_back({name, totals.ms.mean(), totals.ms.percentile(99.0), totals.ms.max(), totals.calls / totals.frames});
     }
     std::sort(result.begin(), result.end(), [](const Summary& a, const Summary& b) {
@@ -147,7 +157,7 @@ std::string Profiler::chrome_trace(const std::vector<Frame>& frames) {
         return static_cast<double>(counter - origin) * 1e6 / frequency;
     };
     for (const Frame& frame : frames) {
-        events.push_back({{"name", "image " + std::to_string(frame.index)}, {"ph", "X"}, {"pid", 1}, {"tid", 1},
+        events.push_back({{"name", "frame " + std::to_string(frame.index)}, {"ph", "X"}, {"pid", 1}, {"tid", 1},
                           {"ts", microseconds(frame.start)}, {"dur", microseconds(frame.end) - microseconds(frame.start)}});
         for (const Zone& zone : frame.zones) {
             events.push_back({{"name", zone.name}, {"ph", "X"}, {"pid", 1}, {"tid", 1}, {"ts", microseconds(zone.start)},

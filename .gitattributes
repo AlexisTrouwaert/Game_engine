@@ -7,3 +7,6 @@
 *.jpg binary
 *.ogg binary
 *.wav binary
+*.glb binary
+*.pak binary
+*.ktx2 binary

@@ -30,6 +30,11 @@ void drop_cache(entt::registry& registry, entt::entity entity) {
     registry.remove<WorldCache>(entity);
 }
 
+// What the cached boxes are made from, as reloaded so far (see AssetCache::reload_generation()).
+std::uint64_t asset_reloads() {
+    return AssetCache<Model>::reload_generation() + AssetCache<Mesh>::reload_generation();
+}
+
 }  // namespace
 
 glm::mat4 Transform::matrix() const {
@@ -62,7 +67,7 @@ bool ModelComponent::hidden(std::size_t part) const {
     return std::binary_search(hidden_parts.begin(), hidden_parts.end(), static_cast<std::uint32_t>(part));
 }
 
-World::World() {
+World::World() : reloads_seen_(asset_reloads()) {
     // What the cached matrix and box of a still entity depend on. EnTT's signals are kept to this.
     registry_.on_update<Transform>().connect<&drop_cache>();
     registry_.on_destroy<Transform>().connect<&drop_cache>();
@@ -71,7 +76,14 @@ World::World() {
     registry_.on_construct<Parent>().connect<&drop_cache>();
     registry_.on_update<Parent>().connect<&drop_cache>();
     registry_.on_destroy<Parent>().connect<&drop_cache>();
+    // The boxes of the mesh and of the model's parts: their components, added, replaced or removed
+    // (an entity may have both, and they share the cache).
+    registry_.on_construct<MeshComponent>().connect<&drop_cache>();
     registry_.on_update<MeshComponent>().connect<&drop_cache>();
+    registry_.on_destroy<MeshComponent>().connect<&drop_cache>();
+    registry_.on_construct<ModelComponent>().connect<&drop_cache>();
+    registry_.on_update<ModelComponent>().connect<&drop_cache>();
+    registry_.on_destroy<ModelComponent>().connect<&drop_cache>();
     // A cached entity is drawn: hiding it drops its cache (one lookup per still entity and frame).
     registry_.on_construct<Hidden>().connect<&drop_cache>();
     // An entity on a joint moves with the pose: never cached (it has a Parent too, but be sure).
@@ -215,7 +227,7 @@ void World::destroy(entt::entity entity) {
         return;
     }
     std::vector<entt::entity> children;
-    for (auto [child, parent] : registry_.view<const Parent>().each()) {
+    for (const auto& [child, parent] : registry_.view<const Parent>().each()) {
         if (parent.entity == entity) {
             children.push_back(child);
         }
@@ -228,6 +240,13 @@ void World::destroy(entt::entity entity) {
 
 void World::collect(WorldSink& sink, float alpha, const CollectOptions& options) {
     ++collection_;
+    // A model or mesh reloaded in place (hot reload) fires no signal: its boxes may have changed
+    // under the same handle. Reloads are rare (development): every cache goes, still entities
+    // compute theirs again below, with the same math.
+    if (const std::uint64_t reloads = asset_reloads(); reloads != reloads_seen_) {
+        registry_.clear<WorldCache>();
+        reloads_seen_ = reloads;
+    }
     bind_pose_ = options.bind_pose;
     animation_stats_ = {};
     // Entities on joints ask for their parent's pose of this frame, whether the parent is in view
@@ -252,7 +271,7 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
     };
 
     // Meshes, in the order the entities were created (reach(): EnTT's own order is the reverse).
-    for (auto [entity, instance] : registry_.storage<MeshComponent>().reach()) {
+    for (const auto& [entity, instance] : registry_.storage<MeshComponent>().reach()) {
         if (!instance.mesh) {
             continue;
         }
@@ -275,7 +294,7 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
 
     // Models: each part with its own place and material.
     const Material fallback;
-    for (auto [entity, instance] : registry_.storage<ModelComponent>().reach()) {
+    for (const auto& [entity, instance] : registry_.storage<ModelComponent>().reach()) {
         if (!instance.model) {
             continue;
         }
@@ -353,7 +372,8 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
             }
             cache = &registry_.emplace<WorldCache>(entity, std::move(fresh));
         }
-        // A model reloaded with another number of parts: its boxes are computed again below.
+        // Another number of parts under the cache (a reload drops every cache, but a ModelComponent
+        // written through get<>() is not seen): never read past the cache, compute the boxes below.
         if (cache != nullptr && cache->parts.size() == model.parts.size()) {
             for (std::size_t k = 0; k < model.parts.size(); ++k) {
                 if (instance.hidden(k)) {
@@ -382,7 +402,7 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
 
     // Lights: the nearest to the focus.
     lights_.clear();
-    for (auto [entity, light] : registry_.storage<LightSource>().reach()) {
+    for (const auto& [entity, light] : registry_.storage<LightSource>().reach()) {
         glm::mat4 world;
         if (placed(entity, world)) {
             const glm::vec3 position(world[3]);
@@ -399,11 +419,11 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
                       });
     for (std::size_t k = 0; k < count; ++k) {
         const LightSource& light = registry_.get<LightSource>(lights_[k].entity);
-        sink.light({lights_[k].position, light.color, light.intensity, light.range, light.casts_shadows});
+        sink.light({lights_[k].position, light.color, light.intensity, light.range, light.casts_shadows, light.shadow_near});
     }
 
     // Billboards.
-    for (auto [entity, billboard] : registry_.storage<Billboard>().reach()) {
+    for (const auto& [entity, billboard] : registry_.storage<Billboard>().reach()) {
         glm::mat4 world;
         if (billboard.texture && placed(entity, world)) {
             sink.billboard(*billboard.texture, glm::vec3(world[3]), billboard.size, billboard.options);
@@ -438,7 +458,7 @@ private:
 }  // namespace
 
 void World::submit(Renderer& renderer, float alpha, const CollectOptions& options) {
-    MOTEUR_PROFILE("monde : collecte");
+    MOTEUR_PROFILE("world: gather");
     RendererSink sink(renderer);
     collect(sink, alpha, options);
 }

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "sounds": [
+    {
+      "name": "Bip",
+      "license": "Aucune (son généré pour l'exemple)",
+      "authors": "le projet",
+      "file": "assets/audio/bip.wav"
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <optional>
+#include <vector>
 #include <stdexcept>
 #include <string>
 
@@ -301,4 +303,95 @@ TEST_CASE("a recording replays by action name, whatever the order of the actions
     CHECK_FALSE(replay.released(skill));
 
     CHECK_THROWS_WITH_AS(moteur::input_recording_from_json("[]", "bad.json"), doctest::Contains("bad.json"), std::runtime_error);
+}
+
+TEST_CASE("rebinding: an action takes new sources as the player's change, saved and reset") {
+    Fixture f;
+    const moteur::InputSource e{moteur::InputSource::Kind::Key, SDL_SCANCODE_E, 0};
+    const moteur::InputSource q{moteur::InputSource::Kind::Key, SDL_SCANCODE_Q, 0};
+    CHECK_FALSE(f.input.changed_by_player(f.skill));
+    f.input.process_event(key(SDL_SCANCODE_Q, true));
+    REQUIRE(f.input.down(f.skill));
+    f.input.set_sources(f.skill, {e});  // Q no longer holds it
+    CHECK_FALSE(f.input.down(f.skill));
+    CHECK(f.input.changed_by_player(f.skill));
+    CHECK(f.input.actions_using(e) == std::vector<moteur::ActionId>{f.skill});
+    CHECK(f.input.actions_using(q).empty());
+    f.input.process_event(key(SDL_SCANCODE_Q, false));
+    f.input.process_event(key(SDL_SCANCODE_E, true));
+    CHECK(f.input.down(f.skill));
+
+    // Kept by the player's file, for this profile only.
+    Fixture g;
+    g.input.apply_user_bindings(f.input.user_bindings_json(), "saved.json");
+    CHECK(g.input.sources(g.skill) == std::vector<moteur::InputSource>{e});
+    g.input.set_profile("keys");
+    CHECK_FALSE(g.input.changed_by_player(g.skill));
+
+    // The defaults given back: no change left, nothing in the file.
+    f.input.set_sources(f.skill, f.input.sources(f.skill));
+    f.input.reset_sources(f.skill);
+    CHECK_FALSE(f.input.changed_by_player(f.skill));
+    CHECK(f.input.sources(f.skill).size() == 3);
+    f.input.set_sources(f.skill, {});
+    CHECK(f.input.sources(f.skill).empty());
+    f.input.reset_all_sources();
+    CHECK(f.input.user_bindings_json().find("profiles") == std::string::npos);
+    CHECK_THROWS_AS(f.input.set_sources(f.move, {e}), std::invalid_argument);
+    CHECK_THROWS_AS(f.input.set_sources(99, {e}), std::out_of_range);
+}
+
+TEST_CASE("rebinding: one direction of an axis changes, the others and the stick stay") {
+    Fixture f;
+    f.input.set_profile("keys");
+    const moteur::InputSource z{moteur::InputSource::Kind::Key, SDL_SCANCODE_Z, 0};
+    f.input.set_axis_sources(f.move, moteur::AxisDirection::Up, {z});
+    CHECK(f.input.changed_by_player(f.move));
+    CHECK(f.input.axis_sources(f.move, moteur::AxisDirection::Up) == std::vector<moteur::InputSource>{z});
+    CHECK(f.input.axis_sources(f.move, moteur::AxisDirection::Down).size() == 1);
+    f.input.process_event(key(SDL_SCANCODE_Z, true));
+    CHECK(f.input.axis(f.move).y == doctest::Approx(1.0f));
+    f.input.process_event(key(SDL_SCANCODE_Z, false));
+    f.input.process_event(pad_axis(SDL_GAMEPAD_AXIS_LEFTX, 1.0f));  // the stick is untouched
+    CHECK(f.input.axis(f.move).x > 0.9f);
+    CHECK(f.input.actions_using(z) == std::vector<moteur::ActionId>{f.move});
+    f.input.reset_sources(f.move);
+    CHECK_FALSE(f.input.changed_by_player(f.move));
+    CHECK_THROWS_AS(f.input.axis_sources(f.skill, moteur::AxisDirection::Up), std::invalid_argument);
+}
+
+TEST_CASE("capture: the next source pressed is kept, and no action sees it") {
+    Fixture f;
+    f.input.process_event(key(SDL_SCANCODE_Q, true));
+    REQUIRE(f.input.down(f.skill));
+    f.input.begin_capture();  // what was held is released
+    CHECK(f.input.capturing());
+    CHECK_FALSE(f.input.down(f.skill));
+    f.input.process_event(key(SDL_SCANCODE_Q, false));  // a release: taken, no capture
+    CHECK(f.input.capturing());
+    f.input.process_event(key(SDL_SCANCODE_1, true));  // bound to skill, but captured
+    CHECK_FALSE(f.input.capturing());
+    CHECK_FALSE(f.input.down(f.skill));
+    const std::optional<moteur::InputSource> got = f.input.take_captured();
+    REQUIRE(got);
+    CHECK(moteur::input_source_text(*got) == "key:1");
+    CHECK_FALSE(f.input.take_captured());
+
+    // A trigger counts once it passes the press point; the mouse and the gamepad buttons too.
+    f.input.begin_capture();
+    f.input.process_event(pad_axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0.3f));
+    CHECK(f.input.capturing());
+    f.input.process_event(pad_axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0.9f));
+    CHECK(moteur::input_source_text(*f.input.take_captured()) == "pad:righttrigger+");
+    f.input.begin_capture();
+    f.input.process_event(mouse(SDL_BUTTON_X1, true));
+    CHECK(moteur::input_source_text(*f.input.take_captured()) == "mouse:x1");
+    f.input.begin_capture();
+    f.input.process_event(pad_button(SDL_GAMEPAD_BUTTON_SOUTH, true));
+    CHECK(moteur::input_source_text(*f.input.take_captured()) == "pad:a");
+    f.input.begin_capture();
+    f.input.cancel_capture();
+    CHECK_FALSE(f.input.capturing());
+    f.input.process_event(key(SDL_SCANCODE_Q, true));  // back to the actions
+    CHECK(f.input.down(f.skill));
 }

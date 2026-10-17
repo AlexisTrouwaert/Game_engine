@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -565,24 +566,36 @@ void Audio::apply_settings_json(std::string_view json_text, const std::string& s
     if (!json.is_object() || json.value("version", 0) != 1) {
         throw std::runtime_error("Audio settings '" + source_name + "': not a version 1 settings file");
     }
+    // Everything is read before anything changes: a bad value leaves the settings as they were.
+    float master = master_;
+    std::array<float, kSoundGroupCount> sliders{};
+    for (int i = 0; i < kSoundGroupCount; ++i) {
+        sliders[static_cast<std::size_t>(i)] = groups_[static_cast<std::size_t>(i)].slider;
+    }
+    bool mute_in_background = mute_in_background_;
     try {
         if (json.contains("master")) {
-            master_ = std::clamp(json["master"].get<float>(), 0.0f, 1.0f);
+            master = std::clamp(json["master"].get<float>(), 0.0f, 1.0f);
         }
         if (json.contains("volumes")) {
             for (int i = 0; i < kSoundGroupCount; ++i) {
                 const char* name = sound_group_name(static_cast<SoundGroup>(i));
                 if (json["volumes"].contains(name)) {
-                    groups_[static_cast<std::size_t>(i)].slider = std::clamp(json["volumes"][name].get<float>(), 0.0f, 1.0f);
+                    sliders[static_cast<std::size_t>(i)] = std::clamp(json["volumes"][name].get<float>(), 0.0f, 1.0f);
                 }
             }
         }
         if (json.contains("mute_in_background")) {
-            mute_in_background_ = json["mute_in_background"].get<bool>();
+            mute_in_background = json["mute_in_background"].get<bool>();
         }
     } catch (const nlohmann::json::exception& e) {
         throw std::runtime_error("Audio settings '" + source_name + "': " + e.what());
     }
+    master_ = master;
+    for (int i = 0; i < kSoundGroupCount; ++i) {
+        groups_[static_cast<std::size_t>(i)].slider = sliders[static_cast<std::size_t>(i)];
+    }
+    mute_in_background_ = mute_in_background;
     apply_master();
     for (int i = 0; i < kSoundGroupCount; ++i) {
         apply_group(static_cast<SoundGroup>(i));
@@ -739,7 +752,7 @@ AudioStats Audio::stats() const {
                                       static_cast<float>(device->playback.internalSampleRate);
         }
     } else {
-        stats.device_name = e.initialized ? "(sans périphérique)" : "(aucun)";
+        stats.device_name = e.initialized ? "(no device)" : "(none)";
     }
     return stats;
 }

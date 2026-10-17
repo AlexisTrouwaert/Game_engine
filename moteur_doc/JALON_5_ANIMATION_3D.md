@@ -346,7 +346,7 @@ Jouer un clip 3D avec les **mêmes garanties** que l'`AnimationPlayer` du jalon 
 
 ### Implémentation réalisée (partie 4)
 
-Fichiers : `animation_clock.hpp` / `.cpp` et `animator.hpp` / `.cpp` (nouveaux), `animation.hpp` / `.cpp` (l'`AnimationPlayer` passe sur l'horloge commune), `skeleton.hpp` / `.cpp` (`duration_ticks`, `PoseSampler`), `world.hpp` / `.cpp` (modèles animés, `CollectOptions::view`), `debug_tools.cpp` (inspecteur) ; `tests/test_animator.cpp` ; dans le bac à sable, `animation_test.*` (passée au monde) et `main.cpp` (`--fixed-hz`).
+Fichiers : `animation_clock.hpp` / `.cpp` et `animator.hpp` / `.cpp` (nouveaux), `animation.hpp` / `.cpp` (l'`AnimationPlayer` passe sur l'horloge commune), `skeleton.hpp` / `.cpp` (`duration_ticks`, `PoseSampler`), `world.hpp` / `.cpp` (modèles animés, `CollectOptions::view`), `debug_tools.cpp` (inspecteur) ; `tests/test_animator.cpp` ; dans le bac à sable, `animation_test.*` (passée au monde) et `main.cpp` (`--tick-rate`).
 
 - **`ClipClock`** : le temps d'un clip, commun aux sprites et aux squelettes. Durée d'un cycle en ticks entiers, temps et vitesse en **millièmes** (entiers), lecture unique ou en boucle, et des **marques** (des points du cycle en ticks) que `advance()` signale **exactement une fois**, même quand un grand pas en saute plusieurs ou fait plusieurs tours. C'est l'algorithme du jalon 2, sorti de l'`AnimationPlayer` : celui-ci garde son API et ses tests ; ses marques sont les débuts de ses étapes (le retour d'un `PingPong` fait partie du cycle). La partie 7 y mettra les événements des clips 3D.
 - **Durée en ticks** : `SkeletalClip::duration_ticks()` = la durée × 60, arrondie, au moins 1 (`kClipTicksPerSecond`). Les KayKit tombent juste (30 images par seconde : 64 ticks pour `Idle`). À une autre fréquence de logique, un clip garde son nombre de ticks, donc joue plus vite ou plus lentement : voulu, c'est ce qui le garde déterministe.
@@ -355,19 +355,19 @@ Fichiers : `animation_clock.hpp` / `.cpp` et `animator.hpp` / `.cpp` (nouveaux),
 - **Dessin** (`World::collect`) : une entité qui a un `ModelComponent` et un `Animator` est **échantillonnée** au temps interpolé, puis ses parties rigides suivent leur os (les parties skinnées restent en pose de repos jusqu'à la partie 5). Culling **avant** l'échantillonnage : la boîte du modèle, doublée autour de son centre (un bras qui se tend sort de la pose de repos ; les boîtes par clip viendront avec le skinning), contre `CollectOptions::view` (le frustum de la caméra ; par défaut, tout passe). La pose est gardée dans un composant **`AnimationPose`** (un `PoseSampler` : le cache d'ozz, qui rend la lecture d'un clip vers l'avant bon marché, et les matrices), que les outils lisent : le squelette en lignes de la scène de test vient de là. Ce n'est pas un état du jeu : la logique ne le lit pas.
 - **Inspecteur** : l'`Animator` est inscrit (clip, en boucle ou une fois, temps en ticks, fini, vitesse modifiable).
 - **Scène « Animation »** passée au monde : chaque personnage est une entité (`Transform` pour la mise à l'échelle, `ModelComponent` avec ses parties cachées, `Animator`), avancée au tick, dessinée par `World::submit` avec le frustum. Nouveaux réglages : **Interpolation** (sinon, dessin au dernier tick), temps en ticks, fréquence de la logique affichée. Le monde est dans l'inspecteur (DEBUG > Inspecteur d'entités).
-- **`--fixed-hz N`** (bac à sable) : une autre fréquence de logique. À 10, l'interpolation se voit : avec, le mouvement reste fluide à la fréquence de l'écran ; sans, il saute dix fois par seconde.
+- **`--tick-rate N`** (bac à sable) : une autre fréquence de logique. À 10, l'interpolation se voit : avec, le mouvement reste fluide à la fréquence de l'écran ; sans, il saute dix fois par seconde.
 
 **Vérifications faites (Windows)**
 
 - **291** tests unitaires (285 avant), en Release et en Debug : `test_animator` (marques vues une fois pas à pas ou d'un seul pas de 25 ticks, lecture unique, vitesse ×1,5, `restart`, `set_time` ; durées en ticks du modèle de référence et du chevalier, pose seule = 1 tick ; `Animator` : ratio aux ticks et entre deux, passage de la boucle vers l'avant, lecture unique finie, vitesse gardée, nom inconnu et squelette incompatible refusés ; `World` : le cube du modèle de référence à sa place à mi-`Bend`, colonne en pose de repos, `AnimationPose` lisible, rien d'échantillonné ni de dessiné hors du frustum). Les tests de l'`AnimationPlayer` du jalon 2 passent **sans changement**.
 - Captures de référence **inchangées** : démo 2D `bd91e8b2c616` (qui joue des `AnimationPlayer`), tranche `dbf96994a52d`, démo 3D `fdc076d9c3ae` et `952477744ffb`.
 - Scène « Animation » en Release (à 60 et à 10 ticks par seconde, 164 images par seconde) et en Debug (couche de validation D3D12 active) : aucun message. 1,6 ms de CPU par image pour six personnages.
-- **Vérifié à la main** (2026-09-25, par l'utilisateur, Windows) : l'animation est fluide à l'œil ; à `--fixed-hz 10`, le mouvement reste fluide avec l'interpolation et saute dix fois par seconde sans.
+- **Vérifié à la main** (2026-09-25, par l'utilisateur, Windows) : l'animation est fluide à l'œil ; à `--tick-rate 10`, le mouvement reste fluide avec l'interpolation et saute dix fois par seconde sans.
 
 ### Validation
 
 - [x] Un clip avancé tick par tick ou par grands pas donne le même temps et les mêmes événements (tests unitaires, comme au jalon 2).
-- [x] À 60, 144 et 165 Hz d'écran, l'animation est fluide (pas de saccade au rythme des ticks) ; `--fixed-dt` ou une fréquence de logique basse (option de debug) le rend visible si ce n'est pas le cas. *Vérifié à l'œil sous Windows avec `--fixed-hz 10` et la case « Interpolation » ; reste l'écran du Mac (TEST_MAC.md).*
+- [x] À 60, 144 et 165 Hz d'écran, l'animation est fluide (pas de saccade au rythme des ticks) ; `--fixed-dt` ou une fréquence de logique basse (option de debug) le rend visible si ce n'est pas le cas. *Vérifié à l'œil sous Windows avec `--tick-rate 10` et la case « Interpolation » ; reste l'écran du Mac (TEST_MAC.md).*
 
 ---
 

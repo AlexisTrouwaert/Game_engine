@@ -8,6 +8,7 @@
 #include <fstream>
 #include <stdexcept>
 
+#include "moteur/fixed_timestep.hpp"
 #include "moteur/animator.hpp"
 #include "moteur/mesh_renderer.hpp"
 #include "moteur/paths.hpp"
@@ -49,7 +50,7 @@ AnimCompare::AnimCompare(moteur::Application& app, const Options& options) : app
     moteur::Animator animator = moteur::Animator::create(assets.skeleton(kKnight), assets.clips(kKnight));
     animator.play(options_.clip, {.fade_ticks = 0, .loop = false});
     animator.set_speed(0.0);
-    animator.seek(options_.seconds * moteur::kClipTicksPerSecond);
+    animator.seek(options_.seconds * moteur::tick_rate());
     registry.emplace<moteur::Animator>(knight_, std::move(animator));
 
     app.renderer().meshes().set_view(moteur::MeshView::BaseColor);
@@ -85,7 +86,7 @@ void AnimCompare::render(moteur::Renderer& renderer, double /*alpha*/) {
 }
 
 void AnimCompare::draw_controls() {
-    ImGui::TextWrapped("Le chevalier dans « %s » à %.3f s, en couleur de base, comme dans tools/blender/compare_pose.py.",
+    ImGui::TextWrapped("The knight in '%s' at %.3f s, in base color, as in tools/blender/compare_pose.py.",
                        options_.clip.c_str(), options_.seconds);
 }
 

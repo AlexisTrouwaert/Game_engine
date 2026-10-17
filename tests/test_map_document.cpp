@@ -24,7 +24,7 @@ moteur::MapDocument room() {
     doc.begin_action("salle");
     doc.rect({0, 0}, {7, 5}, {1, wall}, true);
     doc.end_action();
-    doc.set_point({2, 2}, "depart");
+    doc.set_point({2, 2}, moteur::kStartPoint);
     doc.description = "une salle";
     return doc;
 }
@@ -76,19 +76,19 @@ TEST_CASE("Points, objects and connectors; resize moves them") {
     const std::string crate = doc.add_object({"o1", "caisse", {5.0f, 0.0f, 3.0f}, 0.0f, 1.0f, {}});
     CHECK(crate == "o2");  // "o1" was taken
     doc.set_connectors({{"est", "porte", {7, 2}, moteur::MapConnector::Direction::East}});
-    CHECK(doc.point_at({2, 2}) == std::optional<std::string>("depart"));
+    CHECK(doc.point_at({2, 2}) == std::optional<std::string>(moteur::kStartPoint));
 
     doc.resize(2, 1, 0, -1, {1});
     CHECK(doc.width() == 10);
     CHECK(doc.height() == 6);
-    CHECK(doc.point_at({4, 3}) == std::optional<std::string>("depart"));
+    CHECK(doc.point_at({4, 3}) == std::optional<std::string>(moteur::kStartPoint));
     CHECK(doc.object("o1")->position.x == 5.5f);
     CHECK(doc.object("o1")->position.z == 3.25f);
     CHECK(doc.connectors()[0].cell == glm::ivec2(9, 3));
     CHECK(doc.tile(0, {0, 0}) == 1);  // new cells: the given stack
     CHECK(doc.undo());
     CHECK(doc.width() == 8);
-    CHECK(doc.point_at({2, 2}) == std::optional<std::string>("depart"));
+    CHECK(doc.point_at({2, 2}) == std::optional<std::string>(moteur::kStartPoint));
     CHECK(doc.object("o1")->position.x == 3.5f);
     CHECK(doc.redo());
     CHECK(doc.width() == 10);
@@ -107,7 +107,7 @@ TEST_CASE("Writing gives back the same map, and the same text") {
     const moteur::MapData map = moteur::MapData::parse(text, "doc.json");
     CHECK(map.version() == 2);
     CHECK(map.description() == "une salle");
-    CHECK(map.point("depart") == glm::ivec2(2, 2));
+    CHECK(map.point(moteur::kStartPoint) == glm::ivec2(2, 2));
     REQUIRE(map.objects().size() == 1);
     CHECK(map.objects()[0].position.z == 2.1f);  // exactly
     CHECK(map.objects()[0].rotation == 30.0f);
@@ -134,8 +134,8 @@ TEST_CASE("Checks: missing start, unreachable cells, connectors off the edge") {
     doc.set_point({2, 2}, "");
     doc.set_connectors({{"milieu", "", {3, 3}, moteur::MapConnector::Direction::North}});
     issues = doc.validate();
-    CHECK(issues[0].message.find("depart") != std::string::npos);
-    CHECK(issues.back().message.find("connecteur milieu") != std::string::npos);
+    CHECK(issues[0].message.find("start") != std::string::npos);
+    CHECK(issues.back().message.find("connector milieu") != std::string::npos);
     doc.chunk = true;  // a chunk needs no start
     issues = doc.validate();
     CHECK(issues.size() == 1);

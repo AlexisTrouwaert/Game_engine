@@ -15,6 +15,7 @@
 #include "moteur/application.hpp"
 #include "moteur/collision.hpp"
 #include "moteur/debug_lines.hpp"
+#include "moteur/fixed_timestep.hpp"
 #include "moteur/movement.hpp"
 #include "moteur/process_memory.hpp"
 #include "moteur/variables.hpp"
@@ -55,9 +56,9 @@ bool contains_ignoring_case(std::string_view text, std::string_view part) {
 
 const char* group_label(SoundGroup group) {
     switch (group) {
-        case SoundGroup::Music: return "Musique";
-        case SoundGroup::Effects: return "Effets";
-        case SoundGroup::Ambience: return "Ambiance";
+        case SoundGroup::Music: return "Music";
+        case SoundGroup::Effects: return "Effects";
+        case SoundGroup::Ambience: return "Ambience";
         case SoundGroup::Interface: return "Interface";
     }
     return "?";
@@ -65,13 +66,13 @@ const char* group_label(SoundGroup group) {
 
 const char* refusal_label(const std::string& reason) {
     if (reason == "inaudible") {
-        return "trop faible pour être entendu";
+        return "too quiet to be heard";
     }
     if (reason == "sound_limit") {
-        return "limite par fichier";
+        return "per-file limit";
     }
     if (reason == "voice_limit") {
-        return "limite de voix";
+        return "voice limit";
     }
     return reason.c_str();
 }
@@ -92,22 +93,22 @@ bool edit_transform(Transform& transform) {
         transform.rotation = glm::quat(glm::radians(angles));
         changed = true;
     }
-    changed |= ImGui::DragFloat3("Échelle", &transform.scale.x, 0.01f, 0.0f, 0.0f, "%.3f");
+    changed |= ImGui::DragFloat3("Scale", &transform.scale.x, 0.01f, 0.0f, 0.0f, "%.3f");
     return changed;
 }
 
 bool edit_material(Material& material) {
-    bool changed = edit_linear_color("Couleur", material.base_color);
-    changed |= ImGui::SliderFloat("Métal", &material.metallic, 0.0f, 1.0f);
-    changed |= ImGui::SliderFloat("Rugosité", &material.roughness, 0.0f, 1.0f);
-    changed |= edit_linear_color("Émission", material.emissive);
-    changed |= ImGui::Checkbox("Deux faces", &material.double_sided);
+    bool changed = edit_linear_color("Color", material.base_color);
+    changed |= ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
+    changed |= ImGui::SliderFloat("Roughness", &material.roughness, 0.0f, 1.0f);
+    changed |= edit_linear_color("Emissive", material.emissive);
+    changed |= ImGui::Checkbox("Double-sided", &material.double_sided);
     ImGui::SameLine();
-    changed |= ImGui::Checkbox("Projette une ombre", &material.casts_shadow);
-    ImGui::TextDisabled("Textures : %s%s%s%s%s", material.base_color_texture ? "couleur " : "",
-                        material.metallic_roughness_texture ? "métal-rugosité " : "",
-                        material.normal_texture ? "normales " : "", material.occlusion_texture ? "occlusion " : "",
-                        material.emissive_texture ? "émission" : "");
+    changed |= ImGui::Checkbox("Casts shadow", &material.casts_shadow);
+    ImGui::TextDisabled("Textures: %s%s%s%s%s", material.base_color_texture ? "color " : "",
+                        material.metallic_roughness_texture ? "metallic-roughness " : "",
+                        material.normal_texture ? "normal " : "", material.occlusion_texture ? "occlusion " : "",
+                        material.emissive_texture ? "emissive" : "");
     return changed;
 }
 
@@ -132,52 +133,52 @@ bool ComponentInspectors::edit(entt::registry& registry, entt::entity entity, co
 
 void ComponentInspectors::add_engine_components() {
     add<Transform>("Transform", edit_transform);
-    add<PreviousTransform>("Transform au tick précédent", [](PreviousTransform& previous) {
+    add<PreviousTransform>("Previous tick transform", [](PreviousTransform& previous) {
         const glm::vec3& p = previous.value.position;
-        ImGui::Text("Position : %.3f %.3f %.3f", static_cast<double>(p.x), static_cast<double>(p.y), static_cast<double>(p.z));
-        ImGui::TextDisabled("(copiée à chaque tick : l'entité bouge, elle est interpolée)");
+        ImGui::Text("Position: %.3f %.3f %.3f", static_cast<double>(p.x), static_cast<double>(p.y), static_cast<double>(p.z));
+        ImGui::TextDisabled("(copied every tick: the entity moves, it is interpolated)");
         return false;
     });
     add<Parent>("Parent", [](Parent& parent) {
         if (parent.entity == entt::null) {
-            ImGui::TextUnformatted("aucun");
+            ImGui::TextUnformatted("none");
         } else {
-            ImGui::Text("Entité #%u", static_cast<unsigned>(entt::to_entity(parent.entity)));
+            ImGui::Text("Entity #%u", static_cast<unsigned>(entt::to_entity(parent.entity)));
         }
         return false;
     });
-    add<BoneAttachment>("Sur un os", [](BoneAttachment& attachment) {
+    add<BoneAttachment>("Bone attachment", [](BoneAttachment& attachment) {
         char buffer[128] = {};
         std::snprintf(buffer, sizeof(buffer), "%s", attachment.point.c_str());
         if (ImGui::InputText("Point", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
             attachment.point = buffer;
             return true;
         }
-        ImGui::SetItemTooltip("Un point d'attache de la description du parent, ou un nom d'os.");
+        ImGui::SetItemTooltip("An attachment point of the parent's description, or a bone name.");
         return false;
     });
-    add<Name>("Nom", [](Name& name) {
+    add<Name>("Name", [](Name& name) {
         char buffer[128] = {};
         std::snprintf(buffer, sizeof(buffer), "%s", name.value.c_str());
-        if (ImGui::InputText("Nom", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+        if (ImGui::InputText("Name", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
             name.value = buffer;
             return true;
         }
         return false;
     });
-    add_tag<Hidden>("Caché");
-    add<MeshComponent>("Maillage", [](MeshComponent& component) {
+    add_tag<Hidden>("Hidden");
+    add<MeshComponent>("Mesh", [](MeshComponent& component) {
         if (component.mesh) {
-            ImGui::Text("%u triangles, %.2f Mo", component.mesh->index_count / 3, megabytes(component.mesh->gpu_bytes));
+            ImGui::Text("%u triangles, %.2f MB", component.mesh->index_count / 3, megabytes(component.mesh->gpu_bytes));
         }
         return edit_material(component.material);
     });
-    add<ModelComponent>("Modèle", [](ModelComponent& component) {
+    add<ModelComponent>("Model", [](ModelComponent& component) {
         if (component.model) {
             const Model& model = *component.model;
             const glm::vec3 size = model.bounds.size();
-            ImGui::Text("%zu parties, %zu triangles, %.2f Mo", model.parts.size(), model.triangle_count, megabytes(model.gpu_bytes));
-            ImGui::Text("Taille : %.2f x %.2f x %.2f m", static_cast<double>(size.x), static_cast<double>(size.y),
+            ImGui::Text("%zu parts, %zu triangles, %.2f MB", model.parts.size(), model.triangle_count, megabytes(model.gpu_bytes));
+            ImGui::Text("Size: %.2f x %.2f x %.2f m", static_cast<double>(size.x), static_cast<double>(size.y),
                         static_cast<double>(size.z));
         }
         return false;
@@ -191,69 +192,69 @@ void ComponentInspectors::add_engine_components() {
             }
             any = true;
             if (l > 0) {
-                ImGui::Text("Couche %d (haut du corps) : %.0f %%", l, layer.weight / 10.0);
+                ImGui::Text("Layer %d (upper body): %.0f %%", l, layer.weight / 10.0);
             }
             for (const Animator::Motion& motion : layer.motions) {
                 const ClipClock& clock = motion.clock;
                 if (motion.blend_space()) {
-                    ImGui::BulletText("%s (mélange) %.0f %%, phase %.3f, x%.2f", motion.name.c_str(), motion.weight / 10.0,
+                    ImGui::BulletText("%s (blend) %.0f %%, phase %.3f, x%.2f", motion.name.c_str(), motion.weight / 10.0,
                                       static_cast<double>(motion.ratio(1.0f)), motion.rate / 1000.0);
                 } else {
                     const double ticks = static_cast<double>(clock.cycle_time()) / ClipClock::kOne;
                     ImGui::BulletText("%s (%s) %.0f %%, %.1f / %d ticks (%.2f s)%s", motion.name.c_str(),
-                                      clock.once() ? "une fois" : "en boucle", motion.weight / 10.0, ticks,
-                                      clock.cycle_ticks(), ticks / kClipTicksPerSecond, clock.finished() ? ", fini" : "");
+                                      clock.once() ? "once" : "looping", motion.weight / 10.0, ticks,
+                                      clock.cycle_ticks(), ticks / tick_rate(), clock.finished() ? ", finished" : "");
                 }
             }
         }
         if (!any) {
-            ImGui::TextDisabled("Aucun clip (pose de repos)");
+            ImGui::TextDisabled("No clip (rest pose)");
         }
         if (animator.clips) {
-            ImGui::TextDisabled("%zu clips de %s", animator.clips->size(), animator.clips->source().c_str());
+            ImGui::TextDisabled("%zu clips from %s", animator.clips->size(), animator.clips->source().c_str());
         }
         if (animator.set) {
-            ImGui::TextDisabled("Description : %s", animator.set->source().c_str());
+            ImGui::TextDisabled("Description: %s", animator.set->source().c_str());
         }
-        ImGui::Text("Vitesse de déplacement : %.3f m/s", animator.move_speed());
+        ImGui::Text("Movement speed: %.3f m/s", animator.move_speed());
         float speed = static_cast<float>(animator.speed());
-        if (ImGui::DragFloat("Vitesse", &speed, 0.01f, 0.0f, 5.0f, "x%.3f")) {
+        if (ImGui::DragFloat("Speed", &speed, 0.01f, 0.0f, 5.0f, "x%.3f")) {
             animator.set_speed(speed);
             return true;
         }
         return false;
     });
     add<Collider>("Collision", [](Collider& collider) {
-        bool changed = ImGui::DragFloat("Rayon (m)", &collider.radius, 0.01f, 0.05f, 5.0f);
-        changed |= ImGui::DragInt("Poids de poussée", &collider.push_weight, 0.1f, 0, 100);
-        changed |= ImGui::Checkbox("Arrêté par les murs", &collider.blocked_by_walls);
-        ImGui::Text("Couche %08X, masque %08X", collider.layer, collider.mask);
+        bool changed = ImGui::DragFloat("Radius (m)", &collider.radius, 0.01f, 0.05f, 5.0f);
+        changed |= ImGui::DragInt("Push weight", &collider.push_weight, 0.1f, 0, 100);
+        changed |= ImGui::Checkbox("Blocked by walls", &collider.blocked_by_walls);
+        ImGui::Text("Layer %08X, mask %08X", collider.layer, collider.mask);
         return changed;
     });
-    add<Mover>("Déplacement", [](Mover& mover) {
-        static const char* const kModes[] = {"Arrêt", "Vers un point", "Direct", "Flow field"};
-        static const char* const kStates[] = {"Repos", "Attend un chemin", "En route", "Arrivé", "Bloqué", "Sans chemin"};
-        bool changed = ImGui::DragFloat("Vitesse (m/s)", &mover.speed, 0.05f, 0.0f, 30.0f);
-        changed |= ImGui::DragFloat("Rotation", &mover.turn_rate, 0.1f, 0.0f, 100.0f);
-        ImGui::Text("Mode : %s, état : %s", kModes[static_cast<int>(mover.mode)], kStates[static_cast<int>(mover.state)]);
-        ImGui::Text("Vitesse réelle : %.2f m/s, chemin : %zu / %zu points", mover.actual_speed, mover.next_point,
+    add<Mover>("Movement", [](Mover& mover) {
+        static const char* const kModes[] = {"Stopped", "To point", "Direct", "Flow field"};
+        static const char* const kStates[] = {"Idle", "Waiting for path", "Moving", "Arrived", "Blocked", "No path"};
+        bool changed = ImGui::DragFloat("Speed (m/s)", &mover.speed, 0.05f, 0.0f, 30.0f);
+        changed |= ImGui::DragFloat("Turn rate", &mover.turn_rate, 0.1f, 0.0f, 100.0f);
+        ImGui::Text("Mode: %s, state: %s", kModes[static_cast<int>(mover.mode)], kStates[static_cast<int>(mover.state)]);
+        ImGui::Text("Actual speed: %.2f m/s, path: %zu / %zu points", mover.actual_speed, mover.next_point,
                     mover.path.size());
         if (mover.mode == MoveMode::ToPoint) {
-            ImGui::Text("But : (%.2f, %.2f)", mover.goal.x, mover.goal.y);
+            ImGui::Text("Goal: (%.2f, %.2f)", mover.goal.x, mover.goal.y);
         }
         return changed;
     });
-    add<LightSource>("Lumière", [](LightSource& light) {
-        bool changed = edit_linear_color("Couleur", light.color);
-        changed |= ImGui::DragFloat("Intensité", &light.intensity, 0.05f, 0.0f, 1000.0f);
-        changed |= ImGui::DragFloat("Portée (m)", &light.range, 0.05f, 0.0f, 1000.0f);
-        changed |= ImGui::Checkbox("Ombres", &light.casts_shadows);
+    add<LightSource>("Light", [](LightSource& light) {
+        bool changed = edit_linear_color("Color", light.color);
+        changed |= ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 1000.0f);
+        changed |= ImGui::DragFloat("Range (m)", &light.range, 0.05f, 0.0f, 1000.0f);
+        changed |= ImGui::Checkbox("Shadows", &light.casts_shadows);
         return changed;
     });
     add<Billboard>("Billboard", [](Billboard& billboard) {
-        bool changed = ImGui::DragFloat2("Taille (m)", &billboard.size.x, 0.01f, 0.0f, 100.0f);
-        changed |= edit_linear_color("Couleur", billboard.options.color);
-        changed |= ImGui::Checkbox("Additif", &billboard.options.additive);
+        bool changed = ImGui::DragFloat2("Size (m)", &billboard.size.x, 0.01f, 0.0f, 100.0f);
+        changed |= edit_linear_color("Color", billboard.options.color);
+        changed |= ImGui::Checkbox("Additive", &billboard.options.additive);
         return changed;
     });
 }
@@ -287,12 +288,12 @@ DebugTools::DebugTools(Application& app) : app_(app) {
     // The parent can be selected from its child.
     components_.add<Parent>("Parent", [this](Parent& parent) {
         if (parent.entity == entt::null) {
-            ImGui::TextUnformatted("aucun");
+            ImGui::TextUnformatted("none");
             return false;
         }
-        ImGui::Text("Entité #%u", static_cast<unsigned>(entt::to_entity(parent.entity)));
+        ImGui::Text("Entity #%u", static_cast<unsigned>(entt::to_entity(parent.entity)));
         ImGui::SameLine();
-        if (ImGui::SmallButton("Choisir")) {
+        if (ImGui::SmallButton("Select")) {
             selected_ = parent.entity;
         }
         return false;
@@ -404,8 +405,8 @@ void DebugTools::forget(StateStack& stack) {
 }
 
 void DebugTools::menu_items() {
-    static constexpr const char* kLabels[kWindowCount] = {"Inspecteur d'entités", "Assets", "Entrées", "Audio", "États de jeu",
-                                                          "Animation", "Données", "Console", "Profiler"};
+    static constexpr const char* kLabels[kWindowCount] = {"Entity Inspector", "Assets", "Input", "Audio", "Game States",
+                                                          "Animation", "Data", "Console", "Profiler"};
     for (int i = 0; i < kWindowCount; ++i) {
         if (ImGui::MenuItem(kLabels[i], nullptr, open_[i])) {
             set_open(static_cast<Window>(i), !open_[i]);
@@ -418,19 +419,19 @@ void DebugTools::between_frames() {
     if (reload_request_) {
         const auto [type, key] = *reload_request_;
         reload_request_.reset();
-        last_reload_ = app_.assets().reload(type, key) ? "« " + key + " » rechargé"
-                                                       : "« " + key + " » non rechargé (voir le journal)";
+        last_reload_ = app_.assets().reload(static_cast<AssetType>(type), key) ? "'" + key + "' reloaded"
+                                                       : "'" + key + "' not reloaded (see the log)";
     }
     if (!data_reload_.empty()) {
         const std::string name = std::move(data_reload_);
         data_reload_.clear();
-        last_reload_ = app_.data().reload(app_.assets().root(), name) ? "table « " + name + " » rechargée"
-                                                                      : "table « " + name + " » non rechargée (voir les problèmes)";
+        last_reload_ = app_.data().reload(app_.assets().root(), name) ? "table '" + name + "' reloaded"
+                                                                      : "table '" + name + "' not reloaded (see the issues)";
     }
     if (collect_request_) {
         collect_request_ = false;
         const std::size_t freed = app_.assets().collect_garbage();
-        last_reload_ = std::to_string(freed) + " asset(s) libéré(s)";
+        last_reload_ = std::to_string(freed) + " asset(s) freed";
     }
 }
 
@@ -455,7 +456,7 @@ void DebugTools::draw() {
 void DebugTools::draw_stats_bar() {
     if (stats_bar_ == nullptr) {
         stats_bar_ = &app_.console().variables().add_bool("debug.stats", false,
-                                                          "barre de statistiques (images, CPU, logique, mémoire, entités)",
+                                                          "statistics bar (frames, CPU, logic, memory, entities)",
                                                           Variable::Archive);
     }
     if (!stats_bar_->as_bool()) {
@@ -467,16 +468,16 @@ void DebugTools::draw_stats_bar() {
         const Profiler::Frame& frame = history.back();
         cpu = Profiler::milliseconds(frame.end - frame.start);
         for (const Profiler::Zone& zone : frame.zones) {
-            if (std::string_view(zone.name) == "logique") {
+            if (std::string_view(zone.name) == "logic") {
                 logic = Profiler::milliseconds(zone.end - zone.start);
             }
-            if (std::string_view(zone.name) == "attente de l'affichage") {
+            if (std::string_view(zone.name) == "waiting for the display") {
                 cpu -= Profiler::milliseconds(zone.end - zone.start);  // waiting is not work
             }
         }
     }
     char text[256];
-    std::snprintf(text, sizeof(text), "%.0f images/s  |  CPU %.2f ms (logique %.2f)  |  mémoire %.0f Mo  |  %zu entités",
+    std::snprintf(text, sizeof(text), "%.0f FPS  |  CPU %.2f ms (logic %.2f)  |  memory %.0f MB  |  %zu entities",
                   static_cast<double>(ImGui::GetIO().Framerate), cpu, logic,
                   static_cast<double>(process_memory_bytes()) / (1024.0 * 1024.0), world_ != nullptr ? world_->entity_count() : 0);
     ImDrawList* draw = ImGui::GetForegroundDrawList();
@@ -506,29 +507,29 @@ void DebugTools::draw_profiler() {
     }
     Profiler& profiler = app_.profiler();
     bool frozen = profiler.frozen();
-    if (ImGui::Checkbox("Figer", &frozen)) {
+    if (ImGui::Checkbox("Freeze", &frozen)) {
         profiler.set_frozen(frozen);
     }
     ImGui::SameLine();
     bool enabled = profiler.enabled();
-    if (ImGui::Checkbox("Mesurer", &enabled)) {
+    if (ImGui::Checkbox("Measure", &enabled)) {
         profiler.set_enabled(enabled);
     }
     ImGui::SameLine();
     if (!profiler.capturing()) {
-        if (ImGui::Button("Capturer")) {
+        if (ImGui::Button("Capture")) {
             profiler.start_capture();
         }
-    } else if (ImGui::Button("Arrêter et écrire")) {
-        const std::string path = app_.preferences_directory() + "profils/profil.json";
-        last_reload_ = profiler.stop_capture(path) ? "profil écrit : " + path : "écriture impossible";
+    } else if (ImGui::Button("Stop and write")) {
+        const std::string path = app_.preferences_directory() + "profiles/profile.json";
+        last_reload_ = profiler.stop_capture(path) ? "profile written: " + path : "could not write the profile";
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", profiler.capturing() ? "capture en cours" : last_reload_.c_str());
+    ImGui::TextDisabled("%s", profiler.capturing() ? "capturing" : last_reload_.c_str());
 
     const auto& history = profiler.history();
     if (history.empty()) {
-        ImGui::TextDisabled("Aucune image mesurée.");
+        ImGui::TextDisabled("No frame measured.");
         ImGui::End();
         return;
     }
@@ -564,7 +565,7 @@ void DebugTools::draw_profiler() {
             shown = &frame;
         }
     }
-    ImGui::Text("Image %llu : %.3f ms (cliquer une barre pour la choisir ; 16,7 ms : la ligne)",
+    ImGui::Text("Frame %llu: %.3f ms (click a bar to select it; the line is 16.7 ms)",
                 static_cast<unsigned long long>(shown->index), Profiler::milliseconds(shown->end - shown->start));
 
     if (ImGui::BeginTable("zones", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
@@ -590,11 +591,11 @@ void DebugTools::draw_profiler() {
         profiler_summary_age_ = 0;
     }
     if (ImGui::BeginTable("stats", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
-        ImGui::TableSetupColumn("Zone (sur les dernières images)");
-        ImGui::TableSetupColumn("moyenne", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("Zone (over the last frames)");
+        ImGui::TableSetupColumn("mean", ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableSetupColumn("p99", ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableSetupColumn("max", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-        ImGui::TableSetupColumn("par image", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("per frame", ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableHeadersRow();
         for (const Profiler::Summary& zone : profiler_summary_) {
             ImGui::TableNextRow();
@@ -651,7 +652,7 @@ void DebugTools::draw_console() {
         }
         ImGui::TextDisabled("%s", list.c_str());
     } else {
-        ImGui::TextDisabled("Tab : compléter ; flèches : historique ; help : les commandes ; ² : fermer");
+        ImGui::TextDisabled("Tab: complete; arrows: history; help: list commands; ²: close");
     }
     const auto callback = [](ImGuiInputTextCallbackData* data) -> int {
         auto* tools = static_cast<DebugTools*>(data->UserData);
@@ -699,20 +700,20 @@ void DebugTools::draw_console() {
 }
 
 void DebugTools::draw_data() {
-    if (!begin_window("Données", Window::Data, 640.0f, 460.0f)) {
+    if (!begin_window("Data", Window::Data, 640.0f, 460.0f)) {
         return;
     }
     DataTables& data = app_.data();
-    ImGui::Text("%zu table(s), source : %s", data.tables().size(),
-                data.source() == DataSource::Json ? "JSON (rechargement à chaud)" : "compilée");
+    ImGui::Text("%zu table(s), source: %s", data.tables().size(),
+                data.source() == DataSource::Json ? "JSON (hot reload)" : "compiled");
     if (!last_reload_.empty()) {
         ImGui::SameLine();
         ImGui::TextDisabled("%s", last_reload_.c_str());
     }
     if (ImGui::BeginTable("tables", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Table");
-        ImGui::TableSetupColumn("Lignes");
-        ImGui::TableSetupColumn("Rechargée");
+        ImGui::TableSetupColumn("Rows");
+        ImGui::TableSetupColumn("Reloads");
         ImGui::TableSetupColumn("");
         ImGui::TableHeadersRow();
         for (const auto& table : data.tables()) {
@@ -725,12 +726,12 @@ void DebugTools::draw_data() {
                 data_row_.clear();
             }
             ImGui::TableNextColumn();
-            ImGui::Text("%zu%s", table->size(), table->loaded() ? "" : " (non chargée)");
+            ImGui::Text("%zu%s", table->size(), table->loaded() ? "" : " (not loaded)");
             ImGui::TableNextColumn();
-            ImGui::Text("%llu fois", static_cast<unsigned long long>(table->revision()));
+            ImGui::Text("%llu", static_cast<unsigned long long>(table->revision()));
             ImGui::TableNextColumn();
             ImGui::BeginDisabled(data.source() != DataSource::Json);
-            if (ImGui::SmallButton("Recharger")) {
+            if (ImGui::SmallButton("Reload")) {
                 data_reload_ = table->name();
             }
             ImGui::EndDisabled();
@@ -740,23 +741,23 @@ void DebugTools::draw_data() {
     }
 
     const DataIssues& issues = data.last_issues();
-    if (!issues.all().empty() && ImGui::CollapsingHeader("Problèmes du dernier chargement", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!issues.all().empty() && ImGui::CollapsingHeader("Issues from the last load", ImGuiTreeNodeFlags_DefaultOpen)) {
         for (const DataIssue& issue : issues.all()) {
             const bool error = issue.level == DataIssue::Level::Error;
-            ImGui::TextColored(error ? ImVec4(1.0f, 0.45f, 0.4f, 1.0f) : ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s : %s",
+            ImGui::TextColored(error ? ImVec4(1.0f, 0.45f, 0.4f, 1.0f) : ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s: %s",
                                issue.where.c_str(), issue.message.c_str());
         }
     }
 
     DataTableBase* table = data.find(data_table_);
     if (table == nullptr) {
-        ImGui::TextDisabled("Choisir une table.");
+        ImGui::TextDisabled("Select a table.");
         ImGui::End();
         return;
     }
     ImGui::SeparatorText(table->name().c_str());
-    ImGui::TextDisabled("%s/ : %zu fichier(s)", table->directory().c_str(), table->files().size());
-    ImGui::InputTextWithHint("##filtre", "filtrer les lignes", data_filter_, sizeof(data_filter_));
+    ImGui::TextDisabled("%s/: %zu file(s)", table->directory().c_str(), table->files().size());
+    ImGui::InputTextWithHint("##filtre", "filter rows", data_filter_, sizeof(data_filter_));
     if (ImGui::BeginChild("lignes", {220.0f, 0.0f}, ImGuiChildFlags_Borders)) {
         for (const std::uint32_t index : table->sorted()) {  // in the order of the identifiers
             const std::string& id = table->id(index);
@@ -773,11 +774,11 @@ void DebugTools::draw_data() {
     if (ImGui::BeginChild("ligne", {0.0f, 0.0f}, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
         if (const auto index = table->index_of(data_row_)) {
             ImGui::TextDisabled("%s, index %u", table->row_file(*index).c_str(), *index);
-            ImGui::TextDisabled("Après défauts et héritage, telle que le jeu la lit :");
+            ImGui::TextDisabled("After defaults and inheritance, as the game reads it:");
             const std::string text = table->resolved(*index).dump(2);
             ImGui::TextUnformatted(text.c_str(), text.c_str() + text.size());
         } else {
-            ImGui::TextDisabled("Choisir une ligne.");
+            ImGui::TextDisabled("Select a row.");
         }
     }
     ImGui::EndChild();
@@ -789,7 +790,7 @@ void DebugTools::draw_animation() {
         return;
     }
     if (world_ == nullptr) {
-        ImGui::TextDisabled("Aucun monde (une scène doit appeler watch(world))");
+        ImGui::TextDisabled("No world (a scene must call watch(world))");
         ImGui::End();
         return;
     }
@@ -805,8 +806,8 @@ void DebugTools::draw_animation() {
     if (!registry.valid(animated_) || !registry.all_of<Animator>(animated_)) {
         animated_ = entt::null;
     }
-    if (ImGui::BeginCombo("Entité", animated_ == entt::null ? "(aucune)" : label(animated_).c_str())) {
-        for (auto [entity, animator] : registry.view<Animator>().each()) {
+    if (ImGui::BeginCombo("Entity", animated_ == entt::null ? "(none)" : label(animated_).c_str())) {
+        for (const auto& [entity, animator] : registry.view<Animator>().each()) {
             if (ImGui::Selectable(label(entity).c_str(), entity == animated_)) {
                 animated_ = entity;
                 selected_ = entity;
@@ -815,42 +816,42 @@ void DebugTools::draw_animation() {
         ImGui::EndCombo();
     }
     if (animated_ == entt::null) {
-        ImGui::TextDisabled("Aucune entité animée choisie");
+        ImGui::TextDisabled("No animated entity selected");
         ImGui::End();
         return;
     }
     const Animator& animator = registry.get<Animator>(animated_);
-    ImGui::Text("Tick %lld ; vitesse x%.2f ; déplacement %.2f m/s", static_cast<long long>(animator.ticks()),
+    ImGui::Text("Tick %lld; speed x%.2f; movement %.2f m/s", static_cast<long long>(animator.ticks()),
                 animator.speed(), animator.move_speed());
     const Animator::LastEvent& last = animator.last_event();
     if (last.tick >= 0) {
-        ImGui::Text("Dernier événement : %s (%s), tick %lld, il y a %lld ticks", last.name.c_str(), last.clip.c_str(),
+        ImGui::Text("Last event: %s (%s), tick %lld, %lld ticks ago", last.name.c_str(), last.clip.c_str(),
                     static_cast<long long>(last.tick), static_cast<long long>(animator.ticks() - last.tick));
     } else {
-        ImGui::TextDisabled("Aucun événement encore");
+        ImGui::TextDisabled("No event yet");
     }
     // The graph (milestone 7, part 9): the state of each layer, the parameters, the last transitions.
     if (animator.graph_active()) {
-        ImGui::SeparatorText("Graphe d'animation");
+        ImGui::SeparatorText("Animation graph");
         if (!animator.graph_error().empty()) {
             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", animator.graph_error().c_str());
         }
-        ImGui::Text("Corps : %s ; haut du corps : %s", animator.graph_state(0).c_str(),
+        ImGui::Text("Body: %s; upper body: %s", animator.graph_state(0).c_str(),
                     animator.graph_state(1).empty() ? "-" : animator.graph_state(1).c_str());
         if (animator.set) {
             for (const GraphParameter& p : animator.set->graph().parameters) {
                 if (p.type == GraphParameter::Type::Trigger) {
-                    ImGui::BulletText("%s (déclencheur)", p.name.c_str());
+                    ImGui::BulletText("%s (trigger)", p.name.c_str());
                 } else {
                     ImGui::BulletText("%s = %g", p.name.c_str(), animator.parameter(p.name));
                 }
             }
         }
         const auto& history = animator.graph_history();
-        if (!history.empty() && ImGui::TreeNode("Dernières transitions")) {
+        if (!history.empty() && ImGui::TreeNode("Last transitions")) {
             for (auto it = history.rbegin(); it != history.rend(); ++it) {
-                ImGui::Text("tick %lld, %s : %s -> %s (il y a %lld ticks)", static_cast<long long>(it->tick),
-                            it->layer == 0 ? "corps" : "haut", it->from.c_str(), it->to.c_str(),
+                ImGui::Text("tick %lld, %s: %s -> %s (%lld ticks ago)", static_cast<long long>(it->tick),
+                            it->layer == 0 ? "body" : "upper", it->from.c_str(), it->to.c_str(),
                             static_cast<long long>(animator.ticks() - it->tick));
             }
             ImGui::TreePop();
@@ -861,9 +862,9 @@ void DebugTools::draw_animation() {
         if (layer.motions.empty()) {
             continue;
         }
-        ImGui::SeparatorText(l == 0 ? "Corps entier" : "Haut du corps");
+        ImGui::SeparatorText(l == 0 ? "Full body" : "Upper body");
         if (l > 0) {
-            ImGui::Text("Poids de la couche : %.0f %%", layer.weight / 10.0);
+            ImGui::Text("Layer weight: %.0f %%", layer.weight / 10.0);
         }
         for (const Animator::Motion& motion : layer.motions) {
             // The clip's timeline: where it is, and its events (ticks, or the blend space's cycle).
@@ -871,13 +872,13 @@ void DebugTools::draw_animation() {
             const float ratio = motion.ratio(1.0f);
             char overlay[160];
             if (motion.blend_space()) {
-                std::snprintf(overlay, sizeof(overlay), "%s (mélange) %.0f %% : phase %.2f, x%.2f", motion.name.c_str(),
+                std::snprintf(overlay, sizeof(overlay), "%s (blend) %.0f %%: phase %.2f, x%.2f", motion.name.c_str(),
                               motion.weight / 10.0, static_cast<double>(ratio), motion.rate / 1000.0);
             } else {
                 const double ticks = static_cast<double>(clock.cycle_time()) / ClipClock::kOne;
-                std::snprintf(overlay, sizeof(overlay), "%s %.0f %% : %.1f / %d ticks (%.2f s)%s", motion.name.c_str(),
-                              motion.weight / 10.0, ticks, clock.cycle_ticks(), ticks / kClipTicksPerSecond,
-                              clock.finished() ? ", fini" : "");
+                std::snprintf(overlay, sizeof(overlay), "%s %.0f %%: %.1f / %d ticks (%.2f s)%s", motion.name.c_str(),
+                              motion.weight / 10.0, ticks, clock.cycle_ticks(), ticks / tick_rate(),
+                              clock.finished() ? ", finished" : "");
             }
             const ImVec2 at = ImGui::GetCursorScreenPos();
             ImGui::ProgressBar(ratio, ImVec2(-1.0f, 0.0f), overlay);
@@ -891,8 +892,8 @@ void DebugTools::draw_animation() {
                 ImGui::BeginTooltip();
                 for (std::size_t m = 0; m < motion.events.size(); ++m) {
                     const Animator::MotionEvent& event = motion.events[m];
-                    ImGui::Text("%s (%s) : %d / %d%s", event.name.c_str(), event.clip.c_str(), motion.marks[m],
-                                clock.cycle_ticks(), event.always ? ", toujours" : "");
+                    ImGui::Text("%s (%s): %d / %d%s", event.name.c_str(), event.clip.c_str(), motion.marks[m],
+                                clock.cycle_ticks(), event.always ? ", always" : "");
                 }
                 ImGui::EndTooltip();
             }
@@ -941,7 +942,7 @@ void DebugTools::draw_inspector() {
             }
         };
         add(selected_);
-        for (auto [child, parent] : registry.view<Parent>().each()) {
+        for (const auto& [child, parent] : registry.view<Parent>().each()) {
             if (parent.entity == selected_) {
                 add(child);
             }
@@ -953,24 +954,24 @@ void DebugTools::draw_inspector() {
         lines.axes(world.world_position(selected_, 1.0f), 0.75f);
     }
 
-    if (!begin_window("Inspecteur d'entités", Window::Inspector, 640.0f, 520.0f)) {
+    if (!begin_window("Entity Inspector", Window::Inspector, 640.0f, 520.0f)) {
         return;
     }
     if (world_ == nullptr) {
-        ImGui::TextDisabled("Aucun monde : lancer une scène faite d'entités (la démo 3D).");
+        ImGui::TextDisabled("No world: start a scene made of entities (the 3D demo).");
         ImGui::End();
         return;
     }
     World& world = *world_;
     entt::registry& registry = world.registry();
-    ImGui::Text("%s : %zu entités", world_label_.c_str(), world.entity_count());
+    ImGui::Text("%s: %zu entities", world_label_.c_str(), world.entity_count());
     if (edited_) {
-        ImGui::TextColored(kWarning, "Modifié à la main : la simulation n'est plus déterministe (rejeux, captures).");
+        ImGui::TextColored(kWarning, "Edited by hand: the simulation is no longer deterministic (replays, captures).");
     }
     ImGui::SetNextItemWidth(200.0f);
-    ImGui::InputTextWithHint("##filtre", "Filtre (nom ou #numéro)", filter_, sizeof(filter_));
+    ImGui::InputTextWithHint("##filtre", "Filter (name or #number)", filter_, sizeof(filter_));
     ImGui::SameLine();
-    ImGui::Checkbox("Nommées seulement", &named_only_);
+    ImGui::Checkbox("Named only", &named_only_);
 
     // The list, in the order of the entity numbers.
     listed_.clear();
@@ -1014,7 +1015,7 @@ void DebugTools::draw_inspector() {
     if (registry.valid(selected_)) {
         draw_entity(world, selected_);
     } else {
-        ImGui::TextDisabled("Choisir une entité dans la liste, ou dans le monde (le clic de la scène).");
+        ImGui::TextDisabled("Select an entity in the list, or in the world (the scene's click).");
     }
     ImGui::EndChild();
     ImGui::End();
@@ -1023,11 +1024,11 @@ void DebugTools::draw_inspector() {
 void DebugTools::draw_entity(World& world, entt::entity entity) {
     entt::registry& registry = world.registry();
     const Name* name = registry.try_get<Name>(entity);
-    ImGui::Text("Entité #%u (version %u)%s%s", static_cast<unsigned>(entt::to_entity(entity)),
-                static_cast<unsigned>(entt::to_version(entity)), name != nullptr ? " : " : "",
+    ImGui::Text("Entity #%u (version %u)%s%s", static_cast<unsigned>(entt::to_entity(entity)),
+                static_cast<unsigned>(entt::to_version(entity)), name != nullptr ? ": " : "",
                 name != nullptr ? name->value.c_str() : "");
     bool hidden = registry.all_of<Hidden>(entity);
-    if (ImGui::Checkbox("Cachée", &hidden)) {
+    if (ImGui::Checkbox("Hidden", &hidden)) {
         if (hidden) {
             registry.emplace<Hidden>(entity);
         } else {
@@ -1046,7 +1047,7 @@ void DebugTools::draw_entity(World& world, entt::entity entity) {
         const std::string title = components_.name(storage.info());
         if (ImGui::CollapsingHeader(title.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
             if (!components_.registered(storage.info())) {
-                ImGui::TextDisabled("(type non inscrit : son contenu n'est pas affiché)");
+                ImGui::TextDisabled("(unregistered type: its content is not shown)");
             } else if (components_.edit(registry, entity, storage.info())) {
                 edited_ = true;
             }
@@ -1060,16 +1061,25 @@ void DebugTools::draw_assets() {
         return;
     }
     Assets& assets = app_.assets();
-    ImGui::TextDisabled("Rechargement à chaud : %s", assets.hot_reload() ? "actif" : "inactif");
+    ImGui::TextDisabled("Hot reload: %s", assets.hot_reload() ? "on" : "off");
+    // What the engine holds on the GPU (milestone 8, part 4), and the geometry pools (part 5).
+    const GpuMemory gpu = gpu_memory();
+    const GeometryPool::Stats geometry = app_.renderer().geometry_stats();
+    ImGui::Text("GPU: %.1f MB (textures %.1f, render targets %.1f, buffers %.1f)", megabytes(static_cast<std::size_t>(gpu.total())),
+                megabytes(static_cast<std::size_t>(gpu.textures)), megabytes(static_cast<std::size_t>(gpu.targets)),
+                megabytes(static_cast<std::size_t>(gpu.buffers)));
+    ImGui::TextDisabled("Geometry: %zu page(s), %.1f MB used, %.2f MB pending release; %zu file(s) prefetching",
+                        geometry.pages, megabytes(geometry.used_bytes), megabytes(geometry.waiting_bytes),
+                        assets.prefetching());
     const std::vector<AssetTypeStats> stats = assets.stats();
     const std::vector<std::vector<AssetInfo>> infos = assets.infos();
     std::size_t total = 0;
     if (ImGui::BeginTable("types", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
         ImGui::TableSetupColumn("Type");
-        ImGui::TableSetupColumn("En mémoire");
-        ImGui::TableSetupColumn("Mémoire (Mo)");
-        ImGui::TableSetupColumn("Chargements");
-        ImGui::TableSetupColumn("Échecs");
+        ImGui::TableSetupColumn("Loaded");
+        ImGui::TableSetupColumn("Memory (MB)");
+        ImGui::TableSetupColumn("Loads");
+        ImGui::TableSetupColumn("Failures");
         ImGui::TableHeadersRow();
         for (const AssetTypeStats& type : stats) {
             ImGui::TableNextRow();
@@ -1087,8 +1097,8 @@ void DebugTools::draw_assets() {
         }
         ImGui::EndTable();
     }
-    ImGui::Text("Total : %.2f Mo (GPU, et mémoire centrale pour les sons)", megabytes(total));
-    if (ImGui::Button("Libérer les assets inutilisés")) {
+    ImGui::Text("Total: %.2f MB (GPU, and main memory for sounds)", megabytes(total));
+    if (ImGui::Button("Free unused assets")) {
         collect_request_ = true;
     }
     if (!last_reload_.empty()) {
@@ -1109,10 +1119,10 @@ void DebugTools::draw_assets() {
         std::sort(sorted.begin(), sorted.end(), [](const AssetInfo* a, const AssetInfo* b) { return a->key < b->key; });
         const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_Resizable;
         if (ImGui::BeginTable("assets", 5, flags)) {
-            ImGui::TableSetupColumn("Fichier", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Mo", ImGuiTableColumnFlags_WidthFixed);
-            ImGui::TableSetupColumn("Utilisateurs", ImGuiTableColumnFlags_WidthFixed);
-            ImGui::TableSetupColumn("État", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("MB", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("Users", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableHeadersRow();
             for (const AssetInfo* info : sorted) {
@@ -1126,17 +1136,17 @@ void DebugTools::draw_assets() {
                 ImGui::Text("%ld", info->users);
                 ImGui::TableNextColumn();
                 if (info->failed) {
-                    ImGui::TextColored(kError, "remplacé");
+                    ImGui::TextColored(kError, "placeholder");
                     ImGui::SetItemTooltip("%s", info->error.c_str());
                 } else if (!info->reload_error.empty()) {
-                    ImGui::TextColored(kWarning, "erreur");
-                    ImGui::SetItemTooltip("Rechargement refusé, l'ancien contenu reste :\n%s", info->reload_error.c_str());
+                    ImGui::TextColored(kWarning, "error");
+                    ImGui::SetItemTooltip("Reload rejected, the previous content is kept:\n%s", info->reload_error.c_str());
                 } else {
-                    ImGui::TextUnformatted("prêt");
+                    ImGui::TextUnformatted("ready");
                 }
                 ImGui::TableNextColumn();
-                ImGui::BeginDisabled(!Assets::reloadable(t));
-                if (ImGui::SmallButton("Recharger")) {
+                ImGui::BeginDisabled(!Assets::reloadable(static_cast<AssetType>(t)));
+                if (ImGui::SmallButton("Reload")) {
                     reload_request_ = std::make_pair(t, info->key);
                 }
                 ImGui::EndDisabled();
@@ -1150,34 +1160,36 @@ void DebugTools::draw_assets() {
 }
 
 void DebugTools::draw_input() {
-    if (!begin_window("Entrées", Window::Input, 560.0f, 420.0f)) {
+    if (!begin_window("Input", Window::Input, 560.0f, 420.0f)) {
         return;
     }
     const Input& input = app_.input();
-    ImGui::Text("Profil : %s", input.profiles().empty() ? "(aucun)" : input.profile_label(input.profile()).c_str());
-    ImGui::Text("Dernier périphérique : %s ; manettes branchées : %d",
-                input.last_device() == InputDevice::Gamepad ? "manette" : "clavier et souris", input.gamepad_count());
+    ImGui::Text("Profile: %s", input.profiles().empty() ? "(none)" : input.profile_label(input.profile()).c_str());
+    ImGui::Text("Last device: %s; gamepads connected: %d",
+                input.last_device() == InputDevice::Gamepad ? "gamepad" : "keyboard and mouse", input.gamepad_count());
     const glm::vec2 pointer = input.pointer();
     if (pointer.x >= 0.0f) {
-        ImGui::Text("Pointeur : %.0f, %.0f px", static_cast<double>(pointer.x), static_cast<double>(pointer.y));
+        ImGui::Text("Pointer: %.0f, %.0f px", static_cast<double>(pointer.x), static_cast<double>(pointer.y));
     } else {
-        ImGui::TextUnformatted("Pointeur : hors de la fenêtre");
+        ImGui::TextUnformatted("Pointer: outside the window");
     }
-    if (!input.enabled()) {
-        ImGui::TextColored(kWarning, "Entrées réelles ignorées (rejeu d'un enregistrement)");
+    if (input.replaying()) {
+        ImGui::TextColored(kWarning, "Real input ignored (replaying a recording)");
+    } else if (!input.enabled()) {
+        ImGui::TextColored(kWarning, "Real input ignored (disabled)");
     }
     if (input.muted()) {
-        ImGui::TextColored(kWarning, "Muette (un état au-dessus les reçoit)");
+        ImGui::TextColored(kWarning, "Muted (a state above receives it)");
     }
     if (input.action_count() == 0) {
-        ImGui::TextDisabled("Aucune action déclarée par la scène.");
+        ImGui::TextDisabled("No action declared by the scene.");
         ImGui::End();
         return;
     }
     if (ImGui::BeginTable("actions", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Action");
-        ImGui::TableSetupColumn("Liaisons");
-        ImGui::TableSetupColumn("État");
+        ImGui::TableSetupColumn("Bindings");
+        ImGui::TableSetupColumn("State");
         ImGui::TableHeadersRow();
         for (ActionId action = 0; action < static_cast<ActionId>(input.action_count()); ++action) {
             ImGui::TableNextRow();
@@ -1190,7 +1202,7 @@ void DebugTools::draw_input() {
                 const glm::vec2 value = input.axis(action);
                 ImGui::Text("%+.2f %+.2f", static_cast<double>(value.x), static_cast<double>(value.y));
             } else if (input.down(action)) {
-                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "enfoncé");
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "down");
             }
         }
         ImGui::EndTable();
@@ -1204,11 +1216,11 @@ void DebugTools::draw_audio() {
     }
     Audio& audio = app_.audio();
     const AudioStats stats = audio.stats();
-    ImGui::Text("Sortie : %s%s", stats.device_name.c_str(), stats.device ? "" : " (arrêtée)");
-    ImGui::Text("%d Hz, %d canaux, tampon %.0f ms", stats.sample_rate, stats.channels, static_cast<double>(stats.device_latency_ms));
+    ImGui::Text("Output: %s%s", stats.device_name.c_str(), stats.device ? "" : " (stopped)");
+    ImGui::Text("%d Hz, %d channels, buffer %.0f ms", stats.sample_rate, stats.channels, static_cast<double>(stats.device_latency_ms));
     ImGui::SeparatorText("Volumes");
     float master = audio.master_volume();
-    if (ImGui::SliderFloat("Général", &master, 0.0f, 1.0f)) {
+    if (ImGui::SliderFloat("Master", &master, 0.0f, 1.0f)) {
         audio.set_master_volume(master);
     }
     for (int g = 0; g < kSoundGroupCount; ++g) {
@@ -1220,35 +1232,35 @@ void DebugTools::draw_audio() {
         }
         ImGui::SameLine();
         bool paused = audio.group_paused(group);
-        if (ImGui::Checkbox("en pause", &paused)) {
+        if (ImGui::Checkbox("paused", &paused)) {
             audio.set_group_paused(group, paused);
         }
         ImGui::PopID();
     }
-    ImGui::SeparatorText("Voix");
-    ImGui::Text("Sons : %d ; musiques : %d ; flux : %d", stats.voices, stats.musics, stats.streams);
+    ImGui::SeparatorText("Voices");
+    ImGui::Text("Sounds: %d; music: %d; streams: %d", stats.voices, stats.musics, stats.streams);
     if (const Music* music = audio.music()) {
-        ImGui::Text("Musique : %s", music->name.c_str());
+        ImGui::Text("Music: %s", music->name.c_str());
     }
-    ImGui::Text("Lancés : %zu ; fusionnés : %zu ; volés : %zu", stats.played, stats.merged, stats.stolen);
-    ImGui::Text("Refusés : %zu inaudibles, %zu limite par fichier, %zu limite de voix", stats.dropped_inaudible,
+    ImGui::Text("Played: %zu; merged: %zu; stolen: %zu", stats.played, stats.merged, stats.stolen);
+    ImGui::Text("Rejected: %zu inaudible, %zu per-file limit, %zu voice limit", stats.dropped_inaudible,
                 stats.dropped_sound_limit, stats.dropped_voice_limit);
     if (stats.last_refused.empty()) {
-        ImGui::TextDisabled("Aucun son refusé.");
+        ImGui::TextDisabled("No sound rejected.");
     } else {
-        ImGui::TextColored(kWarning, "Dernier refusé : %s (%s)", stats.last_refused.c_str(), refusal_label(stats.last_refused_reason));
+        ImGui::TextColored(kWarning, "Last rejected: %s (%s)", stats.last_refused.c_str(), refusal_label(stats.last_refused_reason));
     }
-    ImGui::Text("Crête : mixage %.2f, sortie %.2f, limiteur %.2f", static_cast<double>(stats.mix_peak),
+    ImGui::Text("Peak: mix %.2f, output %.2f, limiter %.2f", static_cast<double>(stats.mix_peak),
                 static_cast<double>(stats.peak), static_cast<double>(stats.limiter_gain));
     ImGui::SameLine();
-    if (ImGui::SmallButton("Remettre à zéro")) {
+    if (ImGui::SmallButton("Reset")) {
         audio.reset_peak();
     }
     const std::vector<Audio::ActiveSound> sounds = audio.active_sounds();
     if (!sounds.empty() && ImGui::BeginTable("voix", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Son");
-        ImGui::TableSetupColumn("Groupe");
-        ImGui::TableSetupColumn("Force");
+        ImGui::TableSetupColumn("Sound");
+        ImGui::TableSetupColumn("Group");
+        ImGui::TableSetupColumn("Loudness");
         ImGui::TableSetupColumn("");
         ImGui::TableHeadersRow();
         for (const Audio::ActiveSound& sound : sounds) {
@@ -1260,7 +1272,7 @@ void DebugTools::draw_audio() {
             ImGui::TableNextColumn();
             ImGui::Text("%.2f", static_cast<double>(sound.loudness));
             ImGui::TableNextColumn();
-            ImGui::Text("%s%s%s", sound.placed ? "placé " : "", sound.looping ? "boucle " : "", sound.stopping ? "s'arrête" : "");
+            ImGui::Text("%s%s%s", sound.placed ? "positional " : "", sound.looping ? "looping " : "", sound.stopping ? "stopping" : "");
         }
         ImGui::EndTable();
     }
@@ -1268,31 +1280,31 @@ void DebugTools::draw_audio() {
 }
 
 void DebugTools::draw_states() {
-    if (!begin_window("États de jeu", Window::States, 420.0f, 260.0f)) {
+    if (!begin_window("Game States", Window::States, 420.0f, 260.0f)) {
         return;
     }
     if (stacks_.empty()) {
-        ImGui::TextDisabled("Aucune pile d'états : lancer le test « États de jeu ».");
+        ImGui::TextDisabled("No state stack: start the playable slice (--states).");
     }
     for (const WatchedStack& watched : stacks_) {
         const StateStack& stack = *watched.stack;
         ImGui::SeparatorText(watched.label.c_str());
-        ImGui::Text("%zu état(s)%s", stack.size(), stack.has_pending() ? ", transitions en attente" : "");
+        ImGui::Text("%zu state(s)%s", stack.size(), stack.has_pending() ? ", transitions pending" : "");
         ImGui::PushID(watched.stack);
         if (stack.size() > 0 && ImGui::BeginTable("pile", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("#");
-            ImGui::TableSetupColumn("État");
-            ImGui::TableSetupColumn("Dessous");
+            ImGui::TableSetupColumn("State");
+            ImGui::TableSetupColumn("Below");
             ImGui::TableHeadersRow();
             for (std::size_t i = stack.size(); i-- > 0;) {  // the top first, as the stack is drawn
                 const GameState& state = *stack.at(i);
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("%zu%s", i, i + 1 == stack.size() ? " (dessus)" : "");
+                ImGui::Text("%zu%s", i, i + 1 == stack.size() ? " (top)" : "");
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(state.name());
                 ImGui::TableNextColumn();
-                ImGui::Text("%s, %s", state.transparent() ? "visible" : "caché", state.blocking() ? "figé" : "mis à jour");
+                ImGui::Text("%s, %s", state.transparent() ? "shows below" : "hides below", state.blocking() ? "freezes below" : "updates below");
             }
             ImGui::EndTable();
         }

@@ -25,7 +25,8 @@ glm::vec3 up_for(glm::vec3 direction) {
 
 ShadowFrame fit_sun_shadow(const glm::mat4& camera_view_projection, glm::vec3 to_sun, const ShadowSettings& settings) {
     const glm::mat4 inverse = glm::inverse(camera_view_projection);
-    to_sun = glm::normalize(to_sun);
+    // No direction at all: the sun straight overhead rather than NaN everywhere.
+    to_sun = glm::length(to_sun) > 0.0f ? glm::normalize(to_sun) : glm::vec3(0.0f, 1.0f, 0.0f);
 
     // The visible part of the field: each corner ray, cut between the ceiling and the ground.
     std::vector<glm::vec3> points;
@@ -60,10 +61,11 @@ ShadowFrame fit_sun_shadow(const glm::mat4& camera_view_projection, glm::vec3 to
         radius = std::max(radius, glm::length(p - center));
     }
     // Rounded up to a whole metre: the map keeps its size while the view moves, only zoom changes it.
-    radius = std::ceil(radius);
+    radius = std::max(std::ceil(radius), 1.0f);  // at least a metre: a view of one point would make it 0
 
     // Snap the centre to the texel grid of the sun's view, so the map slides by whole texels.
-    const float texel = 2.0f * radius / static_cast<float>(settings.resolution);
+    // A map has at least one texel per side: 0 or less would make the texel infinite (NaN below).
+    const float texel = 2.0f * radius / static_cast<float>(std::max(settings.resolution, 1));
     const glm::mat4 orientation = glm::lookAtRH(glm::vec3(0.0f), -to_sun, up_for(to_sun));
     glm::vec3 local = glm::vec3(orientation * glm::vec4(center, 1.0f));
     local.x = std::floor(local.x / texel) * texel;
@@ -82,7 +84,7 @@ ShadowFrame fit_sun_shadow(const glm::mat4& camera_view_projection, glm::vec3 to
     return frame;
 }
 
-PointShadowFaces point_shadow_faces(glm::vec3 position, float range, int tile_size) {
+PointShadowFaces point_shadow_faces(glm::vec3 position, float range, int tile_size, float near_plane) {
     // Directions and "up" vectors of the six faces (any up not parallel to the direction works:
     // the shader reads each face through the same matrix).
     static const glm::vec3 kDirections[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
@@ -91,7 +93,7 @@ PointShadowFaces point_shadow_faces(glm::vec3 position, float range, int tile_si
     // Half the face spans 1 (90 degrees) plus the margin, in texels of half a tile.
     const float half_extent = 1.0f + 2.0f * static_cast<float>(kPointShadowMarginTexels) / size;
     const float field_of_view = 2.0f * std::atan(half_extent);
-    const float near_plane = std::max(0.02f, range * 0.005f);
+    near_plane = near_plane > 0.0f ? std::max(near_plane, 0.02f) : std::max(0.02f, range * 0.005f);
     const glm::mat4 projection = glm::perspectiveRH_ZO(field_of_view, 1.0f, near_plane, std::max(range, near_plane * 2.0f));
     PointShadowFaces faces;
     for (int f = 0; f < 6; ++f) {

@@ -59,7 +59,7 @@ bool NavGrid::set(glm::ivec2 cell, bool walkable, bool opaque) {
 
 std::string NavGrid::to_ascii() const {
     std::string text;
-    text.reserve(static_cast<std::size_t>((width_ + 1) * height_));
+    text.reserve((static_cast<std::size_t>(width_) + 1) * static_cast<std::size_t>(height_));
     for (int j = 0; j < height_; ++j) {
         for (int i = 0; i < width_; ++i) {
             const bool w = walkable({i, j});

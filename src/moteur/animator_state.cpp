@@ -2,7 +2,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <stdexcept>
+#include <utility>
 
 #include "moteur/animator.hpp"
 
@@ -82,20 +84,30 @@ nlohmann::json Animator::save_state() const {
 }
 
 void Animator::load_state(const nlohmann::json& state) {
+    // Everything is read into copies first, then taken at once: a state that fails halfway leaves
+    // the Animator as it was.
+    std::int64_t speed = 0;
+    std::int64_t move_speed = 0;
+    std::int64_t tick_move_speed = 0;
+    std::int64_t previous_move_speed = 0;
+    std::int64_t ticks = 0;
+    LastEvent last_event;
+    std::array<Layer, kLayers> loaded = layers_;  // the masks come from create(): kept
+    GraphRuntime graph_state;                     // no "graph": not started, as when it was saved
     try {
-        speed_ = state.at("speed").get<std::int64_t>();
-        move_speed_ = state.at("move_speed").at(0).get<std::int64_t>();
-        tick_move_speed_ = state.at("move_speed").at(1).get<std::int64_t>();
-        previous_move_speed_ = state.at("move_speed").at(2).get<std::int64_t>();
-        ticks_ = state.at("ticks").get<std::int64_t>();
+        speed = state.at("speed").get<std::int64_t>();
+        move_speed = state.at("move_speed").at(0).get<std::int64_t>();
+        tick_move_speed = state.at("move_speed").at(1).get<std::int64_t>();
+        previous_move_speed = state.at("move_speed").at(2).get<std::int64_t>();
+        ticks = state.at("ticks").get<std::int64_t>();
         const nlohmann::json& last = state.at("last_event");
-        last_event_ = {last.at(0).get<std::string>(), last.at(1).get<std::string>(), last.at(2).get<std::int64_t>()};
+        last_event = {last.at(0).get<std::string>(), last.at(1).get<std::string>(), last.at(2).get<std::int64_t>()};
         const nlohmann::json& layers = state.at("layers");
         if (layers.size() != static_cast<std::size_t>(kLayers)) {
             throw std::runtime_error("animation state: wrong number of layers");
         }
-        for (std::size_t i = 0; i < layers_.size(); ++i) {
-            Layer& layer = layers_[i];  // its mask comes from create(): kept
+        for (std::size_t i = 0; i < loaded.size(); ++i) {
+            Layer& layer = loaded[i];
             const nlohmann::json& l = layers[i];
             const nlohmann::json& w = l.at("weights");
             layer.weight = w.at(0).get<int>();
@@ -137,24 +149,31 @@ void Animator::load_state(const nlohmann::json& state) {
         if (state.contains("graph") && set && !set->graph().empty()) {
             const AnimationGraph& graph = set->graph();
             const nlohmann::json& g = state.at("graph");
-            graph_ = GraphRuntime{};
-            graph_.active = true;
-            graph_.id = graph.id;
+            graph_state.active = true;
+            graph_state.id = graph.id;
             for (const GraphParameter& p : graph.parameters) {
-                graph_.names.push_back(p.name);
-                graph_.values.push_back(g.at("values").value(p.name, 0.0));
+                graph_state.names.push_back(p.name);
+                graph_state.values.push_back(g.at("values").value(p.name, 0.0));
             }
             const nlohmann::json& states = g.at("states");
             for (std::size_t l = 0; l < graph.layers.size() && l < states.size(); ++l) {
                 const std::string name = states[l].get<std::string>();
                 const int found = graph.layers[l].state(name);
-                graph_.state[l] = found >= 0 ? found : graph.layers[l].start;
-                graph_.state_names[l] = graph.layers[l].states[static_cast<std::size_t>(graph_.state[l])].name;
+                graph_state.state[l] = found >= 0 ? found : graph.layers[l].start;
+                graph_state.state_names[l] = graph.layers[l].states[static_cast<std::size_t>(graph_state.state[l])].name;
             }
         }
     } catch (const nlohmann::json::exception& e) {
         throw std::runtime_error(std::string("animation state: ") + e.what());
     }
+    speed_ = speed;
+    move_speed_ = move_speed;
+    tick_move_speed_ = tick_move_speed;
+    previous_move_speed_ = previous_move_speed;
+    ticks_ = ticks;
+    last_event_ = std::move(last_event);
+    layers_ = std::move(loaded);
+    graph_ = std::move(graph_state);
 }
 
 }  // namespace moteur

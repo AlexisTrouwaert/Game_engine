@@ -11,7 +11,7 @@
     "#": ["sol", "mur"],
     "=": ["sol", "barriere"],
     " ": [],
-    "@": {"tiles": ["sol"], "point": "depart"},
+    "@": {"tiles": ["sol"], "point": "start"},
     "*": {"tiles": ["sol"], "point": "but"}
   },
   "rows": [

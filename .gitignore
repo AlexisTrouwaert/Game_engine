@@ -4,6 +4,9 @@ out/
 cmake-build-*/
 vcpkg_installed/
 
+# Python's caches (the scripts of tools/)
+__pycache__/
+
 # IDE
 .idea/
 .vs/
@@ -24,3 +27,6 @@ assets/audio/
 # Animated test characters downloaded by tools/models/fetch_test_characters.py (CC0 and CC-BY 4.0,
 # about 14 MB)
 assets/models/characters/
+# The ARPG's first assets, copied from the game's folder by tools/models/fetch_arpg_models.py
+# (the game's own files; about 60 MB with their KTX2 textures)
+assets/models/arpg/

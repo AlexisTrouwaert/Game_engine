@@ -118,9 +118,9 @@ TEST_CASE("Forgotten components and broken records are reported") {
         return record["id"] == 2 ? entt::entity{entt::null} : r.create();
     }, problems);
     REQUIRE(problems.size() == 3);
-    CHECK(problems[0].find("ne sait pas la recréer") != std::string::npos);
-    CHECK(problems[1].find("composant inconnu") != std::string::npos);
-    CHECK(problems[2].find("absent de la sauvegarde") != std::string::npos);
+    CHECK(problems[0].find("cannot recreate it") != std::string::npos);
+    CHECK(problems[1].find("unknown component") != std::string::npos);
+    CHECK(problems[2].find("missing from the save") != std::string::npos);
 }
 
 TEST_CASE("An Animator's state is saved and given back exactly") {
@@ -153,4 +153,49 @@ TEST_CASE("An Animator's state is saved and given back exactly") {
     nlohmann::json broken = a.save_state();
     broken["layers"][0]["motions"][0]["clip"] = "nexiste_pas";
     CHECK_THROWS_AS(b.load_state(broken), std::runtime_error);
+}
+
+TEST_CASE("Enumerations are saved by name; numbers from older saves are still read") {
+    entt::registry source;
+    const entt::entity walker = source.create();
+    source.emplace<moteur::PersistentId>(walker, 1u);
+    moteur::Mover mover;
+    mover.go_to({3.0f, 4.0f});
+    mover.state = moteur::MoveState::Blocked;
+    mover.path_status = moteur::PathStatus::Partial;
+    source.emplace<moteur::Mover>(walker, mover);
+    const moteur::ComponentSerializers s = serializers();
+    nlohmann::json saved = s.save(source);
+    const nlohmann::json& written = saved[0]["c"]["mover"];
+    CHECK(written["mode"] == "to_point");
+    CHECK(written["state"] == "blocked");
+    CHECK(written["status"] == "partial");
+
+    const auto load = [&s](const nlohmann::json& records, std::vector<std::string>& problems) {
+        entt::registry target;
+        s.load(target, records, [](entt::registry& r, const nlohmann::json&) { return r.create(); }, problems);
+        const auto view = target.view<moteur::Mover>();
+        return view.empty() ? moteur::Mover{} : view.get<moteur::Mover>(view.front());
+    };
+    std::vector<std::string> problems;
+    const moteur::Mover by_name = load(saved, problems);
+    CHECK(problems.empty());
+    CHECK(by_name.mode == moteur::MoveMode::ToPoint);
+    CHECK(by_name.state == moteur::MoveState::Blocked);
+    CHECK(by_name.path_status == moteur::PathStatus::Partial);
+
+    // A save of milestone 7 wrote numbers.
+    saved[0]["c"]["mover"]["mode"] = 1;
+    saved[0]["c"]["mover"]["state"] = 4;
+    saved[0]["c"]["mover"]["status"] = 1;
+    const moteur::Mover by_number = load(saved, problems);
+    CHECK(problems.empty());
+    CHECK(by_number.mode == moteur::MoveMode::ToPoint);
+    CHECK(by_number.state == moteur::MoveState::Blocked);
+
+    // An unknown name is reported, not taken for something else.
+    saved[0]["c"]["mover"]["state"] = "flying";
+    (void)load(saved, problems);
+    REQUIRE(problems.size() == 1);
+    CHECK(problems[0].find("flying") != std::string::npos);
 }

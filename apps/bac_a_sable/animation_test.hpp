@@ -25,7 +25,7 @@
 // much its planted foot slides; its footsteps and blows sound on the events of its clips (part 7);
 // it holds a sword of its own file and a burning torch on the attach points of its hands (part 8).
 // The characters are those of tools/models/fetch_test_characters.py;
-// the reference model is always there. With --fixed-hz 10, the "Interpolation" box shows what
+// the reference model is always there. With --tick-rate 10, the "Interpolation" box shows what
 // drawing between ticks is for.
 //
 // With Options::crowd (--skinned N, part 10), a load test instead: N KayKit characters on a grid,

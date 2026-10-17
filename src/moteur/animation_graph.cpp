@@ -150,7 +150,10 @@ int AnimationGraph::parameter(const std::string& name) const {
     return -1;
 }
 
-AnimationGraph AnimationGraph::parse(const nlohmann::json& j) {
+namespace {
+
+// AnimationGraph::parse() without the wrapping of the JSON errors.
+AnimationGraph read_graph(const nlohmann::json& j) {
     AnimationGraph graph;
     graph.id = next_graph_id++;
     if (j.contains("parameters")) {
@@ -174,7 +177,7 @@ AnimationGraph AnimationGraph::parse(const nlohmann::json& j) {
         const nlohmann::json& lj = layers[li];
         const std::string at = "layers[" + std::to_string(li) + "]";
         GraphLayer layer;
-        layer.name = lj.value("name", li == 0 ? std::string("corps") : std::string("haut"));
+        layer.name = lj.value("name", li == 0 ? std::string("body") : std::string("upper"));
         for (const auto& [name, sj] : lj.at("states").items()) {
             GraphState s;
             s.name = name;
@@ -229,6 +232,22 @@ AnimationGraph AnimationGraph::parse(const nlohmann::json& j) {
         graph.layers.push_back(std::move(layer));
     }
     return graph;
+}
+
+}  // namespace
+
+AnimationGraph AnimationGraph::parse(const nlohmann::json& graph, const std::string& source) {
+    const std::string prefix = source.empty() ? std::string() : "'" + source + "': ";
+    try {
+        return read_graph(graph);
+    } catch (const nlohmann::json::exception& e) {
+        throw std::runtime_error(prefix + "graph: " + e.what());
+    } catch (const std::runtime_error& e) {
+        if (source.empty()) {
+            throw;
+        }
+        throw std::runtime_error(prefix + e.what());
+    }
 }
 
 bool graph_condition_holds(const GraphCondition& condition, const std::vector<double>& values, bool ended,

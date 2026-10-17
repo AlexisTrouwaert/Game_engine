@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "_note": "The engine's credits: its libraries and the font of its debug interface. The game's own credits (assets) are in its credits.json; both are read by moteur::Credits. An entry with \"build\": \"DEVELOPMENT\" is a development tool, left out of the shipped game (MOTEUR_SHIPPING).",
+  "libraries": [
+    {
+      "name": "SDL",
+      "version": "3.4.16",
+      "license": "zlib",
+      "copyright": "Copyright (C) 1997-2026 Sam Lantinga",
+      "url": "https://libsdl.org",
+      "license_file": "licenses/sdl3.txt"
+    },
+    {
+      "name": "Dear ImGui",
+      "version": "1.92.9",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2014-2026 Omar Cornut",
+      "url": "https://github.com/ocornut/imgui",
+      "license_file": "licenses/imgui.txt",
+      "build": "DEVELOPMENT"
+    },
+    {
+      "name": "GLM",
+      "version": "1.0.3",
+      "license": "MIT (ou Happy Bunny License)",
+      "copyright": "Copyright (c) 2005 - G-Truc Creation",
+      "url": "https://github.com/g-truc/glm",
+      "license_file": "licenses/glm.txt"
+    },
+    {
+      "name": "stb (stb_image, stb_image_write, stb_truetype, stb_rect_pack, stb_vorbis)",
+      "version": "2024-07-29",
+      "license": "MIT ou domaine public",
+      "copyright": "Copyright (c) 2017 Sean Barrett",
+      "url": "https://github.com/nothings/stb",
+      "license_file": "licenses/stb.txt"
+    },
+    {
+      "name": "JSON for Modern C++",
+      "version": "3.12.0",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2013-2025 Niels Lohmann",
+      "url": "https://github.com/nlohmann/json",
+      "license_file": "licenses/nlohmann-json.txt"
+    },
+    {
+      "name": "cgltf",
+      "version": "1.15",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2018-2021 Johannes Kuhlmann",
+      "url": "https://github.com/jkuhlmann/cgltf",
+      "license_file": "licenses/cgltf.txt"
+    },
+    {
+      "name": "WinPixEventRuntime",
+      "version": "1.0.240308001",
+      "license": "MIT",
+      "copyright": "Copyright (c) Microsoft Corporation",
+      "url": "https://devblogs.microsoft.com/pix/winpixeventruntime/",
+      "license_file": "licenses/winpixevent.txt",
+      "platform": "windows",
+      "build": "DEVELOPMENT"
+    },
+    {
+      "name": "MikkTSpace",
+      "version": "2020-10-06",
+      "license": "zlib",
+      "copyright": "Copyright (C) 2011 by Morten S. Mikkelsen",
+      "url": "https://github.com/mmikk/MikkTSpace",
+      "license_file": "licenses/mikktspace.txt"
+    },
+    {
+      "name": "EnTT",
+      "version": "3.16.0",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2017-2025 Michele Caini",
+      "url": "https://github.com/skypjack/entt",
+      "license_file": "licenses/entt.txt"
+    },
+    {
+      "name": "efsw",
+      "version": "1.7.2",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2020 Martín Lucas Golini",
+      "url": "https://github.com/SpartanJ/efsw",
+      "license_file": "licenses/efsw.txt",
+      "build": "DEVELOPMENT"
+    },
+    {
+      "name": "KTX-Software (libktx, Basis Universal)",
+      "version": "4.4.2",
+      "license": "Apache 2.0",
+      "copyright": "Copyright 2013-2020 Mark Callow and the KTX-Software contributors (includes the Basis Universal transcoder, Apache 2.0)",
+      "url": "https://github.com/KhronosGroup/KTX-Software",
+      "license_file": "licenses/ktx.txt"
+    },
+    {
+      "name": "miniaudio",
+      "version": "0.11.25",
+      "license": "Domaine public (Unlicense) ou MIT-0",
+      "copyright": "Copyright 2025 David Reid",
+      "url": "https://miniaud.io",
+      "license_file": "licenses/miniaudio.txt"
+    },
+    {
+      "name": "ozz-animation",
+      "version": "0.17.0",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2020 Guillaume Blanc",
+      "url": "https://github.com/guillaumeblanc/ozz-animation",
+      "license_file": "licenses/ozz-animation.txt"
+    },
+    {
+      "name": "Tracy",
+      "version": "0.13.1",
+      "license": "BSD 3-Clause",
+      "copyright": "Copyright (c) 2017-2025, Bartosz Taudul",
+      "url": "https://github.com/wolfpld/tracy",
+      "license_file": "licenses/tracy.txt",
+      "build": "MOTEUR_TRACY"
+    },
+    {
+      "name": "Zstandard",
+      "version": "1.5.7",
+      "license": "BSD",
+      "copyright": "Copyright (c) Meta Platforms, Inc. and affiliates",
+      "url": "https://github.com/facebook/zstd",
+      "license_file": "licenses/zstd.txt"
+    }
+  ],
+  "fonts": [
+    {
+      "name": "Inter",
+      "license": "SIL Open Font License 1.1",
+      "copyright": "Copyright 2020 The Inter Project Authors",
+      "url": "https://rsms.me/inter",
+      "license_file": "assets/fonts/Inter-OFL.txt"
+    }
+  ]
+}

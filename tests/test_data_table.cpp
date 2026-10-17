@@ -136,14 +136,14 @@ TEST_CASE("DataReader reads typed fields and reports every problem with its plac
     reader.finish();  // "typo" unknown, "_c" a comment
     CHECK(issues.errors() == 6);
     CHECK(issues.warnings() == 2);
-    CHECK(has_issue(issues, "monstres.json > ossu > vie", "hors des bornes [1, 10]"));
-    CHECK(has_issue(issues, "ossu > vitesse", "attendu un nombre, trouvé un texte"));
-    CHECK(has_issue(issues, "ossu > rang", "« legendaire » n'est pas l'un de : normal, rare"));
-    CHECK(has_issue(issues, "ossu > teinte", "3 ou 4 nombres"));
-    CHECK(has_issue(issues, "ossu > obligatoire", "champ obligatoire absent"));
-    CHECK(has_issue(issues, "ossu > liste[1]", "attendu un texte"));
-    CHECK(has_issue(issues, "ossu > typo", "champ inconnu"));
-    CHECK(has_issue(issues, "ossu > objet > y", "champ inconnu"));
+    CHECK(has_issue(issues, "monstres.json > ossu > vie", "out of range [1, 10]"));
+    CHECK(has_issue(issues, "ossu > vitesse", "expected a number, found a string"));
+    CHECK(has_issue(issues, "ossu > rang", "'legendaire' is not one of: normal, rare"));
+    CHECK(has_issue(issues, "ossu > teinte", "3 or 4 numbers"));
+    CHECK(has_issue(issues, "ossu > obligatoire", "required field missing"));
+    CHECK(has_issue(issues, "ossu > liste[1]", "expected a string"));
+    CHECK(has_issue(issues, "ossu > typo", "unknown field"));
+    CHECK(has_issue(issues, "ossu > objet > y", "unknown field"));
     CHECK_FALSE(has_issue(issues, "_c", ""));
 }
 
@@ -203,12 +203,12 @@ TEST_CASE("DataTables refuse broken tables with messages naming file, row and fi
     register_tables(tables);
     const moteur::DataIssues& issues = tables.load_all(assets.str());
     INFO(issues.text());
-    CHECK(has_issue(issues, "c.json > boucle_", "héritage circulaire"));
-    CHECK(has_issue(issues, "c.json > orphelin > base", "« fantome » n'existe pas"));
-    CHECK(has_issue(issues, "c.json > squelette", "déjà défini dans data/monstres/a.json"));
-    CHECK(has_issue(issues, "c.json > lent > vitesse", "hors des bornes"));
-    CHECK(has_issue(issues, "c.json > lent > vitess", "champ inconnu"));
-    CHECK(has_issue(issues, "data/butin/casse.json", "JSON invalide"));
+    CHECK(has_issue(issues, "c.json > boucle_", "circular inheritance"));
+    CHECK(has_issue(issues, "c.json > orphelin > base", "'fantome' does not exist"));
+    CHECK(has_issue(issues, "c.json > squelette", "already defined in data/monstres/a.json"));
+    CHECK(has_issue(issues, "c.json > lent > vitesse", "out of range"));
+    CHECK(has_issue(issues, "c.json > lent > vitess", "unknown field"));
+    CHECK(has_issue(issues, "data/butin/casse.json", "invalid JSON"));
     // A row with an error refuses its whole table; the other one loads, and its reference to the
     // missing table's row is reported.
     CHECK_FALSE(tables.get<Monster>().loaded());
@@ -219,7 +219,7 @@ TEST_CASE("DataTables refuse broken tables with messages naming file, row and fi
     moteur::DataTables second;
     register_tables(second);
     const moteur::DataIssues& linked = second.load_all(other.str());
-    CHECK(has_issue(linked, "c.json > voleur > butin", "« epique » n'existe pas dans la table butin"));
+    CHECK(has_issue(linked, "c.json > voleur > butin", "'epique' does not exist in the table butin"));
 }
 
 TEST_CASE("A hot reload keeps every row at its index, refuses removals and errors") {
@@ -252,7 +252,7 @@ TEST_CASE("A hot reload keeps every row at its index, refuses removals and error
     // A removed row: refused, the previous content stays.
     assets.remove("data/monstres/b.json");
     CHECK(tables.reload(assets.str(), "monstres") == false);
-    CHECK(has_issue(tables.last_issues(), "necromancien", "ligne retirée"));
+    CHECK(has_issue(tables.last_issues(), "necromancien", "row removed"));
     CHECK(monsters.size() == 5);
     CHECK(monsters.revision() == 1);
     assets.write("data/monstres/b.json", kMonstersB);
@@ -304,5 +304,5 @@ TEST_CASE("The compiled form gives exactly the same rows") {
     moteur::DataTables damaged;
     register_tables(damaged);
     damaged.set_source(moteur::DataSource::Compiled, compiled);
-    CHECK(has_issue(damaged.load_all(assets.str()), "butin.mdat", "illisible"));
+    CHECK(has_issue(damaged.load_all(assets.str()), "butin.mdat", "unreadable"));
 }

@@ -80,7 +80,7 @@ AnimationTest::AnimationTest(moteur::Application& app, const Options& options, b
     // A torch on the left of the row: its shadows (a point light's) follow the poses.
     entt::registry& registry = world_.registry();
     torch_ = registry.create();
-    registry.emplace<moteur::Name>(torch_, "Torche");
+    registry.emplace<moteur::Name>(torch_, "Torch");
     moteur::Transform torch_place;
     torch_place.position = {-4.0f, 2.0f, 1.5f};
     registry.emplace<moteur::Transform>(torch_, torch_place);
@@ -141,7 +141,7 @@ void AnimationTest::add_walker() {
     entt::registry& registry = world_.registry();
     Walker& walker = walker_;
     walker.entity = registry.create();
-    registry.emplace<moteur::Name>(walker.entity, "Chevalier (mélanges)");
+    registry.emplace<moteur::Name>(walker.entity, "Knight (blending)");
     moteur::ModelComponent model{assets.model(kKnight), {}};
     for (const std::string& node : kKnightExtras) {
         model.hide(node);
@@ -180,7 +180,7 @@ void AnimationTest::add_walker() {
             const moteur::Stride stride = moteur::measure_stride(*animator.skeleton, animator.clips->clip(name),
                                                                  {walker.feet[0], walker.feet[1]});
             char line[160];
-            SDL_snprintf(line, sizeof line, "%s : %.2f m/s dans %s, %.3f mesurée (x %.2f : %.2f m/s ici)\n",
+            SDL_snprintf(line, sizeof line, "%s: %.2f m/s in %s, %.3f measured (x %.2f: %.2f m/s here)\n",
                          name.c_str(), static_cast<double>(declared), kKaykitSet, static_cast<double>(stride.ground_speed),
                          static_cast<double>(walker.scale), static_cast<double>(declared * walker.scale));
             walker.strides += line;
@@ -212,7 +212,7 @@ void AnimationTest::add_held_objects() {
         return held;
     };
     if (assets.exists(kSword)) {
-        walker.sword = hold("Épée (right_hand)", walker.entity, "right_hand", {});
+        walker.sword = hold("Sword (right_hand)", walker.entity, "right_hand", {});
         registry.emplace<moteur::ModelComponent>(walker.sword, assets.model(kSword), std::vector<std::uint32_t>{});
     }
     // A stick held in the fist, the flame at its top, the light in the flame. Metres of the file:
@@ -221,14 +221,14 @@ void AnimationTest::add_held_objects() {
     flame_ = moteur::make_asset(moteur::Mesh::create(renderer, moteur::make_sphere(0.09f, 16, 8), "animation.flame"));
     moteur::Transform stick_place;
     stick_place.position = {0.0f, 0.15f, 0.0f};
-    walker.torch = hold("Torche (left_hand)", walker.entity, "left_hand", stick_place);
+    walker.torch = hold("Torch (left_hand)", walker.entity, "left_hand", stick_place);
     moteur::Material wood;
     wood.base_color = glm::vec4(moteur::srgb_to_linear(glm::vec3(0.35f, 0.22f, 0.12f)), 1.0f);
     wood.roughness = 0.8f;
     registry.emplace<moteur::MeshComponent>(walker.torch, stick_, wood);
     moteur::Transform flame_place;
     flame_place.position = {0.0f, 0.35f, 0.0f};
-    const entt::entity flame = hold("Flamme", walker.torch, nullptr, flame_place);
+    const entt::entity flame = hold("Flame", walker.torch, nullptr, flame_place);
     moteur::Material fire;
     fire.base_color = glm::vec4(1.0f, 0.6f, 0.2f, 1.0f);
     fire.emissive = glm::vec3(8.0f, 3.5f, 0.8f);
@@ -237,7 +237,7 @@ void AnimationTest::add_held_objects() {
     registry.emplace<moteur::LightSource>(flame, glm::vec3(1.0f, 0.55f, 0.2f), 6.0f, 6.0f, true);
     moteur::Transform above;
     above.position = {0.0f, 1.5f, 0.0f};  // the knight's helmet is big: the head joint is at the neck
-    walker.marker = hold("Repère (head)", walker.entity, "head", above);
+    walker.marker = hold("Marker (head)", walker.entity, "head", above);
     show_held_objects();
 }
 
@@ -345,8 +345,8 @@ void AnimationTest::on_events() {
             app_.audio().play(sounds, sound);
         }
         char line[160];
-        SDL_snprintf(line, sizeof line, "tick %lld : %s (%s, %s, %.0f %%)", static_cast<long long>(tick_), event.name.c_str(),
-                     event.clip.c_str(), event.layer == 0 ? "corps" : "haut", event.weight / 10.0);
+        SDL_snprintf(line, sizeof line, "tick %lld: %s (%s, %s, %.0f %%)", static_cast<long long>(tick_), event.name.c_str(),
+                     event.clip.c_str(), event.layer == 0 ? "body" : "upper", event.weight / 10.0);
         event_log_.insert(event_log_.begin(), line);
     }
     if (event_log_.size() > 8) {
@@ -378,7 +378,7 @@ void AnimationTest::build_crowd(int count) {
     for (int i = 0; i < count; ++i) {
         const char* path = paths[i % 3];
         const entt::entity entity = registry.create();
-        registry.emplace<moteur::Name>(entity, "Foule " + std::to_string(i));
+        registry.emplace<moteur::Name>(entity, "Crowd " + std::to_string(i));
         moteur::ModelComponent model{assets.model(path), {}};
         if (path == kKnight) {
             for (const std::string& node : kKnightExtras) {
@@ -594,55 +594,55 @@ int AnimationTest::weight_palette_index() const {
 }
 
 void AnimationTest::draw_controls() {
-    ImGui::TextWrapped("Les personnages de test, chacun jouant un clip de son fichier, au tick, dessinés entre deux "
-                       "ticks, déformés sur le GPU (skinning) ; le squelette est dessiné par-dessus, et les armes et "
-                       "casques suivent leur os.");
+    ImGui::TextWrapped("The test characters, each playing a clip from its file, on the tick, drawn between two "
+                       "ticks, deformed on the GPU (skinning); the skeleton is drawn on top, and weapons and "
+                       "helmets follow their bone.");
     if (characters_.size() < 2) {
-        ImGui::TextWrapped("Personnages absents : python tools/models/fetch_test_characters.py");
+        ImGui::TextWrapped("Characters missing: python tools/models/fetch_test_characters.py");
     }
     entt::registry& registry = world_.registry();
-    bool changed_playback = ImGui::Checkbox("Lecture", &playing_);
+    bool changed_playback = ImGui::Checkbox("Play", &playing_);
     ImGui::SameLine();
-    ImGui::Checkbox("Squelette", &show_skeleton_);
+    ImGui::Checkbox("Skeleton", &show_skeleton_);
     ImGui::SameLine();
-    if (ImGui::Checkbox("Pose de repos", &rest_pose_)) {
+    if (ImGui::Checkbox("Rest pose", &rest_pose_)) {
         for (Character& character : characters_) {
             restart(character);
         }
     }
     ImGui::SameLine();
     ImGui::Checkbox("Interpolation", &interpolation_);
+    ImGui::SetItemTooltip("Draw between the last two ticks (otherwise at the last one). With --tick-rate 10, the "
+                          "difference is obvious.");
     ImGui::BeginDisabled(playing_);
-    if (ImGui::Button("Tick suivant")) {
+    if (ImGui::Button("Next tick")) {
         step_ = true;
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("En pause : avance d'un tick (à la vitesse choisie), événements compris.");
+    ImGui::SetItemTooltip("Paused: advances one tick (at the chosen speed), events included.");
     ImGui::SameLine();
-    ImGui::Checkbox("Axes des os", &axes_);
+    ImGui::Checkbox("Bone axes", &axes_);
     ImGui::SameLine();
-    ImGui::Checkbox("Pose de liaison", &bind_pose_);
-    ImGui::SetItemTooltip("Les maillages tels qu'ils ont été liés au squelette (palettes identité), et le "
-                          "squelette dans cette pose ; les clips continuent de tourner.");
-    if (ImGui::Checkbox("Torche (ombres ponctuelles)", &torch_on_)) {
+    ImGui::Checkbox("Bind pose", &bind_pose_);
+    ImGui::SetItemTooltip("The meshes as they were bound to the skeleton (identity palettes), and the "
+                          "skeleton in that pose; the clips keep running.");
+    if (ImGui::Checkbox("Torch (point shadows)", &torch_on_)) {
         if (torch_on_) {
             registry.remove<moteur::Hidden>(torch_);
         } else {
             registry.emplace<moteur::Hidden>(torch_);
         }
     }
-    ImGui::SetItemTooltip("Dessiner entre les deux derniers ticks (sinon au dernier). Avec --fixed-hz 10, la "
-                          "différence saute aux yeux.");
     ImGui::PushItemWidth(200.0f);
-    changed_playback |= ImGui::SliderFloat("Vitesse", &speed_, 0.0f, 2.0f, "x%.2f");
+    changed_playback |= ImGui::SliderFloat("Speed", &speed_, 0.0f, 2.0f, "x%.2f");
     if (changed_playback) {
         apply_speed();
     }
     if (tick_seconds_ > 0.0) {
-        ImGui::Text("Logique : %.0f ticks/s", 1.0 / tick_seconds_);
+        ImGui::Text("Logic: %.0f ticks/s", 1.0 / tick_seconds_);
     }
     const moteur::AnimationStats& stats = world_.animation_stats();
-    ImGui::Text("Animation : %d poses sur %d, %d palettes ; %.3f ms d'échantillonnage, %.3f ms de palettes", stats.poses,
+    ImGui::Text("Animation: %d poses of %d, %d palettes; %.3f ms sampling, %.3f ms palettes", stats.poses,
                 stats.animated, stats.palettes, stats.sample_ms, stats.palette_ms);
     if (characters_.empty()) {
         ImGui::PopItemWidth();
@@ -652,12 +652,12 @@ void AnimationTest::draw_controls() {
     for (const Character& character : characters_) {
         names.push_back(character.path.c_str() + character.path.rfind('/') + 1);
     }
-    if (ImGui::Combo("Personnage", &selected_, names.data(), static_cast<int>(names.size()))) {
+    if (ImGui::Combo("Character", &selected_, names.data(), static_cast<int>(names.size()))) {
         joint_ = -1;
     }
     Character& character = characters_[static_cast<std::size_t>(selected_)];
     moteur::Animator& animator = registry.get<moteur::Animator>(character.entity);
-    ImGui::Text("%d os, %zu parties, %zu clips, hauteur %.2f m dans le fichier", animator.skeleton->joint_count(),
+    ImGui::Text("%d bones, %zu parts, %zu clips, height %.2f m in the file", animator.skeleton->joint_count(),
                 registry.get<moteur::ModelComponent>(character.entity).model->parts.size(), character.clip_names.size(),
                 static_cast<double>(character.height));
     if (!character.clip_names.empty()) {
@@ -676,16 +676,16 @@ void AnimationTest::draw_controls() {
             float tick = static_cast<float>(motion->clock.cycle_time()) / static_cast<float>(moteur::ClipClock::kOne);
             const int ticks = motion->clock.cycle_ticks();
             const double seconds = static_cast<double>(motion->clip->duration());
-            if (ImGui::SliderFloat("Temps (ticks)", &tick, 0.0f, static_cast<float>(ticks), "%.1f")) {
+            if (ImGui::SliderFloat("Time (ticks)", &tick, 0.0f, static_cast<float>(ticks), "%.1f")) {
                 animator.seek(tick);
             }
-            ImGui::Text("Durée : %.3f s, %d ticks", seconds, ticks);
+            ImGui::Text("Duration: %.3f s, %d ticks", seconds, ticks);
         }
     }
     // A joint: highlighted with its axes, and its weights in the view "Poids d'un os".
     const std::vector<moteur::JointData>& joints = animator.skeleton->data().joints;
-    if (ImGui::BeginCombo("Os", joint_ >= 0 ? joints[static_cast<std::size_t>(joint_)].name.c_str() : "(aucun)")) {
-        if (ImGui::Selectable("(aucun)", joint_ < 0)) {
+    if (ImGui::BeginCombo("Bone", joint_ >= 0 ? joints[static_cast<std::size_t>(joint_)].name.c_str() : "(none)")) {
+        if (ImGui::Selectable("(none)", joint_ < 0)) {
             joint_ = -1;
         }
         for (std::size_t j = 0; j < joints.size(); ++j) {
@@ -698,13 +698,13 @@ void AnimationTest::draw_controls() {
     moteur::MeshRenderer& meshes = app_.renderer().meshes();
     bool weights = meshes.view() == moteur::MeshView::Weights;
     ImGui::SameLine();
-    if (ImGui::Checkbox("Vue des poids", &weights)) {
+    if (ImGui::Checkbox("Weights view", &weights)) {
         meshes.set_view(weights ? moteur::MeshView::Weights : moteur::MeshView::Lit);
     }
-    ImGui::SetItemTooltip("Le poids de l'os choisi sur chaque sommet : bleu 0, vert 0,5, rouge 1 (même vue que "
-                          "Débogage > Vue > Poids d'un os). Les autres personnages KayKit montrent le même os.");
+    ImGui::SetItemTooltip("The chosen bone's weight on each vertex: blue 0, green 0.5, red 1 (same view as "
+                          "Debug > View > Bone weight). The other KayKit characters show the same bone.");
     if (joint_ >= 0 && weight_palette_index() < 0) {
-        ImGui::TextDisabled("Cet os ne déforme aucun sommet (hors de la palette du skin).");
+        ImGui::TextDisabled("This bone deforms no vertex (outside the skin's palette).");
     }
     anti_aliasing_combo(app_.renderer());
     ImGui::PopItemWidth();
@@ -722,16 +722,16 @@ void AnimationTest::draw_walker_controls() {
     if (walker.entity == entt::null) {
         return;
     }
-    ImGui::SeparatorText("Mélanges et transitions (chevalier)");
+    ImGui::SeparatorText("Blends and transitions (knight)");
     moteur::Animator& animator = world_.registry().get<moteur::Animator>(walker.entity);
     ImGui::PushItemWidth(200.0f);
-    ImGui::SliderFloat("Vitesse de déplacement", &walker.target_speed, 0.0f, walker.max_speed, "%.2f m/s");
+    ImGui::SliderFloat("Move speed", &walker.target_speed, 0.0f, walker.max_speed, "%.2f m/s");
     ImGui::SameLine();
-    ImGui::Checkbox("Avancer", &walker.moving);
-    ImGui::SetItemTooltip("Décoché : il marche sur place, et ses pieds glissent de toute sa vitesse.");
-    ImGui::SliderInt("Fondu (ticks)", &walker.fade, 0, 60);
+    ImGui::Checkbox("Move forward", &walker.moving);
+    ImGui::SetItemTooltip("Unchecked: it walks in place, and its feet slide by its whole speed.");
+    ImGui::SliderInt("Fade (ticks)", &walker.fade, 0, 60);
     const std::string& current = walker.motions[static_cast<std::size_t>(walker.motion)];
-    if (ImGui::BeginCombo("Mouvement", current.c_str())) {
+    if (ImGui::BeginCombo("Motion", current.c_str())) {
         for (std::size_t i = 0; i < walker.motions.size(); ++i) {
             if (ImGui::Selectable(walker.motions[i].c_str(), static_cast<int>(i) == walker.motion)) {
                 walker.motion = static_cast<int>(i);
@@ -741,51 +741,51 @@ void AnimationTest::draw_walker_controls() {
         }
         ImGui::EndCombo();
     }
-    ImGui::SetItemTooltip("Fondu vers ce clip (ou le mélange « locomotion ») ; une marche ou une course seule suit "
-                          "aussi la vitesse de déplacement.");
+    ImGui::SetItemTooltip("Fade to this clip (or the 'locomotion' blend); a walk or a run alone also follows "
+                          "the move speed.");
     if (!walker.attacks.empty()) {
         std::vector<const char*> attacks;
         for (const std::string& name : walker.attacks) {
             attacks.push_back(name.c_str());
         }
-        ImGui::Combo("Attaque", &walker.attack, attacks.data(), static_cast<int>(attacks.size()));
+        ImGui::Combo("Attack", &walker.attack, attacks.data(), static_cast<int>(attacks.size()));
         ImGui::SameLine();
-        if (ImGui::Button("Frapper")) {
+        if (ImGui::Button("Strike")) {
             animator.play(walker.attacks[static_cast<std::size_t>(walker.attack)], {.layer = 1, .loop = false});
         }
-        ImGui::SetItemTooltip("Le haut du corps attaque (couche 1, masque « %s ») pendant que les jambes marchent ; "
-                              "cliquer pendant l'attaque ne la relance pas.",
+        ImGui::SetItemTooltip("The upper body attacks (layer 1, mask '%s') while the legs walk; "
+                              "clicking during the attack does not restart it.",
                               animator.set->upper_mask().c_str());
     }
     ImGui::PopItemWidth();
-    bool changed = ImGui::Checkbox("Épée attachée", &walker.own_sword);
-    ImGui::SetItemTooltip("sword_1handed.gltf, un fichier à part, sur le point « right_hand » de kaykit.json ; décoché : "
-                          "l'épée du fichier du chevalier (elles doivent se confondre).");
+    bool changed = ImGui::Checkbox("Attached sword", &walker.own_sword);
+    ImGui::SetItemTooltip("sword_1handed.gltf, a separate file, on the 'right_hand' point of kaykit.json; unchecked: "
+                          "the sword of the knight's file (the two should coincide).");
     ImGui::SameLine();
-    changed |= ImGui::Checkbox("Torche", &walker.torch_on);
-    ImGui::SetItemTooltip("Une torche qui éclaire, sur le point « left_hand » (à la place du bouclier).");
+    changed |= ImGui::Checkbox("Torch", &walker.torch_on);
+    ImGui::SetItemTooltip("A torch that casts light, on the 'left_hand' point (instead of the shield).");
     ImGui::SameLine();
-    ImGui::Checkbox("Repères de tête", &walker.head_markers);
-    ImGui::SetItemTooltip("Jaune : sur l'os de la tête (point « head »), comme une barre de vie qui la suivrait ; "
-                          "blanc : au-dessus de la boîte du personnage, immobile.");
+    ImGui::Checkbox("Head markers", &walker.head_markers);
+    ImGui::SetItemTooltip("Yellow: on the head bone ('head' point), like a health bar that would follow it; "
+                          "white: above the character's box, still.");
     if (changed) {
         show_held_objects();
     }
 
-    ImGui::Text("Déplacement : %.2f m/s ; dérive du pied au sol : %+.2f m/s", static_cast<double>(walker.speed),
+    ImGui::Text("Moving: %.2f m/s; planted foot drift: %+.2f m/s", static_cast<double>(walker.speed),
                 static_cast<double>(walker.slide));
-    ImGui::SetItemTooltip("La vitesse du pied posé, le long du chemin (moyenne glissante) : près de 0 quand la "
-                          "cadence de l'animation suit le déplacement ; décocher « Avancer » la fait tomber à "
-                          "moins la vitesse.");
+    ImGui::SetItemTooltip("The speed of the planted foot along the path (moving average): near 0 when the "
+                          "animation's pace follows the movement; unchecking 'Move forward' drops it to "
+                          "minus the speed.");
     for (int l = 0; l < moteur::Animator::kLayers; ++l) {
         const moteur::Animator::Layer& layer = animator.layer(l);
         if (layer.motions.empty()) {
             continue;
         }
         if (l == 0) {
-            ImGui::TextUnformatted("Corps entier :");
+            ImGui::TextUnformatted("Full body:");
         } else {
-            ImGui::Text("Haut du corps (%.0f %%) :", layer.weight / 10.0);
+            ImGui::Text("Upper body (%.0f %%):", layer.weight / 10.0);
         }
         for (const moteur::Animator::Motion& motion : layer.motions) {
             if (motion.blend_space()) {
@@ -799,8 +799,8 @@ void AnimationTest::draw_walker_controls() {
         }
     }
     ImGui::TextDisabled("%s", walker.strides.c_str());
-    ImGui::TextUnformatted(steps_.empty() ? "Événements (sons absents : python tools/audio/fetch_test_sounds.py) :"
-                                          : "Événements (pas et coups sonores) :");
+    ImGui::TextUnformatted(steps_.empty() ? "Events (sounds missing: python tools/audio/fetch_test_sounds.py):"
+                                          : "Events (footsteps and hit sounds):");
     for (const std::string& line : event_log_) {
         ImGui::BulletText("%s", line.c_str());
     }

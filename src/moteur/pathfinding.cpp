@@ -161,7 +161,9 @@ PathResult find_path(const NavGrid& grid, const ClearanceMap& clearance, glm::ve
     }
     const glm::ivec2 goal_cell = cell_at(goal);
     const int width = grid.width();
-    auto index_of = [width](glm::ivec2 c) { return static_cast<std::size_t>(c.y * width + c.x); };
+    auto index_of = [width](glm::ivec2 c) {  // a cell of the grid: non-negative coordinates
+        return static_cast<std::size_t>(c.y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(c.x);
+    };
     auto cell_of = [width](std::size_t i) { return glm::ivec2(static_cast<int>(i) % width, static_cast<int>(i) / width); };
 
     scratch.begin(static_cast<std::size_t>(width) * static_cast<std::size_t>(grid.height()));
@@ -330,14 +332,19 @@ glm::ivec2 FlowField::next(glm::ivec2 cell) const {
     return n == 8 ? cell : cell + kNeighbours[n];
 }
 
+glm::vec2 FlowField::aim() const {
+    // The target cell moved off the target (it did not fit there): its middle, out of the wall.
+    return target_cell_.x >= 0 && target_cell_ != cell_at(target_) ? cell_centre(target_cell_) : target_;
+}
+
 glm::vec2 FlowField::direction(glm::vec2 position) const {
     const glm::ivec2 cell = cell_at(position);
     if (cost(cell) == kUnreached) {
         return glm::vec2(0.0f);
     }
     const glm::ivec2 to = next(cell);
-    const glm::vec2 aim = to == cell ? target_ : cell_centre(to);
-    const glm::vec2 d = aim - position;
+    const glm::vec2 towards = to == cell ? aim() : cell_centre(to);
+    const glm::vec2 d = towards - position;
     const float length = std::sqrt(glm::dot(d, d));
     return length > 1e-4f ? d / length : glm::vec2(0.0f);
 }

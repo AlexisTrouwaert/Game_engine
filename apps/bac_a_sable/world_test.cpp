@@ -138,7 +138,7 @@ WorldTest::WorldTest(moteur::Application& app, const Options& options, bool stan
     debug_flags_ = moteur::WorldDebugFlags::declare(app.console().variables());
     names_ = map_names(app.assets());
     if (names_.empty()) {
-        throw std::runtime_error("Monde : aucune carte dans assets/maps");
+        throw std::runtime_error("World: no map in assets/maps");
     }
     if (options_.data) {
         map_ = moteur::make_asset(moteur::MapData(*options_.data));
@@ -151,7 +151,7 @@ WorldTest::WorldTest(moteur::Application& app, const Options& options, bool stan
     } else {
         const auto found = std::find(names_.begin(), names_.end(), options_.map);
         if (found == names_.end()) {
-            throw std::runtime_error("Monde : pas de carte « " + options_.map + " » dans assets/maps");
+            throw std::runtime_error("World: no map '" + options_.map + "' in assets/maps");
         }
         load_map(*found);
     }
@@ -159,7 +159,7 @@ WorldTest::WorldTest(moteur::Application& app, const Options& options, bool stan
         throw std::runtime_error(error_);
     }
     if (moteur::DebugTools* tools = app.debug_tools()) {
-        tools->watch(world_, "Monde");
+        tools->watch(world_, "World");
     }
 }
 
@@ -226,7 +226,7 @@ void WorldTest::reset_tiles() {
     build_decor();
 
     const moteur::MapData& map = *map_;
-    const std::vector<glm::ivec2>& start = map.points("depart");
+    const std::vector<glm::ivec2>& start = map.points(moteur::kStartPoint);
     if (options_.start) {
         spawn_hero(*options_.start);
     } else {
@@ -381,7 +381,7 @@ void WorldTest::build_decor() {
         try {
             build_object(world_, object, object_meshes_);
         } catch (const std::exception& e) {  // a property of the wrong kind: the object is left out
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Monde : objet %s (%s) ignoré : %s", object.id.c_str(), object.type.c_str(), e.what());
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "World: object %s (%s) skipped: %s", object.id.c_str(), object.type.c_str(), e.what());
         }
     }
 }
@@ -393,7 +393,7 @@ void WorldTest::spawn_hero(glm::vec2 at) {
     const moteur::Transform transform = place({p.x, 0.85f, p.y}, {0.6f, 1.7f, 0.6f});
     registry.emplace<moteur::Transform>(hero_, transform);
     registry.emplace<moteur::PreviousTransform>(hero_, transform);
-    registry.emplace<moteur::Name>(hero_, "Héros");
+    registry.emplace<moteur::Name>(hero_, "Hero");
     moteur::Material body = surface(linear(0.25f, 0.45f, 0.85f), 0.5f);
     registry.emplace<moteur::MeshComponent>(hero_, cube_, body);
     moteur::Collider collider;
@@ -414,7 +414,7 @@ entt::entity WorldTest::spawn_monster(glm::vec2 at, bool big) {
     const moteur::Transform transform = place({p.x, size.y * 0.5f, p.y}, size);
     registry.emplace<moteur::Transform>(monster, transform);
     registry.emplace<moteur::PreviousTransform>(monster, transform);
-    registry.emplace<moteur::Name>(monster, big ? "Gros monstre" : "Monstre");
+    registry.emplace<moteur::Name>(monster, big ? "Big monster" : "Monster");
     registry.emplace<moteur::MeshComponent>(monster, cube_, surface(big ? linear(0.5f, 0.2f, 0.45f) : linear(0.7f, 0.2f, 0.15f), 0.6f));
     moteur::Collider collider;
     collider.radius = radius;
@@ -902,7 +902,7 @@ void WorldTest::draw_overlays(moteur::Renderer& renderer, const moteur::Camera3D
 }
 
 void WorldTest::draw_controls() {
-    if (ImGui::BeginCombo("Carte", chosen_ >= 0 ? names_[static_cast<std::size_t>(chosen_)].c_str() : "(carte de l'éditeur)")) {
+    if (ImGui::BeginCombo("Map", chosen_ >= 0 ? names_[static_cast<std::size_t>(chosen_)].c_str() : "(editor map)")) {
         for (std::size_t i = 0; i < names_.size(); ++i) {
             if (ImGui::Selectable(names_[i].c_str(), static_cast<int>(i) == chosen_)) {
                 load_map(names_[i]);
@@ -915,28 +915,28 @@ void WorldTest::draw_controls() {
     }
     const moteur::MapData& map = *map_;
     ImGui::TextWrapped("%s", map.description().c_str());
-    ImGui::Text("%d x %d cases, %d calques ; grille version %llu, %d mur(s) changé(s)", map.width(), map.height(),
+    ImGui::Text("%d x %d cells, %d layers; grid version %llu, %d wall(s) changed", map.width(), map.height(),
                 tiles_.layer_count(), static_cast<unsigned long long>(grid_.version()), toggled_);
-    if (ImGui::Button("Recommencer")) {
+    if (ImGui::Button("Restart")) {
         reset_tiles();
     }
     ImGui::SameLine();
-    ImGui::Checkbox("Caméra sur le héros", &follow_camera_);
-    ImGui::TextDisabled("Clic : aller (maintenu : suivre) ; ZQSD : marcher ; M : monstres ; B : gros monstre ;");
-    ImGui::TextDisabled("E : effet ; clic droit : mur ; flèches : caméra ; Espace : suivre ; molette : zoom");
+    ImGui::Checkbox("Camera follows the hero", &follow_camera_);
+    ImGui::TextDisabled("Click: go (held: follow); ZQSD: walk; M: monsters; B: big monster;");
+    ImGui::TextDisabled("E: effect; right click: wall; arrows: camera; Space: follow; wheel: zoom");
 
-    ImGui::SeparatorText("Affichage");
-    if (ImGui::Checkbox("Brouillard", &fog_on_)) {
+    ImGui::SeparatorText("View");
+    if (ImGui::Checkbox("Fog", &fog_on_)) {
         update_sight();
     }
     ImGui::SameLine();
-    ImGui::Checkbox("Murs tramés", &cutout_on_);
+    ImGui::Checkbox("Dithered walls", &cutout_on_);
     ImGui::SameLine();
-    if (ImGui::Checkbox("Feux", &fires_on_)) {
+    if (ImGui::Checkbox("Fires", &fires_on_)) {
         start_fires();
     }
     ImGui::SameLine();
-    ImGui::Checkbox("Traînée", &trail_on_);
+    ImGui::Checkbox("Trail", &trail_on_);
     // The overlays are console variables ("set debug.paths 1" does the same).
     const auto variable_box = [](const char* label, moteur::Variable* variable) {
         bool value = variable->as_bool();
@@ -947,25 +947,25 @@ void WorldTest::draw_controls() {
             ImGui::SetTooltip("%s", variable->name().c_str());
         }
     };
-    variable_box("Grille", debug_flags_.grid);
+    variable_box("Grid", debug_flags_.grid);
     ImGui::SameLine();
-    variable_box("Dégagement", debug_flags_.clearance);
+    variable_box("Clearance", debug_flags_.clearance);
     ImGui::SameLine();
-    variable_box("Cercles", debug_flags_.colliders);
+    variable_box("Circles", debug_flags_.colliders);
     ImGui::SameLine();
-    variable_box("Chemins", debug_flags_.paths);
+    variable_box("Paths", debug_flags_.paths);
     variable_box("Flow field", debug_flags_.field);
     ImGui::SameLine();
-    variable_box("Champ de vision", debug_flags_.view);
+    variable_box("Field of view", debug_flags_.view);
     ImGui::SameLine();
-    ImGui::Checkbox("Cône", &show_query_);
+    ImGui::Checkbox("Cone", &show_query_);
     ImGui::SameLine();
-    ImGui::Checkbox("Rayon", &show_ray_);
+    ImGui::Checkbox("Ray", &show_ray_);
     ImGui::Checkbox("Axes", &show_axes_);
     ImGui::SameLine();
-    ImGui::Checkbox("Noms des points", &show_points_);
+    ImGui::Checkbox("Point names", &show_points_);
     if (!effect_names_.empty() &&
-        ImGui::BeginCombo("Effet (E)", effect_names_[static_cast<std::size_t>(effect_choice_)].c_str())) {
+        ImGui::BeginCombo("Effect (E)", effect_names_[static_cast<std::size_t>(effect_choice_)].c_str())) {
         for (std::size_t i = 0; i < effect_names_.size(); ++i) {
             if (ImGui::Selectable(effect_names_[i].c_str(), static_cast<int>(i) == effect_choice_)) {
                 effect_choice_ = static_cast<int>(i);
@@ -974,42 +974,42 @@ void WorldTest::draw_controls() {
         ImGui::EndCombo();
     }
 
-    ImGui::SeparatorText("Systèmes (ms par tick, moyennes)");
+    ImGui::SeparatorText("Systems (ms per tick, averages)");
     if (shown_.ticks > 0) {
         const auto n = static_cast<double>(shown_.ticks);
-        ImGui::Text("IA %.3f  chemins %.3f  flow fields %.3f  déplacements %.3f", shown_.ai / n, shown_.paths / n,
+        ImGui::Text("AI %.3f  paths %.3f  flow fields %.3f  moves %.3f", shown_.ai / n, shown_.paths / n,
                     shown_.fields / n, shown_.moves / n);
-        ImGui::Text("collisions %.3f  vision %.3f  particules %.3f par image", shown_.collisions / n, shown_.sight / n,
+        ImGui::Text("collisions %.3f  sight %.3f  particles %.3f per frame", shown_.collisions / n, shown_.sight / n,
                     shown_.frames > 0 ? shown_.particles / static_cast<double>(shown_.frames) : 0.0);
     }
     const auto monsters = world_.registry().view<Monster>().size();
-    ImGui::Text("%zu monstres ; %d paires testées, %d chevauchements ; %d A* (%d cases)", static_cast<std::size_t>(monsters),
+    ImGui::Text("%zu monsters; %d pairs tested, %d overlaps; %d A* (%d cells)", static_cast<std::size_t>(monsters),
                 collision_stats_.pairs_tested, collision_stats_.overlaps, movement_stats_.paths, movement_stats_.expanded);
     const moteur::ParticleStats ps = particles_.stats();
-    ImGui::Text("%d effets, %d particules (budget %zu, %ld refusées)", ps.effects, ps.particles, particles_.budget(), ps.refused);
-    ImGui::Text("Exploré : %d cases ; en vue : %zu", explored_.count(), view_.cells().size());
+    ImGui::Text("%d effects, %d particles (budget %zu, %ld refused)", ps.effects, ps.particles, particles_.budget(), ps.refused);
+    ImGui::Text("Explored: %d cells; in sight: %zu", explored_.count(), view_.cells().size());
 
-    ImGui::SeparatorText("Case sous le pointeur");
+    ImGui::SeparatorText("Cell under the pointer");
     if (hovered_) {
         const glm::ivec2 cell = *hovered_;
-        ImGui::Text("(%d, %d) : %s, %s, dégagement %.2f m", cell.x, cell.y, grid_.walkable(cell) ? "praticable" : "bloquée",
-                    grid_.opaque(cell) ? "opaque" : "transparente", clearance_.clearance(cell));
+        ImGui::Text("(%d, %d): %s, %s, clearance %.2f m", cell.x, cell.y, grid_.walkable(cell) ? "walkable" : "blocked",
+                    grid_.opaque(cell) ? "opaque" : "transparent", clearance_.clearance(cell));
         std::string tiles;
         for (int layer = 0; layer < tiles_.layer_count(); ++layer) {
             const std::string& name = map.tile_name(tiles_.at(layer, cell));
             tiles += (layer > 0 ? " | " : "") + (name.empty() ? std::string("-") : name);
         }
-        ImGui::Text("Calques : %s ; flow field : %d", tiles.c_str(), fields_[0].cost(cell));
+        ImGui::Text("Layers: %s; flow field: %d", tiles.c_str(), fields_[0].cost(cell));
         if (const std::string point = point_at(cell); !point.empty()) {
-            ImGui::Text("Point : %s", point.c_str());
+            ImGui::Text("Point: %s", point.c_str());
         }
     } else {
-        ImGui::TextDisabled("aucune");
+        ImGui::TextDisabled("none");
     }
 
-    ImGui::Checkbox("Grille en caractères", &show_ascii_);
+    ImGui::Checkbox("Grid as text", &show_ascii_);
     if (show_ascii_) {
-        ImGui::TextDisabled(". praticable  # bloquée et opaque  x bloquée, transparente  %% praticable, opaque");
+        ImGui::TextDisabled(". walkable  # blocked and opaque  x blocked, transparent  %% walkable, opaque");
         ImGui::BeginChild("ascii", {0.0f, 260.0f}, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
         const std::string text = grid_.to_ascii();
         ImGui::TextUnformatted(text.c_str(), text.c_str() + text.size());

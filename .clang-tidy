@@ -1,0 +1,20 @@
+# Static analysis of the engine (milestone 8, part 8): tools/ci/static_analysis.py runs clang-tidy
+# with these checks on the engine's sources; a new warning fails it. Chosen for what they find
+# (bugs, costly copies), not for style: the style is the code's own.
+Checks: >
+  -*,
+  clang-analyzer-*,
+  -clang-analyzer-optin.*,
+  -clang-analyzer-cplusplus.NewDeleteLeaks,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-exception-escape,
+  -bugprone-branch-clone,
+  -bugprone-unchecked-optional-access,
+  performance-*,
+  -performance-enum-size,
+  -performance-avoid-endl
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*moteur[/\\](src|apps)[/\\].*'

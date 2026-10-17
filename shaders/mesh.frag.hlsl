@@ -50,6 +50,8 @@ cbuffer Frame : register(b0, space3) {
     float4 view_forward;  // xyz: the direction the camera looks (unit)
 };
 
+#include "alpha_test.hlsli"
+
 static const float PI = 3.14159265;
 
 struct Input {
@@ -63,6 +65,7 @@ struct Input {
     nointerpolation float4 emissive : TEXCOORD6;    // rgb
     float joint_weight : TEXCOORD7;                 // weights view (see mesh.vert.hlsl)
     nointerpolation float3 origin : TEXCOORD8;      // the instance's place (see mesh.vert.hlsl)
+    nointerpolation float alpha_cutoff : TEXCOORD9; // 0: opaque material (see alpha_test.hlsli)
     float4 position : SV_Position;                  // pixel of the target (the cutout's dithering)
     bool front : SV_IsFrontFace;
 };
@@ -222,6 +225,7 @@ void cut_out(Input input) {
 float4 shade(Input input) {
     cut_out(input);
     const float4 base_color = input.base_color * base_color_texture.Sample(base_color_sampler, input.uv);
+    alpha_test(base_color.a, input.alpha_cutoff);
     const float4 metal_rough = metallic_roughness_texture.Sample(metallic_roughness_sampler, input.uv);
     const float metallic = saturate(input.factors.x * metal_rough.b);
     // A perfectly smooth surface would turn a point light into an infinitely small highlight.

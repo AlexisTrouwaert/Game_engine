@@ -1,5 +1,7 @@
 #include "moteur/asset_cache.hpp"
 
+#include "moteur/paths.hpp"
+
 #include <filesystem>
 #include <stdexcept>
 #include <system_error>
@@ -58,6 +60,9 @@ std::string normalize_asset_path(std::string_view path) {
 }
 
 void check_asset_case(const std::string& root, const std::string& key) {
+    if (mounted_archives() > 0) {
+        return;  // the archives compare paths exactly: a wrong case is simply not found
+    }
     std::filesystem::path directory = utf8_path(root);
     std::size_t start = 0;
     while (start < key.size()) {
@@ -92,8 +97,10 @@ void check_asset_case(const std::string& root, const std::string& key) {
         }
         if (!exact) {
             if (!on_disk.empty()) {
-                throw std::runtime_error("Asset '" + key + "': '" + part + "' is written '" + on_disk +
-                                         "' on disk (the case must match: other systems and archives are case-sensitive)");
+                std::string message = "Asset '";
+                message.append(key).append("': '").append(part).append("' is written '").append(on_disk);
+                message += "' on disk (the case must match: other systems and archives are case-sensitive)";
+                throw std::runtime_error(message);
             }
             return;  // missing: the loader says so
         }

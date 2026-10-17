@@ -14,11 +14,11 @@ bool MeshBatcher::Key::operator==(const Key& other) const {
             return false;
         }
     }
-    return double_sided == other.double_sided && skinned == other.skinned;
+    return double_sided == other.double_sided && skinned == other.skinned && masked == other.masked;
 }
 
 std::size_t MeshBatcher::KeyHash::operator()(const Key& key) const {
-    std::size_t hash = (key.double_sided ? 1u : 0u) + (key.skinned ? 2u : 0u);
+    std::size_t hash = (key.double_sided ? 1u : 0u) + (key.skinned ? 2u : 0u) + (key.masked ? 4u : 0u);
     for (const void* pointer : key.pointers) {
         hash = hash * 1099511628211ull ^ std::hash<const void*>{}(pointer);
     }
@@ -35,6 +35,7 @@ MeshInstance MeshBatcher::make_instance(const MeshDraw& draw) {
         instance.world[r] = glm::vec4(draw.world[0][r], draw.world[1][r], draw.world[2][r], draw.world[3][r]);
         instance.normal_matrix[r] = glm::vec4(normal[0][r], normal[1][r], normal[2][r], 0.0f);
     }
+    instance.normal_matrix[0].w = material.alpha_cutoff;
     instance.base_color = material.base_color;
     instance.factors = glm::vec4(material.metallic, material.roughness, material.normal_scale, material.occlusion_strength);
     // w: the palette of a skinned instance, or -1 for a mesh that fades before the hero (cutout).
@@ -81,13 +82,16 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
         }
         ++submitted_;
         const Material& material = draw.material;
-        Key key = {{draw.mesh, nullptr, nullptr, nullptr, nullptr, nullptr}, material.double_sided, draw.palette >= 0};
+        const bool masked = material.alpha_cutoff > 0.0f;
+        Key key = {{draw.mesh, nullptr, nullptr, nullptr, nullptr, nullptr}, material.double_sided, draw.palette >= 0, masked};
         if (pass == Pass::Main) {
             key.pointers[1] = material.base_color_texture;
             key.pointers[2] = material.metallic_roughness_texture;
             key.pointers[3] = material.normal_texture;
             key.pointers[4] = material.occlusion_texture;
             key.pointers[5] = material.emissive_texture;
+        } else if (masked) {
+            key.pointers[1] = material.base_color_texture;  // its shape, cut out of the shadow
         }
         // Finding the group is the costly part for many objects: first the group of the previous
         // draw (decor is often recorded mesh after mesh), then a plain scan while there are few
@@ -156,6 +160,7 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
         batch.material = &first.material;
         batch.count = cursor_[g];
         batch.skinned = keys_[g].skinned;
+        batch.masked = keys_[g].masked;
     }
     cursor_.assign(batch_count, 0);  // now: where the next instance of each batch goes
     std::uint32_t offset = 0;
@@ -167,7 +172,8 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
     }
 
     // 4. The instances, each at the next free place of its batch: recording order within a batch.
-    // The shadow pass only reads the world matrix (and the palette): the rest is not computed.
+    // The shadow pass only reads the world matrix (and the palette; for an alpha-tested material, its
+    // alpha factor and cutoff): the rest is not computed.
     instances_.resize(visible_.size());
     for (std::size_t v = 0; v < visible_.size(); ++v) {
         const std::uint32_t batch = order_[group_of_[v]];
@@ -180,6 +186,8 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
                 instance.world[r] = glm::vec4(draw.world[0][r], draw.world[1][r], draw.world[2][r], draw.world[3][r]);
             }
             instance.emissive = glm::vec4(0.0f, 0.0f, 0.0f, draw.palette >= 0 ? static_cast<float>(draw.palette) : 0.0f);
+            instance.base_color = draw.material.base_color;
+            instance.normal_matrix[0].w = draw.material.alpha_cutoff;
         }
     }
 }

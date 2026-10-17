@@ -125,13 +125,13 @@ void BlenderCompare::render(moteur::Renderer& renderer, double /*alpha*/) {
 }
 
 void BlenderCompare::draw_controls() {
-    ImGui::TextWrapped("Les modèles de test et deux sphères, éclairés par l'environnement seul, comme dans "
+    ImGui::TextWrapped("The test models and two spheres, lit by the environment alone, as in "
                        "tools/blender/compare_render.py.");
     if (!environment_) {
-        ImGui::TextWrapped("Environnement absent : python tools/models/fetch_test_models.py");
+        ImGui::TextWrapped("Environment missing: python tools/models/fetch_test_models.py");
     }
     ImGui::PushItemWidth(200.0f);
-    ImGui::SliderFloat("Intensité de l'environnement", &environment_intensity_, 0.0f, 4.0f, "%.2f");
+    ImGui::SliderFloat("Environment intensity", &environment_intensity_, 0.0f, 4.0f, "%.2f");
     anti_aliasing_combo(app_.renderer());
     ImGui::PopItemWidth();
 }

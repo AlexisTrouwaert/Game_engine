@@ -26,10 +26,10 @@ namespace {
 
 constexpr int kBlock = 16;  // cells per side of a block of the view (built again together)
 constexpr float kTopPitch = 89.0f;  // seen from above: Camera3D's steepest
-const char* const kToolNames[] = {"Sélection", "Pinceau",   "Gomme",  "Rectangle", "Rectangle vide",
-                                  "Remplir",   "Pipette",   "Points", "Objets",    "Connecteurs"};
-const char* const kToolKeys[] = {"V", "B", "E", "R", "Maj+R", "F", "I", "P", "O", "C"};
-const char* const kDirections[] = {"Nord", "Est", "Sud", "Ouest"};
+const char* const kToolNames[] = {"Select", "Brush",   "Eraser", "Rectangle", "Hollow rectangle",
+                                  "Fill",   "Picker",  "Points", "Objects",   "Connectors"};
+const char* const kToolKeys[] = {"V", "B", "E", "R", "Shift+R", "F", "I", "P", "O", "C"};
+const char* const kDirections[] = {"North", "East", "South", "West"};
 
 glm::vec3 linear(float r, float g, float b) {
     return moteur::srgb_to_linear(glm::vec3(r, g, b));
@@ -165,19 +165,19 @@ MapEditor::MapEditor(moteur::Application& app, const Options& options, bool stan
     refresh_lists();
     if (options_.map.empty() || !open(options_.map)) {
         if (!options_.map.empty()) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Éditeur : %s", status_.c_str());  // also in the panel
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Editor: %s", status_.c_str());  // also in the panel
         }
         moteur::MapDocument fresh(new_size_[0], new_size_[1], new_size_[2], "sol");
         fresh.add_tile_type({"mur", false, true, ""});
         fresh.set_symbol({'.', {fresh.tile_id("sol")}, ""});
         fresh.set_symbol({'#', {fresh.tile_id("sol"), fresh.tile_id("mur")}, ""});
-        fresh.set_point({new_size_[0] / 2, new_size_[1] / 2}, "depart");
+        fresh.set_point({new_size_[0] / 2, new_size_[1] / 2}, moteur::kStartPoint);
         adopt(std::move(fresh));
         name_.clear();
         saved_revision_ = doc_.revision();  // nothing to lose yet
     }
     if (moteur::DebugTools* tools = app.debug_tools()) {
-        tools->watch(world_, "Éditeur");
+        tools->watch(world_, "Editor");
     }
 }
 
@@ -187,9 +187,9 @@ MapEditor::~MapEditor() {
     if (modified() && doc_.width() > 0) {
         std::string error;
         if (moteur::write_file_atomic(recovery_path(), doc_.to_json(), error)) {
-            SDL_Log("Éditeur : modifications non enregistrées gardées dans %s", recovery_path().c_str());
+            SDL_Log("Editor: unsaved changes kept in %s", recovery_path().c_str());
         } else {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Éditeur : %s", error.c_str());
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Editor: %s", error.c_str());
         }
     }
     if (moteur::DebugTools* tools = app_.debug_tools()) {
@@ -235,7 +235,7 @@ bool MapEditor::open(const std::string& name) {
     saved_revision_ = doc_.revision();
     const std::int64_t recovery = moteur::file_time(recovery_path());
     recovery_found_ = recovery != 0 && recovery > file_time_;
-    status_ = "Ouvert : " + path;
+    status_ = "Opened: " + path;
     status_error_ = false;
     return true;
 }
@@ -255,7 +255,7 @@ void MapEditor::adopt(moteur::MapDocument document) {
     brush_stack_.assign(static_cast<std::size_t>(doc_.layer_count()), moteur::kNoTile);
     const std::vector<moteur::MapSymbol> palette = doc_.palette();
     const std::map<std::string, std::vector<glm::ivec2>> points = doc_.points();  // a copy: one map to search
-    const auto start = points.find("depart");
+    const auto start = points.find(moteur::kStartPoint);
     if (start != points.end() && !start->second.empty()) {
         brush_stack_ = doc_.stack(start->second.front());
     } else if (!palette.empty()) {
@@ -279,7 +279,7 @@ bool MapEditor::save(bool overwrite) {
     }
     std::string error;
     if (!moteur::write_file_atomic(path, doc_.to_json(), error)) {
-        status_ = "Échec de l'enregistrement : " + error;
+        status_ = "Save failed: " + error;
         status_error_ = true;
         return false;
     }
@@ -293,7 +293,7 @@ bool MapEditor::save(bool overwrite) {
     for (const moteur::MapDocument::Issue& issue : issues_) {
         errors += issue.level == moteur::MapDocument::Issue::Level::Error ? 1 : 0;
     }
-    status_ = "Enregistré : " + path + (errors > 0 ? " (" + std::to_string(errors) + " erreur(s) de vérification)" : "");
+    status_ = "Saved: " + path + (errors > 0 ? " (" + std::to_string(errors) + " check error(s))" : "");
     status_error_ = errors > 0;
     refresh_lists();
     return true;
@@ -402,14 +402,14 @@ void MapEditor::turn_selected(float degrees) {
 
 void MapEditor::undo() {
     if (!doc_.in_action() && doc_.undo()) {
-        status_ = "Annulé";
+        status_ = "Undone";
         status_error_ = false;
     }
 }
 
 void MapEditor::redo() {
     if (!doc_.in_action() && doc_.redo()) {
-        status_ = "Rétabli";
+        status_ = "Redone";
         status_error_ = false;
     }
 }
@@ -425,7 +425,7 @@ void MapEditor::tool_press(bool shift, bool ctrl) {
         case Tool::Brush:
         case Tool::Eraser:
             if (inside) {
-                doc_.begin_action(tool_ == Tool::Brush ? "pinceau" : "gomme");
+                doc_.begin_action(tool_ == Tool::Brush ? "brush" : "eraser");
                 painting_ = true;
                 last_cell_ = cell;
                 paint(cell);
@@ -439,10 +439,10 @@ void MapEditor::tool_press(bool shift, bool ctrl) {
             break;
         case Tool::Fill:
             if (inside) {
-                doc_.begin_action("remplissage");
+                doc_.begin_action("fill");
                 const int changed = doc_.fill(cell, brush_stack());
                 doc_.end_action();
-                status_ = std::to_string(changed) + " case(s) remplie(s)";
+                status_ = std::to_string(changed) + " cell(s) filled";
                 status_error_ = false;
             }
             break;
@@ -474,7 +474,7 @@ void MapEditor::tool_press(bool shift, bool ctrl) {
                 }
                 const moteur::MapObject* object = doc_.object(selected_);
                 grab_offset_ = glm::vec2(object->position.x - ground_->x, object->position.z - ground_->z);
-                doc_.begin_action("déplacement");
+                doc_.begin_action("move");
                 moving_ = true;
             } else if (tool_ == Tool::Object) {
                 place_object(*ground_);
@@ -504,7 +504,7 @@ void MapEditor::tool_press(bool shift, bool ctrl) {
             if (cell.y == doc_.height() - 1) sides.emplace_back(1.0f - local.y, Direction::South);
             if (cell.x == 0) sides.emplace_back(local.x, Direction::West);
             if (sides.empty()) {
-                status_ = "Un connecteur se pose sur une case du bord de la carte";
+                status_ = "Connectors go on a cell at the edge of the map";
                 status_error_ = true;
                 break;
             }
@@ -564,7 +564,7 @@ void MapEditor::tool_release() {
         moving_ = false;
     }
     if (rect_start_ && hovered_) {
-        doc_.begin_action(tool_ == Tool::HollowRect ? "rectangle vide" : "rectangle");
+        doc_.begin_action(tool_ == Tool::HollowRect ? "hollow rectangle" : "rectangle");
         doc_.rect(*rect_start_, *hovered_, brush_stack(), tool_ == Tool::HollowRect);
         doc_.end_action();
         note_cells(*rect_start_, *hovered_);
@@ -576,14 +576,14 @@ void MapEditor::start_trial(bool at_pointer) {
     try {
         WorldTest::Options trial;
         trial.map = name_.empty() ? "salle_portes" : name_;
-        trial.data = std::make_shared<moteur::MapData>(doc_.to_map_data(name_.empty() ? "éditeur" : "maps/" + name_ + ".json"));
+        trial.data = std::make_shared<moteur::MapData>(doc_.to_map_data(name_.empty() ? "editor" : "maps/" + name_ + ".json"));
         if (at_pointer && ground_) {
             trial.start = glm::vec2(ground_->x, ground_->z);
         }
         trial_ = std::make_unique<WorldTest>(app_, trial, false);
         status_.clear();
     } catch (const std::exception& e) {
-        status_ = std::string("Essai impossible : ") + e.what();
+        status_ = std::string("Cannot run the map: ") + e.what();
         status_error_ = true;
     }
 }
@@ -741,7 +741,7 @@ void MapEditor::rebuild_object(const std::string& id) {
     } catch (const std::exception& e) {
         // A property of the wrong kind (a file edited by hand): only its marker shows, the panel
         // lets fix it.
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Éditeur : objet %s (%s) : %s", id.c_str(), object->type.c_str(), e.what());
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Editor: object %s (%s): %s", id.c_str(), object->type.c_str(), e.what());
     }
     // What the game spawns (creatures, effects) has a stand-in in the editor.
     const auto stand_in = [&](const moteur::Asset<moteur::Mesh>& mesh, const moteur::Transform& transform, moteur::Material material) {
@@ -1041,8 +1041,8 @@ void MapEditor::render(moteur::Renderer& renderer, double alpha) {
                                            ImGui::GetMainViewport()->WorkPos.y + 10.0f),
                                     ImGuiCond_Always, ImVec2(1.0f, 0.0f));
             ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("Essai de la carte", nullptr, ImGuiWindowFlags_NoMove)) {
-                if (ImGui::Button("Revenir à l'éditeur (Échap)")) {
+            if (ImGui::Begin("Map test run", nullptr, ImGuiWindowFlags_NoMove)) {
+                if (ImGui::Button("Back to the editor (Esc)")) {
                     end_trial_ = true;
                 }
                 ImGui::Separator();
@@ -1235,12 +1235,12 @@ void MapEditor::track_item(const char* action) {
 
 void MapEditor::draw_controls() {
     if (trial_) {
-        ImGui::TextUnformatted("Essai de la carte en cours : Échap pour revenir à l'éditeur.");
+        ImGui::TextUnformatted("Test run in progress: Esc returns to the editor.");
         return;
     }
-    ImGui::TextWrapped("Éditeur de cartes : le panneau « Éditeur de cartes » a les outils. Clic droit ou molette "
-                       "enfoncée : déplacer la vue ; molette : zoom ; T : vue de dessus ; F5 : essayer la carte.");
-    if (ImGui::Button("Quitter l'éditeur")) {
+    ImGui::TextWrapped("Map editor: the tools are in the 'Map editor' panel. Right or middle mouse button: "
+                       "pan the view; wheel: zoom; T: top view; F5: test the map.");
+    if (ImGui::Button("Quit the editor")) {
         if (modified()) confirm_quit_ = true;
         else stop_requested_ = true;
     }
@@ -1251,13 +1251,13 @@ void MapEditor::draw_panels() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 10.0f, viewport->WorkPos.y + 10.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(400.0f, viewport->WorkSize.y - 20.0f), ImGuiCond_FirstUseEver);
-    const std::string title = "Éditeur de cartes : " + (name_.empty() ? std::string("(sans nom)") : name_) + (modified() ? " *" : "") +
+    const std::string title = "Map editor: " + (name_.empty() ? std::string("(untitled)") : name_) + (modified() ? " *" : "") +
                               "###editeur";
     if (ImGui::Begin(title.c_str(), nullptr, ImGuiWindowFlags_MenuBar)) {
         draw_menu();
         if (recovery_found_) {
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Une copie non enregistrée de cette carte existe.");
-            if (ImGui::Button("Ouvrir la copie")) {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "An unsaved copy of this map exists.");
+            if (ImGui::Button("Open the copy")) {
                 try {
                     const moteur::MapData data = moteur::MapData::parse(moteur::read_text_file(recovery_path()), recovery_path());
                     adopt(moteur::MapDocument::from(data));
@@ -1269,7 +1269,7 @@ void MapEditor::draw_panels() {
                 recovery_found_ = false;
             }
             ImGui::SameLine();
-            if (ImGui::Button("Supprimer la copie")) {
+            if (ImGui::Button("Delete the copy")) {
                 std::error_code ignored;
                 std::filesystem::remove(utf8_path(recovery_path()), ignored);
                 recovery_found_ = false;
@@ -1277,8 +1277,8 @@ void MapEditor::draw_panels() {
             ImGui::Separator();
         }
         if (external_change_) {
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "Le fichier a changé sur le disque.");
-            if (ImGui::Button("Recharger le fichier")) {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "The file changed on disk.");
+            if (ImGui::Button("Reload the file")) {
                 if (modified()) {
                     pending_open_ = name_;
                     confirm_open_ = true;
@@ -1287,7 +1287,7 @@ void MapEditor::draw_panels() {
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button("Garder ma version")) {
+            if (ImGui::Button("Keep my version")) {
                 file_time_ = moteur::file_time(map_path(name_));
                 external_change_ = false;
             }
@@ -1298,15 +1298,15 @@ void MapEditor::draw_panels() {
         draw_object_panel();
         draw_connectors_panel();
         draw_issues_panel();
-        if (ImGui::CollapsingHeader("Affichage")) {
-            if (ImGui::Checkbox("Vue de dessus (T)", &top_view_)) {
+        if (ImGui::CollapsingHeader("View")) {
+            if (ImGui::Checkbox("Top view (T)", &top_view_)) {
                 camera_.set_angles(top_view_ ? 0.0f : 45.0f, top_view_ ? kTopPitch : 55.0f);
                 camera_.set_projection(top_view_ ? moteur::Projection::Orthographic : moteur::Projection::Perspective);
             }
-            ImGui::Checkbox("Grille", &show_grid_);
-            ImGui::Checkbox("Noms des points et connecteurs", &show_labels_);
-            ImGui::Checkbox("Cases signalées par les vérifications", &show_issues_);
-            if (ImGui::Button("Toute la carte (Origine)")) {
+            ImGui::Checkbox("Grid", &show_grid_);
+            ImGui::Checkbox("Point and connector names", &show_labels_);
+            ImGui::Checkbox("Cells flagged by the checks", &show_issues_);
+            if (ImGui::Button("Frame the whole map (Home)")) {
                 frame_map();
             }
         }
@@ -1319,9 +1319,9 @@ void MapEditor::draw_panels() {
                 stack += (layer > 0 ? " + " : "") + (id == moteur::kNoTile ? std::string("-") : doc_.tile_types()[id - 1u].name);
             }
             const auto point = doc_.point_at(*hovered_);
-            ImGui::Text("Case %d, %d : %s%s", hovered_->x, hovered_->y, stack.c_str(), point ? (" ; point " + *point).c_str() : "");
+            ImGui::Text("Cell %d, %d: %s%s", hovered_->x, hovered_->y, stack.c_str(), point ? ("; point " + *point).c_str() : "");
         } else {
-            ImGui::TextDisabled("Pointeur hors de la carte");
+            ImGui::TextDisabled("Pointer outside the map");
         }
         if (!status_.empty()) {
             if (status_error_) {
@@ -1343,11 +1343,11 @@ void MapEditor::draw_menu() {
     if (!ImGui::BeginMenuBar()) {
         return;
     }
-    if (ImGui::BeginMenu("Fichier")) {
-        if (ImGui::MenuItem("Nouvelle carte...", "Ctrl+N")) {
+    if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("New map...", "Ctrl+N")) {
             open_new_ = true;
         }
-        if (ImGui::BeginMenu("Ouvrir")) {
+        if (ImGui::BeginMenu("Open")) {
             for (const std::string& name : map_names_) {
                 if (ImGui::MenuItem(name.c_str(), nullptr, name == name_)) {
                     if (modified()) {
@@ -1360,53 +1360,53 @@ void MapEditor::draw_menu() {
             }
             ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Enregistrer", "Ctrl+S")) {
+        if (ImGui::MenuItem("Save", "Ctrl+S")) {
             save(false);
         }
-        if (ImGui::MenuItem("Enregistrer sous...")) {
+        if (ImGui::MenuItem("Save as...")) {
             open_save_as_ = true;
         }
         ImGui::Separator();
-        if (ImGui::MenuItem(standalone_ ? "Quitter" : "Quitter l'éditeur")) {
+        if (ImGui::MenuItem(standalone_ ? "Quit" : "Quit the editor")) {
             if (modified()) confirm_quit_ = true;
             else if (standalone_) app_.quit();
             else stop_requested_ = true;
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Édition")) {
-        const std::string undo_label = doc_.can_undo() ? "Annuler " + doc_.undo_name() : std::string("Annuler");
+    if (ImGui::BeginMenu("Edit")) {
+        const std::string undo_label = doc_.can_undo() ? "Undo " + doc_.undo_name() : std::string("Undo");
         if (ImGui::MenuItem(undo_label.c_str(), "Ctrl+Z", false, doc_.can_undo())) {
             undo();
         }
-        if (ImGui::MenuItem("Rétablir", "Ctrl+Y", false, doc_.can_redo())) {
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, doc_.can_redo())) {
             redo();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Dupliquer l'objet", "Ctrl+D", false, !selected_.empty())) {
+        if (ImGui::MenuItem("Duplicate object", "Ctrl+D", false, !selected_.empty())) {
             duplicate_selected();
         }
-        if (ImGui::MenuItem("Supprimer l'objet", "Suppr", false, !selected_.empty())) {
+        if (ImGui::MenuItem("Delete object", "Del", false, !selected_.empty())) {
             delete_selected();
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Carte")) {
-        if (ImGui::MenuItem("Redimensionner...")) {
+    if (ImGui::BeginMenu("Map")) {
+        if (ImGui::MenuItem("Resize...")) {
             std::fill(std::begin(resize_), std::end(resize_), 0);
             open_resize_ = true;
         }
         bool chunk = doc_.chunk;
-        if (ImGui::MenuItem("Morceau de carte (chunk)", nullptr, &chunk)) {
+        if (ImGui::MenuItem("Map chunk", nullptr, &chunk)) {
             doc_.set_chunk(chunk);
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Essayer")) {
-        if (ImGui::MenuItem("Depuis le départ", "F5")) {
+    if (ImGui::BeginMenu("Test")) {
+        if (ImGui::MenuItem("From the start", "F5")) {
             trial_request_ = 1;
         }
-        if (ImGui::MenuItem("Depuis le pointeur", "F6")) {
+        if (ImGui::MenuItem("From the pointer", "F6")) {
             trial_request_ = 2;
         }
         ImGui::EndMenu();
@@ -1415,7 +1415,7 @@ void MapEditor::draw_menu() {
 }
 
 void MapEditor::draw_tools_panel() {
-    if (!ImGui::CollapsingHeader("Outils", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!ImGui::CollapsingHeader("Tools", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
     for (int i = 0; i < IM_ARRAYSIZE(kToolNames); ++i) {
@@ -1432,15 +1432,15 @@ void MapEditor::draw_tools_panel() {
         }
     }
     if (tool_ == Tool::Brush || tool_ == Tool::Eraser) {
-        ImGui::SliderInt("Taille ([ et ])", &brush_size_, 1, 9);
+        ImGui::SliderInt("Size ([ and ])", &brush_size_, 1, 9);
     }
     if (tool_ == Tool::Point) {
         char buffer[64];
         std::snprintf(buffer, sizeof(buffer), "%s", point_name_.c_str());
-        if (ImGui::InputText("Nom du point", buffer, sizeof(buffer))) {
+        if (ImGui::InputText("Point name", buffer, sizeof(buffer))) {
             point_name_ = buffer;
         }
-        ImGui::TextDisabled("Clic : poser ; Maj+clic : retirer");
+        ImGui::TextDisabled("Click: place; Shift+click: remove");
         for (const auto& [name, cells] : doc_.points()) {
             const std::string label = name + " (" + std::to_string(cells.size()) + ")";
             if (ImGui::SmallButton(label.c_str())) {
@@ -1454,15 +1454,15 @@ void MapEditor::draw_tools_panel() {
 }
 
 void MapEditor::draw_tiles_panel() {
-    if (!ImGui::CollapsingHeader("Tuiles et légende", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!ImGui::CollapsingHeader("Tiles and legend", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
     const std::vector<moteur::MapDocument::TileType>& types = doc_.tile_types();
     const auto tile_combo = [&](const char* label, moteur::TileId& id) {
-        const char* preview = id == moteur::kNoTile || id > types.size() ? "(rien)" : types[id - 1u].name.c_str();
+        const char* preview = id == moteur::kNoTile || id > types.size() ? "(none)" : types[id - 1u].name.c_str();
         bool changed = false;
         if (ImGui::BeginCombo(label, preview)) {
-            if (ImGui::Selectable("(rien)", id == moteur::kNoTile)) {
+            if (ImGui::Selectable("(none)", id == moteur::kNoTile)) {
                 id = moteur::kNoTile;
                 changed = true;
             }
@@ -1478,13 +1478,13 @@ void MapEditor::draw_tiles_panel() {
     };
 
     // Which layers the brush and eraser touch.
-    std::string layer_label = layer_ < 0 ? std::string("Toute la pile") : "Calque " + std::to_string(layer_);
-    if (ImGui::BeginCombo("Calque", layer_label.c_str())) {
-        if (ImGui::Selectable("Toute la pile", layer_ < 0)) {
+    std::string layer_label = layer_ < 0 ? std::string("Whole stack") : "Layer " + std::to_string(layer_);
+    if (ImGui::BeginCombo("Layer", layer_label.c_str())) {
+        if (ImGui::Selectable("Whole stack", layer_ < 0)) {
             layer_ = -1;
         }
         for (int layer = 0; layer < doc_.layer_count(); ++layer) {
-            if (ImGui::Selectable(("Calque " + std::to_string(layer)).c_str(), layer == layer_)) {
+            if (ImGui::Selectable(("Layer " + std::to_string(layer)).c_str(), layer == layer_)) {
                 layer_ = layer;
             }
         }
@@ -1492,18 +1492,18 @@ void MapEditor::draw_tiles_panel() {
     }
     brush_stack_.resize(static_cast<std::size_t>(doc_.layer_count()), moteur::kNoTile);
     if (layer_ >= 0) {
-        tile_combo("Tuile du pinceau", brush_tile_);
+        tile_combo("Brush tile", brush_tile_);
     } else {
-        ImGui::TextDisabled("Pile du pinceau (et des rectangles, du remplissage) :");
+        ImGui::TextDisabled("Brush stack (also used by rectangles and fill):");
         for (int layer = 0; layer < doc_.layer_count(); ++layer) {
             ImGui::PushID(layer);
-            tile_combo(("Calque " + std::to_string(layer)).c_str(), brush_stack_[static_cast<std::size_t>(layer)]);
+            tile_combo(("Layer " + std::to_string(layer)).c_str(), brush_stack_[static_cast<std::size_t>(layer)]);
             ImGui::PopID();
         }
     }
 
     // The palette: the legend's stacks.
-    ImGui::SeparatorText("Palette (légende)");
+    ImGui::SeparatorText("Palette (legend)");
     for (const moteur::MapSymbol& symbol : doc_.legend()) {
         std::string label = std::string("'") + symbol.character + "'  ";
         for (std::size_t i = 0; i < symbol.tiles.size(); ++i) {
@@ -1511,10 +1511,10 @@ void MapEditor::draw_tiles_panel() {
             label += (i > 0 ? " + " : "") + (id == moteur::kNoTile || id > types.size() ? std::string("-") : types[id - 1u].name);
         }
         if (symbol.tiles.empty()) {
-            label += "(vide)";
+            label += "(empty)";
         }
         if (!symbol.point.empty()) {
-            label += "  ; point " + symbol.point;
+            label += "; point " + symbol.point;
         }
         ImGui::PushID(symbol.character);
         if (ImGui::Selectable(label.c_str(), false)) {
@@ -1535,19 +1535,19 @@ void MapEditor::draw_tiles_panel() {
     ImGui::SetNextItemWidth(40.0f);
     ImGui::InputText("##caractere", character, sizeof(character));
     ImGui::SameLine();
-    if (ImGui::Button("Ajouter la pile du pinceau à la légende") && character[0] != '\0') {
+    if (ImGui::Button("Add the brush stack to the legend") && character[0] != '\0') {
         doc_.set_symbol({character[0], brush_stack(), ""});
         character[0] = '\0';
     }
-    ImGui::TextDisabled("(un caractère libre ; sinon l'enregistrement en choisit un)");
+    ImGui::TextDisabled("(an unused character; otherwise saving picks one)");
 
     // The tile types: what the grid of the game reads.
-    ImGui::SeparatorText("Types de tuiles");
+    ImGui::SeparatorText("Tile types");
     if (ImGui::BeginTable("types", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Nom");
-        ImGui::TableSetupColumn("Marchable");
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("Walkable");
         ImGui::TableSetupColumn("Opaque");
-        ImGui::TableSetupColumn("Région");
+        ImGui::TableSetupColumn("Region");
         ImGui::TableHeadersRow();
         for (std::size_t i = 0; i < types.size(); ++i) {
             moteur::MapDocument::TileType type = types[i];
@@ -1588,28 +1588,28 @@ void MapEditor::draw_tiles_panel() {
     static char new_type[64] = "";
     ImGui::InputText("##nouveau type", new_type, sizeof(new_type));
     ImGui::SameLine();
-    if (ImGui::Button("Ajouter ce type") && new_type[0] != '\0') {
+    if (ImGui::Button("Add this type") && new_type[0] != '\0') {
         doc_.add_tile_type({new_type, true, false, ""});
         new_type[0] = '\0';
     }
 
-    ImGui::SeparatorText("Carte");
+    ImGui::SeparatorText("Map");
     char description[512];
     std::snprintf(description, sizeof(description), "%s", doc_.description.c_str());
     if (ImGui::InputTextMultiline("Description", description, sizeof(description), ImVec2(-1.0f, 50.0f))) {
         doc_.set_description(description);
     }
     track_item("description");
-    ImGui::Text("%d x %d cases, %d calques, %zu objets, %zu connecteurs", doc_.width(), doc_.height(), doc_.layer_count(),
+    ImGui::Text("%d x %d cells, %d layers, %zu objects, %zu connectors", doc_.width(), doc_.height(), doc_.layer_count(),
                 doc_.objects().size(), doc_.connectors().size());
 }
 
 void MapEditor::draw_object_panel() {
-    if (!ImGui::CollapsingHeader("Objets", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!ImGui::CollapsingHeader("Objects", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
     const std::vector<ObjectType>& types = object_types();
-    if (ImGui::BeginCombo("Type à poser", types[static_cast<std::size_t>(object_type_)].label.c_str())) {
+    if (ImGui::BeginCombo("Type to place", types[static_cast<std::size_t>(object_type_)].label.c_str())) {
         for (std::size_t i = 0; i < types.size(); ++i) {
             if (ImGui::Selectable(types[i].label.c_str(), static_cast<int>(i) == object_type_)) {
                 object_type_ = static_cast<int>(i);
@@ -1618,28 +1618,28 @@ void MapEditor::draw_object_panel() {
         }
         ImGui::EndCombo();
     }
-    ImGui::Checkbox("Aimanter", &snap_);
+    ImGui::Checkbox("Snap", &snap_);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100.0f);
-    ImGui::DragFloat("Pas (m)", &snap_step_, 0.05f, 0.05f, 2.0f, "%.2f");
-    ImGui::TextDisabled("Objets : clic pose ; sur un objet : le choisir et le déplacer ; Ctrl+clic : en tirer une copie.");
-    ImGui::TextDisabled("[ et ] : tourner de 15 degrés (Maj : 90) ; Suppr : supprimer ; Ctrl+D : dupliquer.");
+    ImGui::DragFloat("Step (m)", &snap_step_, 0.05f, 0.05f, 2.0f, "%.2f");
+    ImGui::TextDisabled("Objects: click places one; on an object: select and move it; Ctrl+click: drag a copy.");
+    ImGui::TextDisabled("[ and ]: rotate by 15 degrees (Shift: 90); Del: delete; Ctrl+D: duplicate.");
 
     const moteur::MapObject* current = doc_.object(selected_);
     if (current == nullptr) {
-        ImGui::TextDisabled("Aucun objet choisi.");
+        ImGui::TextDisabled("No object selected.");
         return;
     }
     moteur::MapObject object = *current;
     const ObjectType* type = find_object_type(object.type);
-    ImGui::SeparatorText((object.id + " : " + (type != nullptr ? type->label : object.type)).c_str());
+    ImGui::SeparatorText((object.id + ": " +(type != nullptr ? type->label : object.type)).c_str());
     bool changed = false;
     changed |= ImGui::DragFloat3("Position (x, y, z)", &object.position.x, 0.05f);
     track_item("position");
-    changed |= ImGui::DragFloat("Rotation (degrés)", &object.rotation, 1.0f, -360.0f, 360.0f);
+    changed |= ImGui::DragFloat("Rotation (degrees)", &object.rotation, 1.0f, -360.0f, 360.0f);
     track_item("rotation");
-    changed |= ImGui::DragFloat("Échelle", &object.scale, 0.01f, 0.05f, 20.0f);
-    track_item("échelle");
+    changed |= ImGui::DragFloat("Scale", &object.scale, 0.01f, 0.05f, 20.0f);
+    track_item("scale");
     if (type != nullptr) {
         object.props = object_props(*type, object.props);
         for (const ObjectProperty& property : type->properties) {
@@ -1725,7 +1725,7 @@ void MapEditor::draw_object_panel() {
                     }
                     if (!effect && !current_value.empty() &&
                         std::find(choices.begin(), choices.end(), current_value) == choices.end()) {
-                        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "« %s » n'est pas dans la table personnages",
+                        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "'%s' is not in the personnages table",
                                            current_value.c_str());
                     }
                     break;
@@ -1738,23 +1738,23 @@ void MapEditor::draw_object_panel() {
         doc_.update_object(object);
         note_object(object.id);
     }
-    if (ImGui::Button("Dupliquer")) {
+    if (ImGui::Button("Duplicate")) {
         duplicate_selected();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Supprimer")) {
+    if (ImGui::Button("Delete")) {
         delete_selected();
     }
 }
 
 void MapEditor::draw_connectors_panel() {
-    if (!ImGui::CollapsingHeader("Connecteurs")) {
+    if (!ImGui::CollapsingHeader("Connectors")) {
         return;
     }
-    ImGui::TextDisabled("Outil Connecteurs (C) : clic sur une case du bord. Pour assembler des morceaux de carte.");
+    ImGui::TextDisabled("Connectors tool (C): click a cell on the edge. Used to assemble map chunks.");
     char kind[64];
     std::snprintf(kind, sizeof(kind), "%s", connector_kind_.c_str());
-    if (ImGui::InputText("Genre des nouveaux", kind, sizeof(kind))) {
+    if (ImGui::InputText("Kind of new ones", kind, sizeof(kind))) {
         connector_kind_ = kind;
     }
     const std::vector<moteur::MapConnector>& connectors = doc_.connectors();
@@ -1775,12 +1775,12 @@ void MapEditor::draw_connectors_panel() {
     bool changed = false;
     char name[64];
     std::snprintf(name, sizeof(name), "%s", c.name.c_str());
-    if (ImGui::InputText("Nom", name, sizeof(name), ImGuiInputTextFlags_EnterReturnsTrue)) {
+    if (ImGui::InputText("Name", name, sizeof(name), ImGuiInputTextFlags_EnterReturnsTrue)) {
         c.name = name;
         changed = true;
     }
     std::snprintf(kind, sizeof(kind), "%s", c.kind.c_str());
-    if (ImGui::InputText("Genre", kind, sizeof(kind), ImGuiInputTextFlags_EnterReturnsTrue)) {
+    if (ImGui::InputText("Kind", kind, sizeof(kind), ImGuiInputTextFlags_EnterReturnsTrue)) {
         c.kind = kind;
         changed = true;
     }
@@ -1789,7 +1789,7 @@ void MapEditor::draw_connectors_panel() {
         c.direction = static_cast<moteur::MapConnector::Direction>(direction);
         changed = true;
     }
-    if (ImGui::Button("Supprimer le connecteur")) {
+    if (ImGui::Button("Delete connector")) {
         next.erase(next.begin() + connector_);
         connector_ = -1;
         changed = true;
@@ -1804,13 +1804,13 @@ void MapEditor::draw_issues_panel() {
     for (const moteur::MapDocument::Issue& issue : issues_) {
         errors += issue.level == moteur::MapDocument::Issue::Level::Error ? 1 : 0;
     }
-    const std::string header = "Vérifications (" + std::to_string(errors) + " erreur(s), " +
-                               std::to_string(issues_.size() - static_cast<std::size_t>(errors)) + " avertissement(s))###verifs";
+    const std::string header = "Checks (" + std::to_string(errors) + " error(s), " +
+                               std::to_string(issues_.size() - static_cast<std::size_t>(errors)) + " warning(s))###verifs";
     if (!ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
     if (issues_.empty()) {
-        ImGui::TextDisabled("Rien à signaler.");
+        ImGui::TextDisabled("Nothing to report.");
     }
     for (std::size_t i = 0; i < issues_.size(); ++i) {
         const moteur::MapDocument::Issue& issue = issues_[i];
@@ -1827,47 +1827,47 @@ void MapEditor::draw_issues_panel() {
 
 void MapEditor::draw_popups() {
     if (open_new_) {
-        ImGui::OpenPopup("Nouvelle carte");
+        ImGui::OpenPopup("New map");
         open_new_ = false;
     }
     if (open_resize_) {
-        ImGui::OpenPopup("Redimensionner");
+        ImGui::OpenPopup("Resize");
         open_resize_ = false;
     }
     if (open_save_as_) {
         std::snprintf(name_buffer_, sizeof(name_buffer_), "%s", name_.empty() ? "nouvelle_carte" : name_.c_str());
-        ImGui::OpenPopup("Enregistrer sous");
+        ImGui::OpenPopup("Save as");
         open_save_as_ = false;
     }
     if (confirm_overwrite_) {
-        ImGui::OpenPopup("Fichier modifié ailleurs");
+        ImGui::OpenPopup("File changed elsewhere");
         confirm_overwrite_ = false;
     }
     if (confirm_quit_) {
-        ImGui::OpenPopup("Quitter sans enregistrer");
+        ImGui::OpenPopup("Quit without saving");
         confirm_quit_ = false;
     }
     if (confirm_open_) {
-        ImGui::OpenPopup("Abandonner les modifications");
+        ImGui::OpenPopup("Discard changes");
         confirm_open_ = false;
     }
     const ImVec2 centre = ImGui::GetMainViewport()->GetCenter();
 
     ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Nouvelle carte", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::InputInt2("Largeur, hauteur", new_size_);
-        ImGui::SliderInt("Calques", &new_size_[2], 1, 4);
+    if (ImGui::BeginPopupModal("New map", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputInt2("Width, height", new_size_);
+        ImGui::SliderInt("Layers", &new_size_[2], 1, 4);
         new_size_[0] = std::clamp(new_size_[0], 4, 1024);
         new_size_[1] = std::clamp(new_size_[1], 4, 1024);
-        ImGui::TextDisabled("Un sol partout, un type « mur » et le point de départ au milieu.");
-        if (ImGui::Button("Créer")) {
+        ImGui::TextDisabled("Floor everywhere, a 'mur' tile type and the start point in the middle.");
+        if (ImGui::Button("Create")) {
             moteur::MapDocument fresh(new_size_[0], new_size_[1], new_size_[2], "sol");
             fresh.add_tile_type({"mur", false, true, ""});
             fresh.set_symbol({'.', {fresh.tile_id("sol")}, ""});
             if (new_size_[2] >= 2) {
                 fresh.set_symbol({'#', {fresh.tile_id("sol"), fresh.tile_id("mur")}, ""});
             }
-            fresh.set_point({new_size_[0] / 2, new_size_[1] / 2}, "depart");
+            fresh.set_point({new_size_[0] / 2, new_size_[1] / 2}, moteur::kStartPoint);
             adopt(std::move(fresh));
             name_.clear();
             file_time_ = 0;
@@ -1876,26 +1876,26 @@ void MapEditor::draw_popups() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Annuler")) {
+        if (ImGui::Button("Cancel")) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
 
     ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Redimensionner", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Cases ajoutées (positif) ou retirées (négatif) de chaque côté :");
-        ImGui::InputInt("Gauche", &resize_[0]);
-        ImGui::InputInt("Haut", &resize_[1]);
-        ImGui::InputInt("Droite", &resize_[2]);
-        ImGui::InputInt("Bas", &resize_[3]);
+    if (ImGui::BeginPopupModal("Resize", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Cells added (positive) or removed (negative) on each side:");
+        ImGui::InputInt("Left", &resize_[0]);
+        ImGui::InputInt("Top", &resize_[1]);
+        ImGui::InputInt("Right", &resize_[2]);
+        ImGui::InputInt("Bottom", &resize_[3]);
         const int width = doc_.width() + resize_[0] + resize_[2];
         const int height = doc_.height() + resize_[1] + resize_[3];
-        ImGui::Text("Nouvelle taille : %d x %d (les cases nouvelles reçoivent la pile du pinceau)", width, height);
+        ImGui::Text("New size: %d x %d (new cells get the brush stack)", width, height);
         const bool valid = width >= 1 && height >= 1 && width <= 1024 && height <= 1024;
         ImGui::BeginDisabled(!valid);
-        if (ImGui::Button("Appliquer")) {
-            doc_.begin_action("redimensionnement");
+        if (ImGui::Button("Apply")) {
+            doc_.begin_action("resize");
             doc_.resize(resize_[0], resize_[1], resize_[2], resize_[3], brush_stack());
             doc_.end_action();
             force_rebuild_ = true;
@@ -1903,22 +1903,22 @@ void MapEditor::draw_popups() {
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Annuler")) {
+        if (ImGui::Button("Cancel")) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
 
     ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Enregistrer sous", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::InputText("Nom (minuscules, chiffres, _ et -)", name_buffer_, sizeof(name_buffer_));
+    if (ImGui::BeginPopupModal("Save as", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputText("Name (lowercase, digits, _ and -)", name_buffer_, sizeof(name_buffer_));
         const std::string name = name_buffer_;
         const bool valid = valid_name(name);
         if (valid && std::find(map_names_.begin(), map_names_.end(), name) != map_names_.end() && name != name_) {
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Une carte de ce nom existe : elle sera remplacée (après confirmation).");
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "A map with this name exists: it will be replaced (after confirmation).");
         }
         ImGui::BeginDisabled(!valid);
-        if (ImGui::Button("Enregistrer")) {
+        if (ImGui::Button("Save")) {
             if (name != name_) {
                 name_ = name;
                 file_time_ = 0;  // a file of that name, if any, is someone else's: asks before writing over it
@@ -1928,61 +1928,61 @@ void MapEditor::draw_popups() {
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Annuler")) {
+        if (ImGui::Button("Cancel")) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
 
     ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Fichier modifié ailleurs", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("%s a changé (ou existe déjà) depuis que l'éditeur l'a lu.", map_path(name_).c_str());
-        if (ImGui::Button("Écraser avec ma version")) {
+    if (ImGui::BeginPopupModal("File changed elsewhere", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("%s changed (or already existed) since the editor read it.", map_path(name_).c_str());
+        if (ImGui::Button("Overwrite with my version")) {
             save(true);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Annuler")) {
+        if (ImGui::Button("Cancel")) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
 
     ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Quitter sans enregistrer", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("La carte a des modifications non enregistrées.");
+    if (ImGui::BeginPopupModal("Quit without saving", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("The map has unsaved changes.");
         const auto leave = [&] {
             if (standalone_) app_.quit();
             else stop_requested_ = true;
         };
-        if (ImGui::Button("Enregistrer et quitter")) {
+        if (ImGui::Button("Save and quit")) {
             if (save(false)) {
                 leave();
             }
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Quitter (une copie est gardée)")) {
+        if (ImGui::Button("Quit (a copy is kept)")) {
             leave();
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Annuler")) {
+        if (ImGui::Button("Cancel")) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
 
     ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Abandonner les modifications", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Ouvrir « %s » abandonne les modifications non enregistrées.", pending_open_.c_str());
-        if (ImGui::Button("Ouvrir quand même")) {
+    if (ImGui::BeginPopupModal("Discard changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Opening '%s' discards the unsaved changes.", pending_open_.c_str());
+        if (ImGui::Button("Open anyway")) {
             saved_revision_ = doc_.revision();  // no copy kept: the choice was made
             open(pending_open_);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Annuler")) {
+        if (ImGui::Button("Cancel")) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -2026,7 +2026,7 @@ void MapEditor::run_self_test() {
                 brush_stack_[1] = wall;
             }
             test_before_ = doc_.stack({4, 3});
-            doc_.begin_action("pinceau");
+            doc_.begin_action("brush");
             for (const glm::ivec2 c : moteur::MapDocument::line({2, 3}, {6, 3})) {
                 paint(c);
             }
@@ -2088,7 +2088,7 @@ void MapEditor::run_self_test() {
         }
         case 3: {
             check(external_change_, "the change on the disk is noticed");
-            doc_.set_description("modifiée par le test");
+            doc_.set_description("edited by the test");
             check(!save(false), "saving asks before overwriting it");
             check(confirm_overwrite_, "with the question");
             confirm_overwrite_ = false;
@@ -2101,7 +2101,7 @@ void MapEditor::run_self_test() {
             break;
         }
         case 4:
-            check(trial_ != nullptr, "\"Essayer\" starts the Monde scene on the map");
+            check(trial_ != nullptr, "\"Test\" starts the World scene on the map");
             test_wait_ = 30;
             break;
         case 5:

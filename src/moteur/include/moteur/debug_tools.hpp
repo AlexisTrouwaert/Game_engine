@@ -24,24 +24,29 @@ class Application;
 class StateStack;
 class World;
 
-// How the entity inspector shows and edits each type of component. The engine registers its own
-// (Transform, Name, LightSource...); the game registers its own the same way, so that the engine
-// never needs to know them:
-//
-//   tools->components().add<Health>("Santé", [](Health& health) {
-//       return ImGui::SliderFloat("Vie", &health.value, 0.0f, 1.0f);
-//   });
-//
-// The function draws the widgets of one component (ImGui) and returns true when it changed it. It
-// works on a copy, which then replaces the component (registry.replace): the signals fire, so the
-// engine's caches (the world matrix of a still entity) follow. A type nobody registered is still
-// listed, by its C++ name, without its content.
+/// How the entity inspector shows and edits each type of component. The engine registers its own
+/// (Transform, Name, LightSource...); the game registers its own the same way, so that the engine
+/// never needs to know them:
+///
+/// ```
+/// tools->components().add<Health>("Santé", [](Health& health) {
+///     return ImGui::SliderFloat("Vie", &health.value, 0.0f, 1.0f);
+/// });
+/// ```
+///
+/// The function draws the widgets of one component (ImGui) and returns true when it changed it. It
+/// works on a copy, which then replaces the component (registry.replace): the signals fire, so the
+/// engine's caches (the world matrix of a still entity) follow. A type nobody registered is still
+/// listed, by its C++ name, without its content.
 class ComponentInspectors {
 public:
+    /// The function that draws the widgets of a component of type `T` and returns true when it
+    /// changed the component.
     template <typename T>
     using Edit = std::function<bool(T&)>;
 
-    // A component with data. Registering a type again replaces its entry.
+    /// A component with data, shown as `name` and drawn by `edit`. Registering a type again replaces
+    /// its entry. A tag (empty type) does not compile here: add_tag().
     template <typename T>
     void add(std::string name, Edit<T> edit) {
         static_assert(!std::is_empty_v<T>, "a tag component has no data: use add_tag()");
@@ -58,7 +63,7 @@ public:
         entries_[entt::type_id<T>().hash()] = std::move(entry);
     }
 
-    // A tag (an empty component, such as Hidden): only its name is shown.
+    /// A tag (an empty component, such as Hidden): only its name is shown.
     template <typename T>
     void add_tag(std::string name) {
         static_assert(std::is_empty_v<T>, "add_tag() is for empty components");
@@ -67,100 +72,127 @@ public:
         entries_[entt::type_id<T>().hash()] = std::move(entry);
     }
 
-    // The name shown for a component type (its C++ name when not registered).
+    /// The name shown for a component type (its C++ name when not registered).
     std::string name(const entt::type_info& type) const;
+    /// Whether `type` was registered (add() or add_tag()).
     bool registered(const entt::type_info& type) const { return entries_.contains(type.hash()); }
 
-    // Runs the registered function of `type` on the entity's component (it draws its widgets).
-    // True if the component was changed. False for a tag, or a type not registered.
+    /// Runs the registered function of `type` on the entity's component (it draws its widgets, so
+    /// inside an ImGui window). True if the component was changed, and then replaced in `registry`.
+    /// False for a tag, or a type not registered. The entity must have the component.
     bool edit(entt::registry& registry, entt::entity entity, const entt::type_info& type) const;
 
-    // The engine's components (see world.hpp). DebugTools does it at creation.
+    /// The engine's components (see world.hpp). DebugTools does it at creation.
     void add_engine_components();
 
 private:
     struct Entry {
         std::string name;
-        std::function<bool(entt::registry&, entt::entity)> edit;  // empty for a tag
+        std::function<bool(entt::registry&, entt::entity)> edit;  ///< empty for a tag
     };
     std::unordered_map<entt::id_type, Entry> entries_;
 };
 
-// Whether an entity of the inspector's list passes its filter: an empty filter keeps everything;
-// otherwise the filter must appear in the name (letters compared without case, ASCII only) or be the
-// entity's number ("#12" or "12").
+/// Whether an entity of the inspector's list passes its filter: an empty filter keeps everything;
+/// otherwise the filter must appear in the name (letters compared without case, ASCII only) or be the
+/// entity's number ("#12" or "12").
 bool inspector_filter_matches(std::string_view filter, std::uint32_t entity_number, std::string_view name);
 
-// The debug tools of the engine (milestone 4, part 8), in ImGui windows:
-// - the entity inspector: the entities of a World (with their Name), a filter, the selection, and
-//   the components of the selected one, editable;
-// - the asset browser: what the asset manager holds, by type, memory, users, state, a reload button;
-// - the inputs: every action with its bindings and state, the devices;
-// - the audio: device, voices, volumes by group, the last sound refused by a limit;
-// - the game states: the stacks being watched, from the bottom to the top;
-// - the animation (milestone 5): an animated entity of the world, a timeline per clip it plays with
-//   its events, the weights, the last event and its tick.
-//
-// The Application creates it with the debug interface (ApplicationConfig::debug_ui), never without.
-// The game decides where its windows are opened (menu_items(), inside its own DEBUG menu) and
-// draws them (draw(), from its render()). Which windows are open is kept between two runs, with the
-// windows' places, in imgui.ini in the player's preferences directory.
-//
-// Scenes tell it what to show: watch(world) while their world exists (and forget() in their
-// destructor), select(entity) when the game picks something, watch(stack) for a StateStack.
-//
-// Editing a component by hand breaks the determinism of the simulation (a replay, a capture): it is
-// a tool, and the inspector says so once it has happened. It never adds, removes or destroys
-// anything (except the Hidden tag): the game keeps entities and expects their components.
+/// The debug tools of the engine (milestone 4, part 8), in ImGui windows:
+/// - the entity inspector: the entities of a World (with their Name), a filter, the selection, and
+///   the components of the selected one, editable;
+/// - the asset browser: what the asset manager holds, by type, memory, users, state, a reload button;
+/// - the inputs: every action with its bindings and state, the devices;
+/// - the audio: device, voices, volumes by group, the last sound refused by a limit;
+/// - the game states: the stacks being watched, from the bottom to the top;
+/// - the animation (milestone 5): an animated entity of the world, a timeline per clip it plays with
+///   its events, the weights, the last event and its tick;
+/// - the data: the game's data tables, their rows, a filter and a reload button;
+/// - the console (Console): its output, a line to type commands, completion and history;
+/// - the profiler (Profiler): the zones of a frame, and their statistics over the last frames.
+///
+/// It also draws the statistics bar over the game, while the variable "debug.stats" is on.
+///
+/// The Application creates it with the debug interface (ApplicationConfig::debug_ui), never without.
+/// The game decides where its windows are opened (menu_items(), inside its own DEBUG menu) and
+/// draws them (draw(), from its render()). Which windows are open is kept between two runs, with the
+/// windows' places, in imgui.ini in the player's preferences directory.
+///
+/// Scenes tell it what to show: watch(world) while their world exists (and forget() in their
+/// destructor), select(entity) when the game picks something, watch(stack) for a StateStack.
+///
+/// Editing a component by hand breaks the determinism of the simulation (a replay, a capture): it is
+/// a tool, and the inspector says so once it has happened. It never adds, removes or destroys
+/// anything (except the Hidden tag): the game keeps entities and expects their components.
 class DebugTools {
 public:
+    /// The debug windows (numbered from 0, in the order of the DEBUG menu).
     enum class Window { Inspector, Assets, Input, Audio, States, Animation, Data, Console, Profiler };
+    /// How many Window values there are.
     static constexpr int kWindowCount = 9;
 
+    /// Registers the engine's component inspectors and the settings handler that keeps the open
+    /// windows in imgui.ini. Needs the ImGui context (the Application makes it first). `app` must
+    /// outlive the DebugTools.
     explicit DebugTools(Application& app);
+    /// Writes imgui.ini now (with the open windows) and removes the settings handler.
     ~DebugTools();
 
     DebugTools(const DebugTools&) = delete;
     DebugTools& operator=(const DebugTools&) = delete;
 
+    /// The inspectors of the component types: where the game registers its own.
     ComponentInspectors& components() { return components_; }
 
-    // The world shown by the inspector (the last one watched). `label`: its name in the window.
+    /// The world shown by the inspector (the last one watched). `label`: its name in the window.
+    /// Watching another world clears the selection and edited(). The DebugTools keeps a pointer: call
+    /// forget() before the world is destroyed.
     void watch(World& world, std::string label);
+    /// Stops showing `world`, if it is the one watched (its selection goes with it).
     void forget(World& world);
+    /// The world watched, null if none.
     World* world() const { return world_; }
 
+    /// Shows `stack` in the game states window under `label` (again: the label is replaced). Keeps
+    /// a pointer: call forget() before the stack is destroyed.
     void watch(StateStack& stack, std::string label);
+    /// Stops showing `stack`; nothing if it is not watched.
     void forget(StateStack& stack);
 
-    // The entity shown by the inspector (entt::null: none).
+    /// The entity shown by the inspector (entt::null: none).
     void select(entt::entity entity) { selected_ = entity; }
-    // Opens or closes the console window (the key under Escape, see Application).
+    /// Opens or closes the console window (the key under Escape, see Application).
     void toggle_console();
+    /// The entity shown by the inspector (entt::null: none); it may have been destroyed since.
     entt::entity selected() const { return selected_; }
-    // true once something was changed by hand in the current world.
+    /// true once something was changed by hand in the current world.
     bool edited() const { return edited_; }
 
+    /// Whether `window` is open.
     bool open(Window window) const { return open_[static_cast<std::size_t>(window)]; }
+    /// Opens or closes `window`; imgui.ini is then written again (by ImGui, a moment later).
     void set_open(Window window, bool open);
 
-    // One MenuItem per window (checked when open), for the game's DEBUG menu.
+    /// One MenuItem per window (checked when open), for the game's DEBUG menu.
     void menu_items();
-    // The open windows. From the game's render(), after the scene (the inspector marks the selected
-    // entity with debug lines, drawn with the scene's camera).
+    /// The open windows. From the game's render(), after the scene (the inspector marks the selected
+    /// entity with debug lines, drawn with the scene's camera).
     void draw();
-    // What the windows' buttons asked for that loads or frees (reload an asset, free the unused
-    // ones): done here, between two frames. The Application calls it.
+    /// What the windows' buttons asked for that loads or frees (reload an asset, free the unused
+    /// ones): done here, between two frames. The Application calls it.
     void between_frames();
 
-    // For the settings file (imgui.ini), and its tests: "Inspector=1" lines.
+    /// The window's key in the settings file (imgui.ini), and its tests: "Inspector" in the
+    /// "Inspector=1" lines. A static string.
     static const char* window_key(Window window);
-    // Reads one line; false if it is not one of ours.
+    /// Reads one line (`key=1` opens the window, any other value closes it); false if it is not one
+    /// of ours.
     bool read_setting(std::string_view line);
+    /// One `key=0` or `key=1` line per window, each ended by a newline.
     std::string write_settings() const;
 
 private:
-    // Begins a window whose cross closes it; false (and already ended) when it is collapsed.
+    /// Begins a window whose cross closes it; false (and already ended) when it is collapsed.
     bool begin_window(const char* title, Window which, float width, float height);
     void draw_inspector();
     void draw_entity(World& world, entt::entity entity);
@@ -172,7 +204,7 @@ private:
     void draw_data();
     void draw_console();
     void draw_profiler();
-    // The statistics bar over the game ("debug.stats").
+    /// The statistics bar over the game ("debug.stats").
     void draw_stats_bar();
 
     Application& app_;
@@ -185,8 +217,8 @@ private:
     bool edited_ = false;
     char filter_[64] = {};
     bool named_only_ = false;
-    std::vector<entt::entity> listed_;  // reused each frame
-    entt::entity animated_ = entt::null;  // shown by the animation window
+    std::vector<entt::entity> listed_;  ///< reused each frame
+    entt::entity animated_ = entt::null;  ///< shown by the animation window
 
     struct WatchedStack {
         StateStack* stack;
@@ -194,25 +226,25 @@ private:
     };
     std::vector<WatchedStack> stacks_;
 
-    std::optional<std::pair<std::size_t, std::string>> reload_request_;  // type index, key
+    std::optional<std::pair<std::size_t, std::string>> reload_request_;  ///< type index, key
     bool collect_request_ = false;
-    std::string last_reload_;  // the result of the last button, shown next to them
-    // The data window: the table and row shown, a filter on the rows, a reload asked by its button.
+    std::string last_reload_;  ///< the result of the last button, shown next to them
+    /// The data window: the table and row shown, a filter on the rows, a reload asked by its button.
     std::string data_table_;
     std::string data_row_;
     char data_filter_[64] = {};
     std::string data_reload_;
-    // The console window: the line being typed, the place in the history, scrolling, focus.
+    /// The console window: the line being typed, the place in the history, scrolling, focus.
     char console_input_[512] = {};
-    int console_history_ = -1;  // -1: not browsing the history
+    int console_history_ = -1;  ///< -1: not browsing the history
     std::uint64_t console_seen_ = 0;
     bool console_focus_ = false;
     std::vector<std::string> console_candidates_;
-    // The profiler window: the frame shown (index in the profiler's numbering), cached statistics.
+    /// The profiler window: the frame shown (index in the profiler's numbering), cached statistics.
     std::uint64_t profiler_frame_ = ~0ull;
     std::vector<Profiler::Summary> profiler_summary_;
     int profiler_summary_age_ = 1000;
-    Variable* stats_bar_ = nullptr;  // "debug.stats"
+    Variable* stats_bar_ = nullptr;  ///< "debug.stats"
 };
 
 }  // namespace moteur

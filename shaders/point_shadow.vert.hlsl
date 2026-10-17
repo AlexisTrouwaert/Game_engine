@@ -6,9 +6,22 @@
 //
 // With SKINNED defined (point_shadow_skinned.vert.hlsl): the vertices first follow the joints of their pose
 // (skinning.hlsli); 4 is the instance's emissive row (its palette), 5 and 6 the vertex's joints and weights.
+//
+// With MASKED defined (point_shadow_masked*.vert.hlsl, review of milestones 1 to 7, 3.1): an
+// alpha-tested material; the inputs that follow are those of shadow.vert.hlsl's MASKED variant.
 
 #ifdef SKINNED
 #include "skinning.hlsli"
+#endif
+
+#if defined(MASKED) && defined(SKINNED)
+#define UV_INPUT TEXCOORD7
+#define BASE_COLOR_INPUT TEXCOORD8
+#define CUTOFF_INPUT TEXCOORD9
+#elif defined(MASKED)
+#define UV_INPUT TEXCOORD4
+#define BASE_COLOR_INPUT TEXCOORD5
+#define CUTOFF_INPUT TEXCOORD6
 #endif
 
 cbuffer Face : register(b0, space1) {
@@ -25,10 +38,19 @@ struct Input {
     uint4 joints : TEXCOORD5;
     float4 weights : TEXCOORD6;
 #endif
+#ifdef MASKED
+    float2 uv : UV_INPUT;
+    float4 base_color : BASE_COLOR_INPUT;  // a: the material's alpha factor
+    float4 normal0 : CUTOFF_INPUT;         // w: the alpha cutoff
+#endif
 };
 
 struct Output {
     float3 world_position : TEXCOORD0;
+#ifdef MASKED
+    float2 uv : TEXCOORD1;
+    nointerpolation float2 alpha : TEXCOORD2;  // x: alpha factor, y: cutoff
+#endif
     float4 position : SV_Position;
 };
 
@@ -42,5 +64,9 @@ Output main(Input input) {
     Output output;
     output.world_position = world_position;
     output.position = mul(face_view_projection, float4(world_position, 1.0));
+#ifdef MASKED
+    output.uv = input.uv;
+    output.alpha = float2(input.base_color.a, input.normal0.w);
+#endif
     return output;
 }

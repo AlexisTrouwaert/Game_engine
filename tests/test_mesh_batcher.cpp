@@ -257,3 +257,39 @@ TEST_CASE("MeshBatcher: a subset of the draws") {
     CHECK(batcher.instances()[0].base_color == glm::vec4(1, 0, 0, 1));
     CHECK(batcher.instances()[1].base_color == glm::vec4(0, 1, 0, 1));
 }
+
+TEST_CASE("MeshBatcher: an alpha-tested material keeps its texture and cutoff in the shadow pass") {
+    const moteur::Mesh leaves = make_mesh(20);
+    const moteur::Texture oak;  // only their addresses matter
+    const moteur::Texture birch;
+    std::vector<moteur::MeshDraw> draws;
+    for (const moteur::Texture* texture : {&oak, &birch, &oak}) {
+        moteur::MeshDraw draw = make_draw(leaves, {static_cast<float>(draws.size()), 0, 0}, {1, 1, 1, 0.8f});
+        draw.material.base_color_texture = texture;
+        draw.material.alpha_cutoff = 0.5f;
+        draws.push_back(draw);
+    }
+    moteur::MeshDraw opaque = make_draw(leaves, {5, 0, 0});
+    opaque.material.base_color_texture = &oak;
+    draws.push_back(opaque);
+
+    moteur::MeshBatcher batcher;
+    batcher.build(draws, view_of_everything(), moteur::MeshBatcher::Pass::Shadow);
+    // Opaque casters share a batch whatever their textures; masked ones are split by texture (their
+    // shape), and never mixed with opaque ones.
+    REQUIRE(batcher.batches().size() == 3);
+    CHECK(batcher.batches()[0].masked);
+    CHECK(batcher.batches()[0].count == 2);  // the two oak draws
+    CHECK(batcher.batches()[0].material->base_color_texture == &oak);
+    CHECK(batcher.batches()[1].masked);
+    CHECK(batcher.batches()[1].material->base_color_texture == &birch);
+    CHECK_FALSE(batcher.batches()[2].masked);
+    // The shadow instances carry the alpha factor and the cutoff.
+    const moteur::MeshInstance& first = batcher.instances()[batcher.batches()[0].first_instance];
+    CHECK(first.base_color.a == doctest::Approx(0.8f));
+    CHECK(first.normal_matrix[0].w == 0.5f);
+
+    batcher.build(draws, view_of_everything(), moteur::MeshBatcher::Pass::Main);
+    CHECK(moteur::MeshBatcher::make_instance(draws[0]).normal_matrix[0].w == 0.5f);
+    CHECK(moteur::MeshBatcher::make_instance(draws[3]).normal_matrix[0].w == 0.0f);
+}

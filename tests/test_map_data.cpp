@@ -6,6 +6,7 @@
 #include <string>
 
 #include "moteur/map_data.hpp"
+#include "moteur/map_document.hpp"
 #include "moteur/nav_grid.hpp"
 
 namespace {
@@ -185,8 +186,29 @@ TEST_CASE("Every test map of assets/maps reads and writes back the same") {
         CHECK(map.to_ascii() == rows);
         // Every map has a start on a walkable cell, inside walls.
         const moteur::NavGrid grid(map.tiles(), map.tileset());
-        CHECK(grid.walkable(map.point("depart")));
+        CHECK(grid.walkable(map.point(moteur::kStartPoint)));
         ++maps;
     }
     CHECK(maps >= 8);
+}
+
+TEST_CASE("MapData reads the French start point and directions of the first maps; written back in English") {
+    const char* const text = R"({
+      "version": 2, "tiles": { "sol": {} },
+      "legend": { ".": ["sol"], "@": { "tiles": ["sol"], "point": "depart" } },
+      "rows": [ "...", ".@.", "..." ],
+      "connectors": [ { "name": "porte", "x": 1, "z": 0, "direction": "nord" },
+                      { "name": "cote", "x": 2, "z": 1, "direction": "est" } ]
+    })";
+    const moteur::MapData map = moteur::MapData::parse(text, "maps/ancienne.json");
+    CHECK(map.point(moteur::kStartPoint) == glm::ivec2(1, 1));
+    REQUIRE(map.connectors().size() == 2);
+    CHECK(map.connectors()[0].direction == moteur::MapConnector::Direction::North);
+    CHECK(map.connectors()[1].direction == moteur::MapConnector::Direction::East);
+    const std::string written = moteur::MapDocument::from(map).to_json();
+    CHECK(written.find("\"start\"") != std::string::npos);
+    CHECK(written.find("\"north\"") != std::string::npos);
+    CHECK(written.find("\"east\"") != std::string::npos);
+    CHECK(written.find("depart") == std::string::npos);
+    CHECK(written.find("nord") == std::string::npos);
 }

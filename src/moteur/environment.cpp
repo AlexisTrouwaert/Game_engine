@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <stdexcept>
 
+#include "moteur/jobs.hpp"
 #include "moteur/paths.hpp"
 #include "moteur/renderer.hpp"
 
@@ -72,6 +73,9 @@ glm::vec3 equirect_to_direction(glm::vec2 uv) {
 }
 
 glm::vec3 EnvironmentImage::sample(glm::vec3 direction) const {
+    if (width <= 0 || height <= 0) {
+        return glm::vec3(0.0f);  // an empty image: no light (and no modulo by zero below)
+    }
     const glm::vec2 uv = direction_to_equirect(direction);
     const float fx = uv.x * static_cast<float>(width) - 0.5f;
     const float fy = std::clamp(uv.y * static_cast<float>(height) - 0.5f, 0.0f, static_cast<float>(height - 1));
@@ -192,7 +196,10 @@ std::vector<EnvironmentImage> prefilter_specular(const EnvironmentImage& environ
         // The source level whose texels match this output's size, for the sharpest level.
         const float matching_level = std::max(0.0f, std::log2(static_cast<float>(environment.width) / static_cast<float>(out.width)));
 
-        for (int y = 0; y < out.height; ++y) {
+        // Rows are independent: spread over the job system's threads (milestone 8, part 5), the
+        // same texels as one after the other.
+        jobs().parallel_for(static_cast<std::size_t>(out.height), [&](std::size_t row) {
+            const int y = static_cast<int>(row);
             for (int x = 0; x < out.width; ++x) {
                 const glm::vec3 n = equirect_to_direction({(static_cast<float>(x) + 0.5f) / static_cast<float>(out.width),
                                                            (static_cast<float>(y) + 0.5f) / static_cast<float>(out.height)});
@@ -231,7 +238,7 @@ std::vector<EnvironmentImage> prefilter_specular(const EnvironmentImage& environ
                 }
                 out.at(x, y) = weight > 0.0f ? sum / weight : glm::vec3(0.0f);
             }
-        }
+        }, 4);
         result.push_back(std::move(out));
     }
     return result;

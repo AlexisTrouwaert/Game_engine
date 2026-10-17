@@ -277,3 +277,15 @@ TEST_CASE("Model::replace_in_place refuses another structure and changes nothing
     CHECK(model.textures[0]->width == 10);
     CHECK((model.textures[1] == shared[0]));
 }
+
+TEST_CASE("glTF alpha modes: MASK gives the cutoff (0.5 by default), BLEND and OPAQUE draw opaque") {
+    const moteur::ModelData model = parse(triangle_gltf("", "", "[0]", R"(, "material": 0)",
+        R"(, "materials": [{"alphaMode": "MASK", "alphaCutoff": 0.3}, {"alphaMode": "MASK"}, {"alphaMode": "BLEND"},
+                          {"alphaMode": "OPAQUE", "alphaCutoff": 0.7}, {}])"));
+    REQUIRE(model.materials.size() == 5);
+    CHECK(model.materials[0].alpha_cutoff == doctest::Approx(0.3f));
+    CHECK(model.materials[1].alpha_cutoff == doctest::Approx(0.5f));
+    CHECK(model.materials[2].alpha_cutoff == 0.0f);  // transparency is not drawn yet: opaque, with a warning
+    CHECK(model.materials[3].alpha_cutoff == 0.0f);  // a cutoff only counts in MASK mode
+    CHECK(model.materials[4].alpha_cutoff == 0.0f);
+}

@@ -31,6 +31,13 @@ std::string lower(std::string_view text) {
     return result;
 }
 
+// Where a binding is, for the error messages: "profile 'name', <kind> 'action'".
+std::string binding_place(const std::string& profile, std::string_view kind, const std::string& action) {
+    std::string place = "profile '";
+    place.append(profile).append("', ").append(kind).append(" '").append(action) += '\'';
+    return place;
+}
+
 std::vector<InputSource> parse_sources(const nlohmann::json& list, const std::string& where) {
     if (!list.is_array()) {
         throw std::runtime_error(where + ": a list of sources is expected");
@@ -40,7 +47,9 @@ std::vector<InputSource> parse_sources(const nlohmann::json& list, const std::st
         const std::string text = item.get<std::string>();
         const std::optional<InputSource> source = parse_input_source(text);
         if (!source) {
-            throw std::runtime_error(where + ": unknown source '" + text + "'");
+            std::string message = where;
+            message.append(": unknown source '").append(text) += '\'';
+            throw std::runtime_error(message);
         }
         sources.push_back(*source);
     }
@@ -283,12 +292,12 @@ void Input::parse_profiles(std::string_view json_text, const std::string& source
                 profile.label = body.value("label", std::string());
                 if (body.contains("buttons")) {
                     for (const auto& [action, list] : body.at("buttons").items()) {
-                        profile.buttons[action] = parse_sources(list, "profile '" + name + "', action '" + action + "'");
+                        profile.buttons[action] = parse_sources(list, binding_place(name, "action", action));
                     }
                 }
                 if (body.contains("axes")) {
                     for (const auto& [action, axis] : body.at("axes").items()) {
-                        const std::string where = "profile '" + name + "', axis '" + action + "'";
+                        const std::string where = binding_place(name, "axis", action);
                         AxisBinding binding;
                         binding.up = parse_sources(axis.value("up", nlohmann::json::array()), where);
                         binding.down = parse_sources(axis.value("down", nlohmann::json::array()), where);
@@ -410,6 +419,7 @@ std::string Input::user_bindings_json() const {
 
 std::vector<std::string> Input::profiles() const {
     std::vector<std::string> names;
+    names.reserve(defaults_.size());
     for (const auto& [name, profile] : defaults_) {
         names.push_back(name);
     }
@@ -476,6 +486,207 @@ std::string Input::describe(ActionId action, std::optional<InputDevice> device) 
         }
     }
     return text.empty() ? "(aucune)" : text;
+}
+
+// --- Rebinding
+
+std::vector<InputSource> Input::default_sources(const std::string& name) const {
+    const auto defaults = defaults_.find(profile_);
+    if (defaults != defaults_.end()) {
+        if (const auto found = defaults->second.buttons.find(name); found != defaults->second.buttons.end()) {
+            return found->second;
+        }
+    }
+    return {};
+}
+
+Input::AxisBinding Input::default_axis(const std::string& name) const {
+    const auto defaults = defaults_.find(profile_);
+    if (defaults != defaults_.end()) {
+        if (const auto found = defaults->second.axes.find(name); found != defaults->second.axes.end()) {
+            return found->second;
+        }
+    }
+    return {};
+}
+
+void Input::prune_user_profile() {
+    const auto user = user_.find(profile_);
+    if (user != user_.end() && user->second.buttons.empty() && user->second.axes.empty()) {
+        user_.erase(user);
+    }
+}
+
+namespace {
+
+template <typename Binding>
+auto& axis_direction(Binding& binding, AxisDirection direction) {
+    switch (direction) {
+        case AxisDirection::Up:
+            return binding.up;
+        case AxisDirection::Down:
+            return binding.down;
+        case AxisDirection::Left:
+            return binding.left;
+        default:
+            return binding.right;
+    }
+}
+
+}  // namespace
+
+void Input::set_sources(ActionId action, std::vector<InputSource> sources) {
+    const Action& declared = actions_.at(static_cast<std::size_t>(action));
+    if (declared.axis) {
+        throw std::invalid_argument("Input: '" + declared.name + "' is an axis (set_axis_sources)");
+    }
+    if (sources == default_sources(declared.name)) {
+        if (const auto user = user_.find(profile_); user != user_.end()) {
+            user->second.buttons.erase(declared.name);
+        }
+        prune_user_profile();
+    } else {
+        user_[profile_].buttons[declared.name] = std::move(sources);
+    }
+    resolve();
+}
+
+std::vector<InputSource> Input::axis_sources(ActionId axis, AxisDirection direction) const {
+    const Action& declared = actions_.at(static_cast<std::size_t>(axis));
+    if (!declared.axis) {
+        throw std::invalid_argument("Input: '" + declared.name + "' is a button (sources)");
+    }
+    return axis_direction(bound_axes_.at(static_cast<std::size_t>(axis)), direction);
+}
+
+void Input::set_axis_sources(ActionId axis, AxisDirection direction, std::vector<InputSource> sources) {
+    const Action& declared = actions_.at(static_cast<std::size_t>(axis));
+    if (!declared.axis) {
+        throw std::invalid_argument("Input: '" + declared.name + "' is a button (set_sources)");
+    }
+    AxisBinding binding = bound_axes_.at(static_cast<std::size_t>(axis));
+    axis_direction(binding, direction) = std::move(sources);
+    const AxisBinding defaults = default_axis(declared.name);
+    if (binding.up == defaults.up && binding.down == defaults.down && binding.left == defaults.left &&
+        binding.right == defaults.right && binding.stick == defaults.stick) {
+        if (const auto user = user_.find(profile_); user != user_.end()) {
+            user->second.axes.erase(declared.name);
+        }
+        prune_user_profile();
+    } else {
+        user_[profile_].axes[declared.name] = std::move(binding);
+    }
+    resolve();
+}
+
+bool Input::changed_by_player(ActionId action) const {
+    const Action& declared = actions_.at(static_cast<std::size_t>(action));
+    const auto user = user_.find(profile_);
+    if (user == user_.end()) {
+        return false;
+    }
+    return declared.axis ? user->second.axes.contains(declared.name) : user->second.buttons.contains(declared.name);
+}
+
+void Input::reset_sources(ActionId action) {
+    const Action& declared = actions_.at(static_cast<std::size_t>(action));
+    if (const auto user = user_.find(profile_); user != user_.end()) {
+        user->second.buttons.erase(declared.name);
+        user->second.axes.erase(declared.name);
+    }
+    prune_user_profile();
+    resolve();
+}
+
+void Input::reset_all_sources() {
+    user_.erase(profile_);
+    resolve();
+}
+
+std::vector<ActionId> Input::actions_using(const InputSource& source) const {
+    std::vector<ActionId> found;
+    const auto has = [&source](const std::vector<InputSource>& sources) {
+        return std::find(sources.begin(), sources.end(), source) != sources.end();
+    };
+    for (std::size_t i = 0; i < actions_.size(); ++i) {
+        const AxisBinding& axis = bound_axes_[i];
+        const bool bound = actions_[i].axis ? has(axis.up) || has(axis.down) || has(axis.left) || has(axis.right)
+                                            : has(bound_buttons_[i]);
+        if (bound) {
+            found.push_back(static_cast<ActionId>(i));
+        }
+    }
+    return found;
+}
+
+void Input::begin_capture() {
+    release_all();  // nothing stays held by a source the player is about to rebind
+    captured_.reset();
+    capturing_ = true;
+}
+
+void Input::cancel_capture() {
+    capturing_ = false;
+    captured_.reset();
+}
+
+std::optional<InputSource> Input::take_captured() {
+    std::optional<InputSource> source = captured_;
+    captured_.reset();
+    return source;
+}
+
+bool Input::capture_event(const SDL_Event& event) {
+    std::optional<InputSource> source;
+    switch (event.type) {
+        case SDL_EVENT_KEY_DOWN:
+            last_device_ = InputDevice::KeyboardMouse;
+            if (!event.key.repeat) {
+                source = InputSource{InputSource::Kind::Key, static_cast<int>(event.key.scancode), 0};
+            }
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            last_device_ = InputDevice::KeyboardMouse;
+            source = InputSource{InputSource::Kind::MouseButton, event.button.button, 0};
+            break;
+        case SDL_EVENT_MOUSE_WHEEL: {
+            last_device_ = InputDevice::KeyboardMouse;
+            float y = event.wheel.y;
+            if (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
+                y = -y;
+            }
+            if (y != 0.0f) {
+                source = InputSource{InputSource::Kind::Wheel, 0, y > 0.0f ? 1 : -1};
+            }
+            break;
+        }
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            last_device_ = InputDevice::Gamepad;
+            source = InputSource{InputSource::Kind::GamepadButton, event.gbutton.button, 0};
+            break;
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+            // A stick or trigger pushed past the press point, coming from below it: one direction.
+            const float value = std::clamp(static_cast<float>(event.gaxis.value) / 32767.0f, -1.0f, 1.0f);
+            const float before = gamepad_axes_[event.gaxis.axis];
+            gamepad_axes_[event.gaxis.axis] = value;
+            if (std::abs(value) >= axis_press_threshold && std::abs(before) < axis_press_threshold) {
+                last_device_ = InputDevice::Gamepad;
+                source = InputSource{InputSource::Kind::GamepadAxis, event.gaxis.axis, value > 0.0f ? 1 : -1};
+            }
+            break;
+        }
+        case SDL_EVENT_KEY_UP:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+        case SDL_EVENT_GAMEPAD_BUTTON_UP:
+            break;  // releases (the menu's confirm key that started the capture): taken too
+        default:
+            return false;  // mouse motion, focus, gamepads coming and going: as usual
+    }
+    if (source) {
+        captured_ = source;
+        capturing_ = false;
+    }
+    return true;
 }
 
 void Input::resolve() {
@@ -580,6 +791,9 @@ void Input::process_event(const SDL_Event& event) {
         return;
     }
     if (!enabled_ || replaying_) {
+        return;
+    }
+    if (capturing_ && capture_event(event)) {
         return;
     }
     switch (event.type) {
@@ -727,6 +941,23 @@ void Input::set_frame(const InputFrame& frame) {
     frame_ = frame;
     frame_.buttons.resize(actions_.size());
     frame_.axes.resize(actions_.size());
+}
+
+void Input::stop_replay() {
+    if (!replaying_) {
+        return;
+    }
+    replaying_ = false;
+    // What was held before the replay may have come up meanwhile, unseen: nothing is held now.
+    held_.clear();
+    gamepad_axes_.clear();
+    for (ButtonState& state : frame_.buttons) {
+        state.presses = 0;
+        state.releases = 0;
+    }
+    std::fill(frame_.axes.begin(), frame_.axes.end(), glm::vec2(0.0f));
+    frame_.pointer = glm::vec2(-1.0f);
+    refresh_buttons();  // the buttons the replay held go up
 }
 
 void Input::set_frame(const InputRecording& recording, std::size_t tick) {

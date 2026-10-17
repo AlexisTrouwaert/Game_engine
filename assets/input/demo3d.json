@@ -21,7 +21,10 @@
         "pause": ["key:Escape", "pad:start"],
         "menu_up": ["key:Up", "pad:dpup", "pad:lefty-"],
         "menu_down": ["key:Down", "pad:dpdown", "pad:lefty+"],
-        "menu_confirm": ["key:Return", "key:Keypad Enter", "pad:a"]
+        "menu_confirm": ["key:Return", "key:Keypad Enter", "pad:a"],
+        "menu_click": ["mouse:left"],
+        "menu_left": ["key:Left", "pad:dpleft", "pad:leftx-"],
+        "menu_right": ["key:Right", "pad:dpright", "pad:leftx+"]
       },
       "axes": {
         "move": {"stick": "left"},
@@ -45,7 +48,10 @@
         "pause": ["key:Escape", "pad:start"],
         "menu_up": ["key:Up", "pad:dpup", "pad:lefty-"],
         "menu_down": ["key:Down", "pad:dpdown", "pad:lefty+"],
-        "menu_confirm": ["key:Return", "key:Keypad Enter", "pad:a"]
+        "menu_confirm": ["key:Return", "key:Keypad Enter", "pad:a"],
+        "menu_click": ["mouse:left"],
+        "menu_left": ["key:Left", "pad:dpleft", "pad:leftx-"],
+        "menu_right": ["key:Right", "pad:dpright", "pad:leftx+"]
       },
       "axes": {
         "move": {"up": ["key:W"], "down": ["key:S"], "left": ["key:A"], "right": ["key:D"], "stick": "left"},

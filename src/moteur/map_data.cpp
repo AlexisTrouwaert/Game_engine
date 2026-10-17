@@ -1,5 +1,7 @@
 #include "moteur/map_data.hpp"
 
+#include <SDL3/SDL.h>
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -29,11 +31,21 @@ MapData MapData::parse(std::string_view json_text, const std::string& source) {
     MapData map;
     map.source_ = source;
     try {
-        const int version = json.is_object() ? json.value("version", 0) : 0;
+        // An integer, not a number truncated to one ("version": 1.5 is not version 1).
+        const auto version_value = json.find("version");  // end() for a JSON that is not an object
+        const std::int64_t version =
+            version_value != json.end() && version_value->is_number_integer() ? version_value->get<std::int64_t>() : 0;
         if (version < 1 || version > kVersion) {
             fail(source, "expected an object with \"version\": 1 or " + std::to_string(kVersion));
         }
-        map.version_ = version;
+        map.version_ = static_cast<int>(version);
+        if (version < 2) {  // what version 2 added is refused, not read or ignored, in a version 1 file
+            for (const char* key : {"chunk", "objects", "connectors"}) {
+                if (json.contains(key)) {
+                    fail(source, std::string("\"") + key + "\" needs \"version\": 2");
+                }
+            }
+        }
         map.chunk_ = json.value("chunk", false);
 
         map.description_ = json.value("description", std::string());
@@ -51,7 +63,8 @@ MapData MapData::parse(std::string_view json_text, const std::string& source) {
             map.names_.push_back(name);
         }
 
-        // Legend.
+        // Legend (instead of the default map's single hole).
+        map.symbols_.clear();
         std::size_t layers = 1;
         int by_character[256];
         std::fill(std::begin(by_character), std::end(by_character), -1);
@@ -64,6 +77,14 @@ MapData MapData::parse(std::string_view json_text, const std::string& source) {
             const nlohmann::json& tiles = value.is_object() ? value.at("tiles") : value;
             if (value.is_object()) {
                 symbol.point = value.value("point", std::string());
+                if (symbol.point == "depart") {  // the start point's French name, until 2026-10-17
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Map '%s': point 'depart' is deprecated, read as '%s'",
+                                source.c_str(), kStartPoint);
+                    symbol.point = kStartPoint;
+                }
+            }
+            if (!tiles.is_array()) {  // a single name is not a list: refused rather than guessed
+                fail(source, "legend " + quoted(symbol.character) + ": the tiles must be a list of names");
             }
             for (const nlohmann::json& tile : tiles) {
                 const std::string name = tile.get<std::string>();
@@ -106,7 +127,7 @@ MapData MapData::parse(std::string_view json_text, const std::string& source) {
         const auto width = static_cast<int>(rows[0].size());
         const auto height = static_cast<int>(rows.size());
         map.tiles_ = TileMap(width, height, static_cast<int>(layers));
-        map.cell_symbols_.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+        map.cell_symbols_.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0);
         for (int j = 0; j < height; ++j) {
             const std::string& row = rows[static_cast<std::size_t>(j)];
             if (static_cast<int>(row.size()) != width) {
@@ -127,10 +148,11 @@ MapData MapData::parse(std::string_view json_text, const std::string& source) {
                 if (!symbol.point.empty()) {
                     map.points_[symbol.point].push_back({i, j});
                 }
-                map.cell_symbols_[static_cast<std::size_t>(j * width + i)] = static_cast<std::uint8_t>(found);
+                map.cell_symbols_[static_cast<std::size_t>(j) * static_cast<std::size_t>(width) + static_cast<std::size_t>(i)] =
+                    static_cast<std::uint8_t>(found);
             }
         }
-        // Version 2: objects and connectors.
+        // Version 2 (refused above in a version 1 file): objects and connectors.
         if (json.contains("objects")) {
             for (const nlohmann::json& item : json.at("objects")) {
                 MapObject object;
@@ -160,11 +182,12 @@ MapData MapData::parse(std::string_view json_text, const std::string& source) {
                 connector.name = item.at("name").get<std::string>();
                 connector.kind = item.value("kind", std::string());
                 connector.cell = {item.at("x").get<int>(), item.at("z").get<int>()};
-                const std::string direction = item.value("direction", std::string("nord"));
-                if (direction == "nord") connector.direction = MapConnector::Direction::North;
-                else if (direction == "est") connector.direction = MapConnector::Direction::East;
-                else if (direction == "sud") connector.direction = MapConnector::Direction::South;
-                else if (direction == "ouest") connector.direction = MapConnector::Direction::West;
+                // The French names of the first files (until 2026-10-17) are still read.
+                const std::string direction = item.value("direction", std::string("north"));
+                if (direction == "north" || direction == "nord") connector.direction = MapConnector::Direction::North;
+                else if (direction == "east" || direction == "est") connector.direction = MapConnector::Direction::East;
+                else if (direction == "south" || direction == "sud") connector.direction = MapConnector::Direction::South;
+                else if (direction == "west" || direction == "ouest") connector.direction = MapConnector::Direction::West;
                 else fail(source, "connector \"" + connector.name + "\": unknown direction \"" + direction + "\"");
                 if (!map.tiles_.contains(connector.cell)) {
                     fail(source, "connector \"" + connector.name + "\" outside the map");
@@ -205,10 +228,11 @@ glm::ivec2 MapData::point(const std::string& name) const {
 std::string MapData::to_ascii() const {
     std::string text;
     const int width = tiles_.width();
-    text.reserve(static_cast<std::size_t>((width + 1) * tiles_.height()));
+    text.reserve((static_cast<std::size_t>(width) + 1) * static_cast<std::size_t>(tiles_.height()));
     for (int j = 0; j < tiles_.height(); ++j) {
         for (int i = 0; i < width; ++i) {
-            text += symbols_[cell_symbols_[static_cast<std::size_t>(j * width + i)]].character;
+            text += symbols_[cell_symbols_[static_cast<std::size_t>(j) * static_cast<std::size_t>(width) +
+                                           static_cast<std::size_t>(i)]].character;
         }
         text += '\n';
     }

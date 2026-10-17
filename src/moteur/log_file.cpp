@@ -1,5 +1,7 @@
 #include "moteur/log_file.hpp"
 
+#include "moteur/crash.hpp"
+
 #include <SDL3/SDL.h>
 
 #include <filesystem>
@@ -32,9 +34,9 @@ const char* level_name(int priority) {
         case SDL_LOG_PRIORITY_TRACE:
         case SDL_LOG_PRIORITY_VERBOSE:
         case SDL_LOG_PRIORITY_DEBUG: return "debug";
-        case SDL_LOG_PRIORITY_WARN: return "avert";
-        case SDL_LOG_PRIORITY_ERROR: return "erreur";
-        case SDL_LOG_PRIORITY_CRITICAL: return "critique";
+        case SDL_LOG_PRIORITY_WARN: return "warn";
+        case SDL_LOG_PRIORITY_ERROR: return "error";
+        case SDL_LOG_PRIORITY_CRITICAL: return "critical";
         default: return "info";
     }
 }
@@ -59,8 +61,8 @@ std::string LogFile::format_line(const char* level, const char* message) {
 bool LogFile::open(const std::string& directory, std::size_t max_bytes) {
     close();
     max_bytes_ = max_bytes;
-    path_ = directory + "journal.txt";
-    old_path_ = directory + "journal.1.txt";
+    path_ = directory + "log.txt";
+    old_path_ = directory + "log.1.txt";
     std::error_code error;
     if (std::filesystem::exists(utf8_path(path_), error)) {
         std::filesystem::rename(utf8_path(path_), utf8_path(old_path_), error);  // the previous run's
@@ -116,8 +118,11 @@ void LogFile::write(int category, int priority, const char* message) {
                                                            static_cast<SDL_LogPriority>(priority), message);
     }
     std::lock_guard lock(mutex_);
+    // Formatted once: the crash report and the file show the same line, timestamp included.
+    std::string line = format_line(level_name(priority), message);
+    record_crash_log_line(line.c_str());  // for a crash report
     if (file_ != nullptr) {
-        const std::string line = format_line(level_name(priority), message) + "\n";
+        line += '\n';
         std::fwrite(line.data(), 1, line.size(), file_);
         std::fflush(file_);
         bytes_ += line.size();

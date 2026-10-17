@@ -50,12 +50,14 @@ ParticleCurve<T> curve_of(const nlohmann::json& json, const char* key, T fallbac
         return curve;
     }
     const nlohmann::json& value = json.at(key);
-    if (!value.is_array() || value.empty()) {
-        fail(source, std::string("\"") + key + "\" needs keys [[time, value], ...]");
-    }
-    if (!value[0].is_array() || (value[0].size() == 2 && !value[0][0].is_number())) {
-        curve.times = {0.0f};  // a single value
-        curve.values = {read(value)};
+    if (!value.is_array() || value.empty() || !value[0].is_array()) {
+        // A single value, written as a key's value (a number for size, 4 numbers for a color): a constant.
+        try {
+            curve.values = {read(value)};
+        } catch (const nlohmann::json::exception&) {
+            fail(source, std::string("\"") + key + "\" needs a single value or keys [[time, value], ...]");
+        }
+        curve.times = {0.0f};
         return curve;
     }
     if (value[0].size() == 2 && value[0][1].is_number() && !std::is_same_v<T, float>) {
@@ -215,6 +217,9 @@ const ParticleSystem::Effect* ParticleSystem::find(EffectId id) const {
 }
 
 EffectId ParticleSystem::play(const Asset<ParticleEffect>& data, glm::vec3 position, float scale) {
+    if (!data) {
+        return kNoEffect;  // an empty handle: nothing to play (and no slot taken)
+    }
     std::size_t slot = effects_.size();
     for (std::size_t i = 0; i < effects_.size(); ++i) {
         if (effects_[i].id == kNoEffect) {
@@ -243,6 +248,12 @@ EffectId ParticleSystem::play(const Asset<ParticleEffect>& data, glm::vec3 posit
 void ParticleSystem::move(EffectId id, glm::vec3 position) {
     if (Effect* effect = find(id)) {
         effect->position = position;
+    }
+}
+
+void ParticleSystem::set_ground(EffectId id, float height) {
+    if (Effect* effect = find(id)) {
+        effect->ground = height;
     }
 }
 
@@ -326,7 +337,7 @@ void ParticleSystem::emit(Effect& effect, std::uint32_t index, std::size_t emitt
 }
 
 void ParticleSystem::update(float seconds) {
-    MOTEUR_PROFILE("particules : simulation");
+    MOTEUR_PROFILE("particles: simulate");
     const float dt = std::clamp(seconds, 0.0f, 0.1f);
     // Emission.
     for (std::uint32_t index = 0; index < effects_.size(); ++index) {
@@ -419,7 +430,7 @@ const Texture* ParticleSystem::texture(const std::string& path, Assets& assets) 
 }
 
 void ParticleSystem::draw(BillboardRenderer& billboards, Assets& assets, const Frustum* view) {
-    MOTEUR_PROFILE("particules : dessin");
+    MOTEUR_PROFILE("particles: draw");
     std::vector<std::uint8_t> shown(effects_.size(), 1);
     if (view != nullptr) {
         for (std::size_t i = 0; i < effects_.size(); ++i) {
@@ -454,7 +465,10 @@ void ParticleSystem::draw(BillboardRenderer& billboards, Assets& assets, const F
             frame = std::min(d.frames.x * d.frames.y - 1, static_cast<int>(t * static_cast<float>(d.frames.x * d.frames.y)));
         }
         const glm::vec2 cell(1.0f / static_cast<float>(d.frames.x), 1.0f / static_cast<float>(d.frames.y));
-        const glm::vec2 corner(static_cast<float>(frame % d.frames.x) * cell.x, static_cast<float>(frame / d.frames.x) * cell.y);
+        // The frame's column and row in the sheet: integer division on purpose.
+        const int column = frame % d.frames.x;
+        const int row = frame / d.frames.x;
+        const glm::vec2 corner(static_cast<float>(column) * cell.x, static_cast<float>(row) * cell.y);
         options.uv_rect = glm::vec4(corner, corner + cell);
         const float size = d.size.at(t) * p.scale;
         if (size <= 0.0f || (options.color.a <= 0.0f && !d.additive)) {
@@ -462,7 +476,8 @@ void ParticleSystem::draw(BillboardRenderer& billboards, Assets& assets, const F
         }
         glm::vec3 position = p.position;
         if (d.facing == BillboardFacing::Flat) {
-            position.y = std::max(position.y, 0.01f);
+            // Kept just above the ground under the effect, never through it.
+            position.y = std::max(position.y, effects_[p.effect].ground + 0.01f);
         }
         billboards.draw(*texture(d.texture, assets), position, glm::vec2(size), options);
     }

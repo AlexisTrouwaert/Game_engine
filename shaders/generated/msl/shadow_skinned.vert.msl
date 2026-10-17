@@ -32,17 +32,17 @@ struct main0_in
 vertex main0_out main0(main0_in in [[stage_in]], constant type_Frame& Frame [[buffer(0)]], const device type_StructuredBuffer_v4float& palettes [[buffer(1)]])
 {
     main0_out out = {};
-    uint _50 = uint(in.in_var_TEXCOORD4.w);
-    uint _54 = (_50 + in.in_var_TEXCOORD5.x) * 3u;
-    float3x4 _66 = float3x4(palettes._m0[_54], palettes._m0[_54 + 1u], palettes._m0[_54 + 2u]) * in.in_var_TEXCOORD6.x;
-    uint _70 = (_50 + in.in_var_TEXCOORD5.y) * 3u;
-    float3x4 _82 = float3x4(palettes._m0[_70], palettes._m0[_70 + 1u], palettes._m0[_70 + 2u]) * in.in_var_TEXCOORD6.y;
-    uint _95 = (_50 + in.in_var_TEXCOORD5.z) * 3u;
-    float3x4 _107 = float3x4(palettes._m0[_95], palettes._m0[_95 + 1u], palettes._m0[_95 + 2u]) * in.in_var_TEXCOORD6.z;
-    uint _117 = (_50 + in.in_var_TEXCOORD5.w) * 3u;
-    float3x4 _129 = float3x4(palettes._m0[_117], palettes._m0[_117 + 1u], palettes._m0[_117 + 2u]) * in.in_var_TEXCOORD6.w;
-    float4 _145 = float4(float4(in.in_var_TEXCOORD0, 1.0) * float3x4(((_66[0] + _82[0]) + _107[0]) + _129[0], ((_66[1] + _82[1]) + _107[1]) + _129[1], ((_66[2] + _82[2]) + _107[2]) + _129[2]), 1.0);
-    out.gl_Position = Frame.light_view_projection * float4(dot(in.in_var_TEXCOORD1, _145), dot(in.in_var_TEXCOORD2, _145), dot(in.in_var_TEXCOORD3, _145), 1.0);
+    uint _52 = uint(in.in_var_TEXCOORD4.w);
+    uint _56 = (_52 + in.in_var_TEXCOORD5.x) * 3u;
+    float3x4 _68 = float3x4(palettes._m0[_56], palettes._m0[_56 + 1u], palettes._m0[_56 + 2u]) * in.in_var_TEXCOORD6.x;
+    uint _72 = (_52 + in.in_var_TEXCOORD5.y) * 3u;
+    float3x4 _84 = float3x4(palettes._m0[_72], palettes._m0[_72 + 1u], palettes._m0[_72 + 2u]) * in.in_var_TEXCOORD6.y;
+    uint _97 = (_52 + in.in_var_TEXCOORD5.z) * 3u;
+    float3x4 _109 = float3x4(palettes._m0[_97], palettes._m0[_97 + 1u], palettes._m0[_97 + 2u]) * in.in_var_TEXCOORD6.z;
+    uint _119 = (_52 + in.in_var_TEXCOORD5.w) * 3u;
+    float3x4 _131 = float3x4(palettes._m0[_119], palettes._m0[_119 + 1u], palettes._m0[_119 + 2u]) * in.in_var_TEXCOORD6.w;
+    float4 _147 = float4(float4(in.in_var_TEXCOORD0, 1.0) * float3x4(((_68[0] + _84[0]) + _109[0]) + _131[0], ((_68[1] + _84[1]) + _109[1]) + _131[1], ((_68[2] + _84[2]) + _109[2]) + _131[2]), 1.0);
+    out.gl_Position = Frame.light_view_projection * float4(dot(in.in_var_TEXCOORD1, _147), dot(in.in_var_TEXCOORD2, _147), dot(in.in_var_TEXCOORD3, _147), 1.0);
     return out;
 }
 
