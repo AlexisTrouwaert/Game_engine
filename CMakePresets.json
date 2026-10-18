@@ -100,6 +100,14 @@
       }
     },
     {
+      "name": "macos-tsan",
+      "displayName": "macOS ThreadSanitizer (analyses des tâches)",
+      "inherits": "macos-release",
+      "cacheVariables": {
+        "MOTEUR_TSAN": "ON"
+      }
+    },
+    {
       "name": "windows-fuzz",
       "displayName": "Windows fuzzing (libFuzzer + ASan)",
       "inherits": "windows-release",
@@ -156,6 +164,10 @@
     {
       "name": "macos-asan",
       "configurePreset": "macos-asan"
+    },
+    {
+      "name": "macos-tsan",
+      "configurePreset": "macos-tsan"
     },
     {
       "name": "windows-fuzz",

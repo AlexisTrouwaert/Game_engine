@@ -6,6 +6,7 @@ find_package(glm CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(mikktspace CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(recastnavigation CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_path(STB_INCLUDE_DIRS "stb_image.h" REQUIRED)
@@ -40,6 +41,7 @@ add_library(moteur STATIC
     archive.cpp
     assert.cpp
     asset_cache.cpp
+    asset_registry.cpp
     assets.cpp
     atlas_builder.cpp
     audio.cpp
@@ -48,8 +50,11 @@ add_library(moteur STATIC
     billboard_renderer.cpp
     camera3d.cpp
     cbor_check.cpp
+    character_controller.cpp
     collision.cpp
+    collision_scene.cpp
     color.cpp
+    component_types.cpp
     crash.cpp
     credits.cpp
     console.cpp
@@ -60,30 +65,43 @@ add_library(moteur STATIC
     debug_tools.cpp
     debug_ui.cpp
     display.cpp
+    document.cpp
     environment.cpp
     fixed_timestep.cpp
     input.cpp
     jobs.cpp
+    level.cpp
+    level_edit.cpp
+    level_bake.cpp
+    level_streamer.cpp
+    level_collision.cpp
     file_io.cpp
     font.cpp
     frame_stats.cpp
     geometry_pool.cpp
+    gizmo.cpp
     image.cpp
     map_data.cpp
     map_document.cpp
     ktx_texture.cpp
     mesh.cpp
     mesh_batcher.cpp
+    mesh_optimize.cpp
     mesh_renderer.cpp
     log_file.cpp
     model.cpp
+    model_import.cpp
     movement.cpp
     nav_grid.cpp
+    navigation.cpp
     particles.cpp
     paths.cpp
     profiler.cpp
     pathfinding.cpp
+    picking.cpp
+    prefab.cpp
     process_memory.cpp
+    reflection.cpp
     renderer.cpp
     save_file.cpp
     screenshot.cpp
@@ -97,6 +115,7 @@ add_library(moteur STATIC
     state_stack.cpp
     text_layout.cpp
     texture_atlas.cpp
+    thumbnails.cpp
     tone_mapper.cpp
     tilemap.cpp
     utf8.cpp
@@ -118,6 +137,11 @@ add_custom_target(moteur_build_info
     VERBATIM)
 target_sources(moteur PRIVATE "${_build_info}")
 add_dependencies(moteur moteur_build_info)
+if(NOT MOTEUR_SHIPPING)
+    # Development: the engine's own assets (assets_moteur/) get their .meta there, as a game's in its
+    # source folder (Application, milestone 9 part 4).
+    target_compile_definitions(moteur PRIVATE MOTEUR_ENGINE_ASSETS_DIR="${MOTEUR_ROOT}/assets_moteur/")
+endif()
 target_compile_definitions(moteur PRIVATE MOTEUR_VERSION="${PROJECT_VERSION}"
                            MOTEUR_BUILD_TYPE="$<IF:$<CONFIG:>,${CMAKE_BUILD_TYPE},$<CONFIG>>")
 
@@ -125,13 +149,19 @@ target_compile_definitions(moteur PRIVATE MOTEUR_VERSION="${PROJECT_VERSION}"
 target_include_directories(moteur PUBLIC include PRIVATE private)
 target_compile_features(moteur PUBLIC cxx_std_20)
 if(MSVC)
-    target_compile_options(moteur PUBLIC /utf-8)  # the games' sources too (see cmake/Warnings.cmake)
+    # /utf-8: the games' sources too (see cmake/Warnings.cmake). /Zc:preprocessor: the standard
+    # preprocessor (__VA_OPT__), which the reflection macros of reflection.hpp need in the games too.
+    target_compile_options(moteur PUBLIC /utf-8 /Zc:preprocessor)
 endif()
 target_include_directories(moteur SYSTEM PRIVATE ${STB_INCLUDE_DIRS} ${CGLTF_INCLUDE_DIRS})
 # nlohmann/json is public: the data tables (data_table.hpp) hand JSON rows to the game's readers.
 target_link_libraries(moteur PUBLIC SDL3::SDL3 glm::glm EnTT::EnTT nlohmann_json::nlohmann_json
                       PRIVATE Threads::Threads zstd::libzstd mikktspace::mikktspace KTX::ktx moteur_miniaudio
-                              ozz::animation_offline ozz::animation)
+                              ozz::animation_offline ozz::animation
+                              RecastNavigation::Recast RecastNavigation::Detour RecastNavigation::DetourCrowd)
+# glm's conversions between vector sizes are explicit (milestone 9, part 5): `vec2 v = some_vec3`
+# silently took (x, y) where (x, z) was meant; it must now be written out. Public: the games too.
+target_compile_definitions(moteur PUBLIC GLM_FORCE_EXPLICIT_CTOR)
 if(MOTEUR_SHIPPING)
     # The shipped game (milestone 8, part 6): no Dear ImGui (debug interface and tools), no efsw
     # (hot reload), no profiler zones (macros empty). Their code is not compiled at all.
@@ -157,7 +187,7 @@ moteur_enable_warnings(moteur)
 
 # The license texts every program of the engine carries (moteur_add_game); keep in step with
 # assets_moteur/credits_moteur.json.
-set(_licenses sdl3 glm stb nlohmann-json cgltf mikktspace entt ktx miniaudio ozz-animation zstd)
+set(_licenses sdl3 glm stb nlohmann-json cgltf mikktspace entt ktx miniaudio ozz-animation zstd recastnavigation)
 if(NOT MOTEUR_SHIPPING)  # development tools, not in the shipped game
     list(APPEND _licenses imgui efsw)
 endif()

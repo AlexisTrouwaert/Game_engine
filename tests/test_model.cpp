@@ -227,9 +227,13 @@ moteur::Model fake_model(std::uint32_t index_count, int width, const std::vector
     owned->width = width;
     model.textures.push_back(owned);
     model.textures.insert(model.textures.end(), shared.begin(), shared.end());
+    model.texture_owned.assign(model.textures.size(), false);
+    model.texture_owned[0] = true;
     moteur::Material material;
-    material.base_color_texture = owned.get();
-    material.normal_texture = shared.empty() ? nullptr : shared[0].get();
+    material.base_color_texture = moteur::Asset<moteur::Texture>{owned};
+    if (!shared.empty()) {
+        material.normal_texture = moteur::Asset<moteur::Texture>{shared[0]};
+    }
     material.roughness = static_cast<float>(width) / 100.0f;
     model.materials.push_back(material);
     moteur::Model::Part part;
@@ -254,8 +258,8 @@ TEST_CASE("Model::replace_in_place keeps every object users point to") {
     CHECK(model.parts[0].mesh.index_count == 6);
     CHECK(model.textures[0].get() == owned);
     CHECK(owned->width == 20);                                // new pixels, same texture
-    CHECK(model.materials[0].base_color_texture == owned);    // not the fresh model's texture
-    CHECK(model.materials[0].normal_texture == shared[0].get());
+    CHECK(model.materials[0].base_color_texture.handle().get() == owned);  // not the fresh model's texture
+    CHECK(model.materials[0].normal_texture.handle().get() == shared[0].get());
     CHECK(model.materials[0].roughness == doctest::Approx(0.2f));
     CHECK(model.triangle_count == 2);
 }

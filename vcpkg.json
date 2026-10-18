@@ -15,6 +15,7 @@
     "miniaudio",
     "ozz-animation",
     "zstd",
+    "recastnavigation",
     {
       "name": "ktx",
       "features": ["tools"]

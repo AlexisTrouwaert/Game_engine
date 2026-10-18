@@ -1,5 +1,5 @@
 # One fuzzing program per file reader (milestone 8, part 8); built with MOTEUR_FUZZ (preset windows-fuzz).
-set(_fuzz_targets map effect animation save ktx2 gltf table bindings image archive)
+set(_fuzz_targets map effect animation save ktx2 gltf table bindings image archive model registry document prefab)
 set(_index 1)
 foreach(name IN LISTS _fuzz_targets)
     add_executable(fuzz_${name} fuzz.cpp)

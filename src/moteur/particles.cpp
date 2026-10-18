@@ -1,5 +1,6 @@
 #include "moteur/particles.hpp"
 
+#include "moteur/document.hpp"
 #include "moteur/profiler.hpp"
 
 #include <nlohmann/json.hpp>
@@ -105,9 +106,9 @@ template struct ParticleCurve<glm::vec4>;
 ParticleEffect ParticleEffect::parse(std::string_view json_text, const std::string& source) {
     nlohmann::json json;
     try {
-        json = nlohmann::json::parse(json_text);
-    } catch (const nlohmann::json::exception& e) {
-        fail(source, std::string("invalid JSON: ") + e.what());
+        json = parse_document(json_text);
+    } catch (const std::runtime_error& e) {
+        fail(source, e.what());
     }
     ParticleEffect effect;
     effect.source_ = source;

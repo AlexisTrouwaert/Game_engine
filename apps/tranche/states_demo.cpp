@@ -1012,6 +1012,7 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo, std::shared_pt
         moteur::Asset<moteur::Font> font;
         moteur::Asset<moteur::Model> barrel;
         std::vector<moteur::Asset<moteur::Model>> decor;  // the ARPG's cobblestones and street lamp
+        std::vector<moteur::Asset<moteur::Prefab>> prefabs;  // the ARPG's street lamp
         std::vector<moteur::Asset<moteur::Model>> characters;
         std::vector<moteur::Asset<moteur::Skeleton>> skeletons;
         std::vector<moteur::Asset<moteur::ClipLibrary>> clips;
@@ -1030,10 +1031,13 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo, std::shared_pt
              if (assets.exists(Demo3D::kBarrel)) {
                  assets.prefetch_model(Demo3D::kBarrel);
              }
-             for (const char* path : {Demo3D::kPavingA, Demo3D::kPavingB, Demo3D::kStreetLamp}) {
+             for (const char* path : {Demo3D::kPavingA, Demo3D::kPavingB}) {
                  if (assets.exists(path)) {
                      assets.prefetch_model(path);
                  }
+             }
+             if (assets.exists(Demo3D::kStreetLamp)) {
+                 assets.prefetch_prefab(Demo3D::kStreetLamp);
              }
              if (Demo3D::characters_available(assets)) {
                  for (const char* path : {Demo3D::kKnight, Demo3D::kSkeletons[0], Demo3D::kSkeletons[1]}) {
@@ -1061,10 +1065,13 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo, std::shared_pt
          }},
         {"Pavés et lampadaires",
          [&assets, held] {
-             for (const char* path : {Demo3D::kPavingA, Demo3D::kPavingB, Demo3D::kStreetLamp}) {
+             for (const char* path : {Demo3D::kPavingA, Demo3D::kPavingB}) {
                  if (assets.exists(path)) {
                      held->decor.push_back(assets.model(path));
                  }
+             }
+             if (assets.exists(Demo3D::kStreetLamp)) {
+                 held->prefabs.push_back(assets.prefab(Demo3D::kStreetLamp));
              }
          }},
         {"Personnages animés",

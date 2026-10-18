@@ -17,6 +17,10 @@
 #include "moteur/particles.hpp"
 #include "moteur/renderer.hpp"
 #include "moteur/skeleton.hpp"
+#include "moteur/asset_registry.hpp"
+#include "moteur/model_import.hpp"
+#include "moteur/prefab.hpp"
+#include "moteur/reflection_io.hpp"
 #include "moteur/sound.hpp"
 #include "moteur/texture_atlas.hpp"
 
@@ -24,7 +28,7 @@ namespace moteur {
 
 /// The kinds of asset the manager caches, in the order of Assets::stats() and Assets::infos().
 enum class AssetType : std::size_t {
-    Texture, Model, Environment, Font, Atlas, Sound, Music, Skeleton, Clips, AnimationSet, Map, Effect,
+    Texture, Model, Environment, Font, Atlas, Sound, Music, Skeleton, Clips, AnimationSet, Map, Effect, Prefab,
     Count
 };
 
@@ -87,7 +91,11 @@ public:
     /// with other settings is another texture.
     Asset<Texture> texture(std::string_view path, const TextureSettings& settings = {});
     /// A glTF model (.gltf or .glb), with its meshes, materials and textures; its image files go
-    /// through texture(), so models sharing an image share its texture.
+    /// through texture(), so models sharing an image share its texture. Imported (milestone 9,
+    /// part 4: levels of detail, triangle and vertex orders, its embedded images in KTX2; settings
+    /// from its `.meta`, see ModelImportSettings): its prepared form is kept in the import cache
+    /// (`<cache><path>.mmdl`, see set_import_cache()) and used while its sources do not change; the
+    /// shipped game has only that form, in its archives.
     Asset<Model> model(std::string_view path);
     Asset<Environment> environment(std::string_view path);  ///< an equirectangular .hdr
     /// A TrueType font rasterized at `pixel_height` pixels: each size is a font of its own.
@@ -115,6 +123,65 @@ public:
     /// A particle effect (a .json, see ParticleEffect). Throws if it cannot be read or is not valid.
     /// Reloaded in place: running effects take the new values.
     Asset<ParticleEffect> particle_effect(std::string_view path);
+    /// A prefab (a `.prefab.json`, see Prefab), its bases and nested prefabs loaded through this
+    /// manager, its asset fields (models...) loaded and held. Throws if it cannot be read or is not
+    /// valid (with every problem), or for a cycle of prefabs. Reloaded with the files it is made from
+    /// (its own, its bases', its nested prefabs'): what is already instantiated keeps its entities.
+    Asset<Prefab> prefab(std::string_view path);
+
+    /// Imports every model of `registry` whose prepared form in `cache` (see set_import_cache(); `root`
+    /// is the program's assets folder, both ending with a separator) is missing or out of date, in parallel on
+    /// the job system, without a GPU: what a project's opening does in an editor, so that the first
+    /// run does not import while it plays (the checks run it before their captures). Returns one line
+    /// per model imported or failed, and fills `failures`. Blocks until done. Development only (the
+    /// shipped game has its prepared forms in its archives).
+    static std::vector<std::string> import_all(const std::string& root, const std::string& cache, const AssetRegistry& registry,
+                                               std::size_t& failures);
+
+    /// Where imported models keep their prepared form (ending with a separator): by default the
+    /// hidden folder `.imported/` of the assets, where the shipped game's archives have them. The
+    /// Application moves it next to the sources in development (`.imported/` beside the folder of
+    /// ApplicationConfig::assets_source_directory), shared by every build of the program.
+    void set_import_cache(std::string folder) { import_cache_ = std::move(folder); }
+    /// See set_import_cache().
+    const std::string& import_cache() const { return import_cache_; }
+
+    /// The import settings of the model `key` (normalized), from its `.meta` (defaults without one;
+    /// a wrong setting is logged and keeps its default).
+    ModelImportSettings model_import_settings(const std::string& key) const;
+
+    /// The identities of the assets (milestone 9, part 4): built by the Application at start-up
+    /// (scanned from the asset folders and their `.meta` in development, the frozen registry of the
+    /// archives in the shipped game).
+    ///@{
+    AssetRegistry& registry() { return registry_; }
+    const AssetRegistry& registry() const { return registry_; }
+    ///@}
+    /// The asset key of `id` through the registry; throws std::runtime_error for an unknown one.
+    std::string key_of(const AssetId& id) const;
+    /// The key a reference to an asset designates (see the reflection's asset values: `{"id": ...,
+    /// "path": ...}`, or a bare path): the identifier's when the registry knows it, else the path
+    /// written next to it (with a log: the asset was moved without its `.meta`, or is not
+    /// identified yet). Throws std::runtime_error when neither gives one.
+    std::string resolve_reference(const nlohmann::json& value) const;
+    /// How a reference to the asset `key` is written: `{"id": "<uuid>", "path": "<key>"}` when the
+    /// registry knows it, else the bare path.
+    nlohmann::json reference_to(const std::string& key) const;
+
+    /// For the reflection (reflection_io.hpp): loads into `handle` (an Asset<T> of `type`) the asset
+    /// a reference designates (resolve_reference()); false with `problem` for a value that names no
+    /// asset or a type the manager does not load (textures load as colour textures: sRGB, mipmaps).
+    /// `null` or "" gives an empty handle.
+    bool load_reflected(const TypeInfo& type, const nlohmann::json& value, void* handle, std::string& problem);
+    /// The reference to the asset `handle` holds (an Asset<T> of `type`), as reference_to() writes
+    /// it; null for an empty handle or an asset the manager did not load (one made by the game).
+    nlohmann::json key_of_reflected(const TypeInfo& type, const void* handle) const;
+    /// ReadOptions with the fields `flags` and the asset fields loaded by this manager.
+    ReadOptions read_options(std::uint32_t flags);
+    /// WriteOptions with the fields `flags` and the asset fields written as their paths.
+    WriteOptions write_options(std::uint32_t flags) const;
+    /// What Prefab::parse() needs to load through this manager.
+    Prefab::Context prefab_context();
 
     /// Loading in the background (milestone 8, part 5): starts reading and decoding the file on the
     /// job system's threads (see jobs(); no GPU, no cache), and returns at once. The next call of
@@ -130,6 +197,10 @@ public:
     void prefetch_skeleton(std::string_view path);
     void prefetch_clips(std::string_view path);
     void prefetch_sound(std::string_view path);
+    /// A prefab's models (and those of its bases and nested prefabs), found by reading its file
+    /// now (small JSON) and prefetched as prefetch_model() does; the prefab itself is read by
+    /// prefab() afterwards. A file that cannot be read is left to prefab() to report.
+    void prefetch_prefab(std::string_view path);
     ///@}
     /// Prefetched files still being decoded: 0 once every later call is fast.
     std::size_t prefetching() const;
@@ -140,7 +211,8 @@ public:
     /// Checks nothing.
     std::string file_path(std::string_view path) const;
     /// Whether the asset's file is there, in the mounted archives or on disk (for optional test
-    /// assets, which a scene does without rather than showing a placeholder). Does not load it.
+    /// assets, which a scene does without rather than showing a placeholder), or, for a model, its
+    /// prepared form (the shipped game). Does not load it.
     bool exists(std::string_view path) const;
     /// Why the model was replaced by the placeholder; empty if it loaded (or was never asked for).
     std::string model_error(std::string_view path) const;
@@ -158,6 +230,10 @@ public:
     /// watched. Always false in the shipping configuration (MOTEUR_SHIPPING), which has no hot
     /// reload. Application calls it for ApplicationConfig::assets_source_directory.
     bool enable_hot_reload(const std::string& source_directory);
+    /// Also watches `folder`, an asset folder mounted in place (mount_asset_folder()): its changed
+    /// files are reloaded without being copied. False, with a log, if it cannot be watched; always
+    /// false in the shipping configuration.
+    bool watch_mounted_folder(const std::string& folder);
     /// Whether enable_hot_reload() succeeded: changes of the sources are being watched.
     bool hot_reload() const { return watcher_ != nullptr; }
     /// Applies the changes seen since the last call (a file is taken once it has not changed for a
@@ -212,7 +288,12 @@ private:
     AssetCache<AnimationSet> animation_sets_;
     AssetCache<MapData> maps_;
     AssetCache<ParticleEffect> effects_;
+    AssetCache<Prefab> prefabs_;
+    std::vector<std::string> prefabs_loading_;  ///< the prefabs being loaded now, to refuse a cycle
     std::unique_ptr<Watcher> watcher_;
+    std::vector<std::unique_ptr<Watcher>> mounted_watchers_;  ///< mounted asset folders, reloaded in place
+    AssetRegistry registry_;
+    std::string import_cache_;  ///< see set_import_cache()
     std::unordered_map<std::string, std::shared_ptr<Prepared>> prepared_;  ///< main thread only
     std::vector<std::function<void(const std::string&)>> file_listeners_;
     bool prefer_ktx2_ = true;

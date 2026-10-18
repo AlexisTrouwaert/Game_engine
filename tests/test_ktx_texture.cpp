@@ -183,6 +183,36 @@ TEST_CASE("decode_ktx2 turns a two-channel normal map into BC5, or into x and y 
     CHECK(worst <= 12);
 }
 
+TEST_CASE("encode_ktx2: an image imported as UASTC with its mipmaps; a normal map as two channels") {
+    moteur::Image image;
+    image.width = 64;
+    image.height = 32;
+    for (int y = 0; y < image.height; ++y) {
+        for (int x = 0; x < image.width; ++x) {
+            image.pixels.insert(image.pixels.end(), {static_cast<std::uint8_t>(x * 4), static_cast<std::uint8_t>(y * 8), 64, 255});
+        }
+    }
+    const std::vector<std::uint8_t> color = moteur::encode_ktx2(image, true, false, "color");
+    CHECK(moteur::is_ktx2(color.data(), color.size()));
+    moteur::TextureSettings srgb;
+    srgb.srgb = true;
+    const moteur::CompressedImage bc7 = moteur::decode_ktx2(color.data(), color.size(), "color", srgb, {true, true});
+    CHECK(bc7.format == SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB);
+    CHECK(bc7.levels.size() == 7);  // 64 x 32 down to 1 x 1
+    const moteur::CompressedImage rgba = moteur::decode_ktx2(color.data(), color.size(), "color", srgb, {false, false});
+    REQUIRE(rgba.levels[0].size() == image.pixels.size());
+    int worst = 0;
+    for (std::size_t i = 0; i < image.pixels.size(); ++i) {
+        worst = std::max(worst, std::abs(static_cast<int>(rgba.levels[0][i]) - static_cast<int>(image.pixels[i])));
+    }
+    CHECK(worst <= 12);  // UASTC is close to lossless on a smooth gradient
+
+    const std::vector<std::uint8_t> normal = moteur::encode_ktx2(image, false, true, "normal");
+    const moteur::CompressedImage bc5 = moteur::decode_ktx2(normal.data(), normal.size(), "normal", {}, {true, true});
+    CHECK(bc5.format == SDL_GPU_TEXTUREFORMAT_BC5_RG_UNORM);
+    CHECK_THROWS_AS(moteur::encode_ktx2(moteur::Image{}, true, false, "empty"), std::runtime_error);
+}
+
 TEST_CASE("decode_ktx2 takes an uncompressed RGBA8 file as it is") {
     const std::vector<std::uint8_t> file = make_ktx2(4, 2, 4, false, false, Encoding::None, gradient);
     moteur::TextureSettings settings;

@@ -5,11 +5,27 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 
 #include "moteur/file_io.hpp"
+#include "moteur/image.hpp"
 
 namespace moteur {
+
+std::vector<std::uint8_t> encode_png(const Image& image) {
+    std::vector<std::uint8_t> png;
+    const auto append = [](void* context, void* data, int size) {
+        auto* bytes = static_cast<std::vector<std::uint8_t>*>(context);
+        bytes->insert(bytes->end(), static_cast<std::uint8_t*>(data), static_cast<std::uint8_t*>(data) + size);
+    };
+    if (image.width <= 0 || image.height <= 0 ||
+        image.pixels.size() != static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.height) * 4 ||
+        stbi_write_png_to_func(append, &png, image.width, image.height, 4, image.pixels.data(), image.width * 4) == 0) {
+        throw std::runtime_error("encode_png: the image cannot be encoded");
+    }
+    return png;
+}
 
 bool write_capture_png(const std::string& path, const void* pixels, std::uint32_t width, std::uint32_t height,
                        SDL_GPUTextureFormat format, int max_width) {

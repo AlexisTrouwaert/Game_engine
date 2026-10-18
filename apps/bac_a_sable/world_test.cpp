@@ -585,11 +585,11 @@ void WorldTest::apply_input(float dt) {
         const glm::vec2 goal(pointer_ground_->x, pointer_ground_->z);
         if (glm::length(goal - at) > 0.2f && moteur::segment_clear(grid_, at, goal, kHeroRadius)) {
             hero.mode = moteur::MoveMode::ToPoint;
-            hero.goal = goal;
-            hero.path = {goal};
+            hero.goal = glm::vec3(goal.x, 0.0f, goal.y);
+            hero.path = {hero.goal};
             hero.next_point = 0;
             hero.needs_path = false;
-        } else if (--follow_repath_ <= 0 && glm::length(goal - hero.goal) > 0.5f) {
+        } else if (--follow_repath_ <= 0 && glm::length(goal - glm::vec2(hero.goal.x, hero.goal.z)) > 0.5f) {
             hero.go_to(goal);
             follow_repath_ = 10;
         }

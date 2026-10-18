@@ -46,6 +46,14 @@ Ce document décrit **chaque fichier que le moteur lit ou écrit**, pour qui éc
 - [10. Rapports de plantage](#10-rapports-de-plantage)
 - [11. Textures KTX2 acceptées](#11-textures-ktx2-acceptées)
 - [12. Modèles glTF acceptés](#12-modèles-gltf-acceptés)
+- [13. Valeurs décrites par la réflexion](#13-valeurs-décrites-par-la-réflexion)
+- [14. Préfabriqués `.prefab.json`](#14-préfabriqués-prefabjson)
+- [15. Identité des assets : `.meta` et registre](#15-identité-des-assets--meta-et-registre)
+- [16. Modèles préparés `.mmdl`](#16-modèles-préparés-mmdl)
+- [17. Documents livrés en CBOR](#17-documents-livrés-en-cbor)
+- [18. Maillages de navigation `.mnav`](#18-maillages-de-navigation-mnav)
+- [19. Niveaux v3 `.level.json`](#19-niveaux-v3-leveljson)
+- [20. Niveaux préparés `.mlvl` et `.mlvc`](#20-niveaux-préparés-mlvl-et-mlvc)
 - [Annexe : sommes de contrôle](#annexe--sommes-de-contrôle)
 
 ---
@@ -84,6 +92,15 @@ Ce document décrit **chaque fichier que le moteur lit ou écrit**, pour qui éc
 | Rapport de plantage | préférences, `crash_reports/<date>.txt` et `<date>.dmp` | — | `tools/crash/read_report.py` | `crash.cpp` |
 | Texture KTX2 | `*.ktx2` | KTX 2.0 | `decode_ktx2` (`ktx_texture.cpp`) | outils externes ; `transcode_ktx2_for_shipping` |
 | Modèle glTF | `*.gltf` + `.bin` + images, `*.glb` | glTF 2.0 | `load_gltf`, `parse_gltf` (`model.cpp`) | outils externes (Blender) |
+| Préfabriqué | `*.prefab.json` | 1 | `Prefab::parse` (`prefab.cpp`) | à la main, `ARPG/assets_source/commun/prefab_moteur.py` |
+| Identité d'un asset | `<asset>.meta` | 1 | `parse_asset_meta` (`asset_registry.cpp`) | `AssetRegistry::scan`, `tools/assets/assets.py` |
+| Registre figé | `assets/asset_registry.mreg` (jeu livré) | 1 | `AssetRegistry::decode` | `AssetRegistry::encode` (préparation) |
+| Modèle préparé | `.imported/<clé>.mmdl` | 2 | `decode_prepared_model` (`model_import.cpp`) | `encode_prepared_model` (import, préparation) |
+| Signature d'import | `.imported/<clé>.mmdl.files` | — | `Assets` (développement) | `Assets` |
+| Document livré | `*.json` des archives (CBOR) | celle du document | `parse_document` (`document.cpp`) | `shipped_document` (préparation) |
+| Maillage de navigation | `*.mnav` | 1 | `NavMesh::load` (`navigation.cpp`) | `NavMesh::save` |
+| Niveau (source) | `assets/levels/*.level.json` | 3 | `LevelDocument::parse` (`level.cpp`) | `LevelDocument::to_json` (éditeur), `bac_a_sable --migrate-map` |
+| Niveau préparé | `*.level.mlvl` et `*.level.chunks/X_Z.mlvc` | 1 | `decode_level_header`, `decode_level_chunk` (`level_bake.cpp`) | la préparation (`bake_level`) |
 
 ## Anciennes clés françaises encore lues
 
@@ -716,21 +733,21 @@ Le jeu écrit chaque section avec la version courante (`SaveGame::set_section(no
 
 ### 6.5 Section du monde (composants du moteur)
 
-`ComponentSerializers::save` écrit les entités qui ont un `PersistentId`, dans l'ordre de leurs identifiants : une liste `[{"id": <entier ≠ 0>, "c": {<clé de composant>: <valeur>, ...}}, ...]`. Le jeu range cette liste dans la section de son choix et ajoute ses propres composants (`add`, `add_tag`). Composants du moteur et leurs valeurs (les clés ne sont jamais renommées : un renommage casserait les anciennes sauvegardes) :
+`ComponentSerializers::save` écrit les entités qui ont un `PersistentId`, dans l'ordre de leurs identifiants : une liste `[{"id": <entier ≠ 0>, "c": {<clé de composant>: <valeur>, ...}}, ...]`. Le jeu range cette liste dans la section de son choix et ajoute ses propres composants. Depuis le jalon 9 (partie 3), chaque composant décrit est écrit **par sa description** (réflexion, [13](#13-valeurs-décrites-par-la-réflexion)) : un objet de ses champs marqués « sauvegardés », sous le nom de son type dans `component_types()`. Composants du moteur et leurs valeurs (les noms de composants ne sont jamais renommés ; un champ renommé garde la lecture de son ancien nom) :
 
-| Clé | Composant | Valeur |
-|---|---|---|
-| `transform` | `Transform` | `{"p": [x, y, z], "r": [w, x, y, z], "s": [x, y, z]}` (position, rotation en quaternion dans l'ordre de glm, échelle) |
-| `name` | `Name` | texte |
-| `hidden` | `Hidden` | `true` (étiquette sans donnée) |
-| `parent` | `Parent` | identifiant persistant du parent (un parent absent de la sauvegarde est un problème signalé) |
-| `bone_attachment` | `BoneAttachment` | nom du point d'attache (texte) |
-| `light` | `LightSource` | `[[r, g, b], intensité, portée, ombres]` |
-| `collider` | `Collider` | `[rayon, couche, masque, poids de poussée, bloqué par les murs]` |
-| `mover` | `Mover` | objet : `speed`, `turn`, `stop`, `field`, `mode`, `goal`, `direction`, `path` (liste de `[x, z]`), `next`, `status`, `needs_path`, `state`, `facing`, `actual`, `start`, `slow` |
-| `animator` | `Animator` | l'état interne de l'animateur (`Animator::save_state`) : à ne pas écrire à la main ; la fonction de création du jeu doit créer l'`Animator` |
+| Clé | Composant | Valeur (objet) | Formes plus anciennes encore lues |
+|---|---|---|---|
+| `transform` | `Transform` | `position` `[x, y, z]`, `rotation` `[w, x, y, z]` (ordre de glm), `scale` `[x, y, z]` | `p`, `r`, `s` |
+| `name` | `Name` | `value` (texte) | le texte seul |
+| `hidden` | `Hidden` | `{}` (étiquette sans donnée) | `true` |
+| `parent` | `Parent` | `entity` : identifiant persistant du parent (un parent absent de la sauvegarde est un problème signalé ; `0` : aucun) | l'identifiant seul |
+| `bone_attachment` | `BoneAttachment` | `point` (texte) | le texte seul |
+| `light` | `LightSource` | `color` `[r, g, b]`, `intensity`, `range`, `casts_shadows`, `shadow_near` | `[[r, g, b], intensité, portée, ombres]` |
+| `collider` | `Collider` | `radius`, `layer`, `mask`, `push_weight`, `blocked_by_walls` | `[rayon, couche, masque, poids, murs]` |
+| `mover` | `Mover` | `speed`, `turn_rate`, `stop_distance`, `field`, `mode`, `goal`, `direction`, `path` (liste de `[x, z]`), `next_point`, `path_status`, `needs_path`, `state`, `facing`, `actual_speed`, `tick_start`, `slow_ticks` | les clés courtes du jalon 7 : `turn`, `stop`, `next`, `status`, `actual`, `start`, `slow` |
+| `animator` | `Animator` | l'état interne de l'animateur (`Animator::save_state`) : à ne pas écrire à la main ; la fonction de création du jeu doit créer l'`Animator` | |
 
-Les **énumérations** du `mover` sont écrites par leur nom (`mode` : `stop`, `to_point`, `direct`, `follow_field` ; `status` : `found`, `partial`, `none` ; `state` : `idle`, `waiting`, `moving`, `arrived`, `blocked`, `no_path`) ; les nombres des sauvegardes de développement du jalon 7 sont encore lus ; un nom inconnu est un problème de ce composant. Les nombres à virgule sont écrits exactement (relus bit pour bit).
+Les **énumérations** sont écrites par leur nom (`mode` : `stop`, `to_point`, `direct`, `follow_field` ; `path_status` : `found`, `partial`, `none` ; `state` : `idle`, `waiting`, `moving`, `arrived`, `blocked`, `no_path`) ; les nombres des sauvegardes de développement du jalon 7 sont encore lus ; un nom inconnu est un problème de ce composant. Les nombres à virgule sont écrits exactement (relus bit pour bit). Un champ inconnu (retiré depuis l'écriture de la sauvegarde) est ignoré sans avertissement. Les champs `DataRef` (une ligne de table) sont écrits par identifiant et, avec `ComponentSerializers::set_tables()`, rattachés à leur ligne à la lecture (une ligne absente est un problème de ce composant).
 
 **Chargement** (`ComponentSerializers::load`) : le jeu recrée chaque entité depuis son enregistrement, puis les composants reçoivent leurs valeurs, puis les références entre entités sont résolues par identifiant persistant. Les problèmes sont **listés une ligne chacun**, et le reste est chargé ; aucun ne lance d'exception. Problèmes : liste d'entités qui n'est pas une liste (rien n'est chargé) ; enregistrement qui n'est pas un objet, sans `id` ou dont l'`id` n'est pas un entier positif ou nul (`record N: no "id" (a non-negative integer)`) ; enregistrement sans `c` ou dont le `c` n'est pas un objet (`entity N: no "c" (an object of components)`) ; entité que le jeu ne sait pas recréer ; composant inconnu ; référence à une entité absente ; valeur fausse. Un enregistrement abîmé (`id` ou `c` absent ou du mauvais type) est sauté : son entité n'est pas recréée.
 
@@ -803,9 +820,9 @@ Groupe d'archive (`archives[i]`) : `name` (texte, défaut `"unnamed"`, ancienne 
 
 Une ancienne clé française donne un avertissement par emploi (`livraison_tranche.json: key 'inclure' is deprecated, write 'include'`) ; si la clé anglaise est là aussi, elle seule est lue. Un motif d'`include` qui ne choisit rien donne un avertissement (`'x' matches no file`). Les autres clés sont ignorées.
 
-**Ce qui est livré en plus** : les **dépendances**, sans tenir compte d'`exclude` : fichiers d'un glTF (tampons, images ; avec une texture `KHR_texture_basisu`, la version KTX2 seulement, les PNG de repli restent derrière) et textures des effets de particules ; une dépendance absente est une **erreur**. Sont toujours écartés : le manifeste lui-même (s'il est à la racine d'un dossier de sources) et tout le dossier `data`.
+**Ce qui est livré en plus** : les **dépendances**, sans tenir compte d'`exclude` : images d'un glTF dans leurs propres fichiers (avec une texture `KHR_texture_basisu`, la version KTX2 seulement, les PNG de repli restent derrière), textures des effets de particules, et pour un préfabriqué ses bases, ses préfabriqués imbriqués et les assets de ses composants, **par identifiant** ([15.4](#154-préparation-et-outil)) ; une dépendance absente est une **erreur**. Sont toujours écartés : le manifeste lui-même (s'il est à la racine d'un dossier de sources), tout le dossier `data` et les `.meta` (le [registre figé](#153-registre-figé-asset_registrymreg) les remplace).
 
-**Traitement** : les KTX2 en Basis Universal (UASTC, ETC1S) aux côtés multiples de 4 deviennent du **BC7** (ou **BC5** s'ils ont deux canaux), supercompressés en Zstandard ; les autres fichiers sont copiés ; les tables sont compilées par le rappel du jeu ; les shaders sont copiés ; chaque fichier de la sortie est **relu** par le lecteur du moteur (glTF, KTX2, PNG / JPEG, WAV / OGG / FLAC, cartes, effets, descriptions d'animation, tout autre `.json` comme JSON) ; un modèle, un son, un environnement ou une police (`models/`, `audio/`, `environments/`, `*.ttf`) qu'aucune entrée de crédits (`file` ou `license_file` commençant par `assets/`, couvrant son dossier) ne couvre donne un **avertissement**. Les archives ne sont écrites que s'il n'y a eu **aucune erreur**.
+**Traitement** : les KTX2 en Basis Universal (UASTC, ETC1S) aux côtés multiples de 4 deviennent du **BC7** (ou **BC5** s'ils ont deux canaux), supercompressés en Zstandard ; chaque modèle glTF est **importé** avec les réglages de son `.meta` et livré sous sa forme préparée seulement (`.imported/<clé>.mmdl`, [16](#16-modèles-préparés-mmdl)), ses textures intégrées transcodées de même ; chaque `.json` est écrit en **CBOR** sous son nom ([17](#17-documents-livrés-en-cbor)) ; les autres fichiers sont copiés ; les tables sont compilées par le rappel du jeu ; les shaders sont copiés ; le registre des assets livrés est figé dans `asset_registry.mreg` ; chaque fichier de la sortie est **relu** par le lecteur du moteur (modèles préparés, KTX2, PNG / JPEG, WAV / OGG / FLAC, cartes, effets, descriptions d'animation, préfabriqués avec leurs bases et leurs assets, tout autre `.json`, qui doit être du CBOR) ; un modèle, un son, un environnement ou une police (`models/`, `audio/`, `environments/`, `*.ttf`) qu'aucune entrée de crédits (`file` ou `license_file` commençant par `assets/`, couvrant son dossier) ne couvre donne un **avertissement**. Les archives ne sont écrites que s'il n'y a eu **aucune erreur**.
 
 Exemple minimal :
 
@@ -849,8 +866,8 @@ Les fichiers de `assets/` qu'aucune source ne produit plus sont supprimés.
 
 | Clé | Type | Sens |
 |---|---|---|
-| `version` | entier | version de l'outil (`kCookVersion` = 1) ; une autre valeur fait tout refaire |
-| `files` | objet | clé de fichier livré → empreinte : le FNV-1a 64 bits des octets de la source, amorcé avec la version de l'outil, écrit en **texte décimal** ; `"tables"` pour un `.mdat` compilé |
+| `version` | entier | version de l'outil (`kCookVersion` = 2 ; 2 : modèles livrés préparés) ; une autre valeur fait tout refaire |
+| `files` | objet | clé de fichier livré → empreinte : le FNV-1a 64 bits des octets de la source, amorcé avec la version de l'outil, écrit en **texte décimal** ; pour un modèle préparé (clé `.imported/<clé>.mmdl`), l'empreinte couvre aussi ses tampons, ses réglages d'import et la version des modèles préparés ; `"tables"` pour un `.mdat` compilé, `"registry"` pour le registre figé |
 | `transcoded` | liste de textes | les clés des textures (`.ktx2`) dont la sortie a été transcodée en BC7 / BC5 ; les autres ont été copiées telles quelles |
 
 Un fichier n'est refait que si son empreinte a changé ou si sa sortie manque. Une texture n'est jamais reprise d'une préparation précédente si `transcoded` manque (un état écrit avant cette clé) : toutes les textures sont alors préparées de nouveau, une fois. Un `transcoded` illisible rend tout l'état illisible. Un `cook_state.json` illisible est signalé au journal et tout est refait (toujours juste, seulement plus lent). Ce fichier est un détail de l'outil : il ne se lit ni ne s'écrit à la main.
@@ -865,7 +882,7 @@ Un fichier n'est refait que si son empreinte a changé ou si sa sortie manque. U
  "transcoded": [
   "models/polyhaven/boulder_01/textures/boulder_01_diff_1k.ktx2"
  ],
- "version": 1
+ "version": 2
 }
 ```
 
@@ -1124,10 +1141,294 @@ access: write at 0x0
 
 ---
 
+## 13. Valeurs décrites par la réflexion
+
+**Lecteur et écrivain** : `read_json`, `read_fields`, `write_json` (`src/moteur/reflection.cpp`, en-têtes `reflection.hpp` et `reflection_io.hpp`), jalon 9 partie 3. Toute donnée d'un type **décrit** (`MOTEUR_REFLECT`) s'écrit de la même façon, qu'elle soit dans une table de données (`add_reflected_table`), une sauvegarde (`ComponentSerializers::add_reflected`), un préfabriqué ([14](#14-préfabriqués-prefabjson)) ou un niveau :
+
+| Type C++ | JSON |
+|---|---|
+| `bool` | `true` / `false` |
+| entiers (8 à 64 bits) | un entier, dans les bornes du champ et du type (`300 out of range [0, 255]`) |
+| `float`, `double` | un nombre fini, dans les bornes du champ |
+| `std::string` | une chaîne |
+| `glm::vec2/3/4`, `glm::ivec2/3` | une liste de 2, 3 ou 4 nombres (une couleur `vec4`, champ marqué couleur, peut omettre son alpha : 1) |
+| `glm::quat` | `[w, x, y, z]` |
+| énumération décrite | son **nom** ; l'entier d'une sauvegarde de développement plus ancienne est encore lu |
+| structure décrite | un objet de ses champs ; les clés qui commencent par `_` sont des commentaires |
+| `std::vector` | une liste |
+| `std::optional` | `null` quand vide, sinon la valeur |
+| `DataRef<T>` | l'identifiant de la ligne |
+| `entt::entity` | sauvegarde : l'identifiant persistant (`0` : aucune) ; préfabriqué : l'identifiant de l'entité dans le fichier (`2`, ou `"3/2"` dans un préfabriqué imbriqué) |
+| `Asset<T>` | `{"id": "<UUID>", "path": "models/props/lampadaire.glb"}` : l'**identifiant** de l'asset ([15](#15-identité-des-assets--meta-et-registre)), son chemin à côté pour la lecture humaine ; un chemin seul (écrit à la main, ou un asset sans `.meta`) ou un identifiant seul sont lus aussi ; `null` ou `""` : aucun |
+
+Lecture : un champ absent garde sa valeur par défaut (celle de la structure), sauf s'il est **requis** (`required field missing`) ; un champ peut avoir d'**anciens noms** (alias), lus quand le nom actuel manque (les deux présents : avertissement, le nom actuel gagne) ; une clé qui n'est aucun champ est un avertissement (`unknown field (typo?)`) dans les données, ignorée dans les sauvegardes. Les messages sont ceux de `DataReader` (chemin `fichier > ligne > champ`, bornes). Seuls les champs marqués pour l'usage sont lus et écrits (`kFieldData` pour les données, `kFieldSave` pour les sauvegardes).
+
+**Schémas** : `json_schema()` donne un schéma JSON (brouillon 2020-12) d'un type décrit ; une table lue par la réflexion le porte (`DataTableBase::schema()`, pour la forme du fichier entier : `version`, `defaults`, `rows`, et `base` dans une ligne) ; `bac_a_sable --write-schemas DOSSIER` écrit `<table>.schema.json` pour chaque table décrite (à associer aux fichiers `data/<table>/*.json` dans l'éditeur de texte : `json.schemas` de VS Code).
+
+---
+
+## 14. Préfabriqués `.prefab.json`
+
+**Lecteur** : `Prefab::parse` (`src/moteur/prefab.cpp`), par `Assets::prefab()` ; instanciation par `instantiate()` (jalon 9, partie 3). Un modèle d'entités : une racine, des enfants, leurs composants (par leur nom dans `component_types()`, valeurs comme en [13](#13-valeurs-décrites-par-la-réflexion), champs marqués « données »).
+
+```json
+{
+  "version": 1,
+  "base": "prefabs/porte.prefab.json",
+  "overrides": {"2": {"light": {"intensity": 20}}, "4/2": {"light": {"color": [0.2, 0.4, 1]}}},
+  "removed": ["3"],
+  "entities": [
+    {"id": 5, "parent": 1, "name": "bannière", "components": {"transform": {"position": [0, 2, 0]}}},
+    {"id": 6, "parent": 1, "prefab": "prefabs/lampadaire.prefab.json",
+     "components": {"transform": {"position": [-1, 0, 0]}},
+     "overrides": {"2": {"light": {"intensity": 5}}}}
+  ]
+}
+```
+
+| Clé | Type | Rôle |
+|---|---|---|
+| `version` | entier | `1` (une autre version est refusée) |
+| `base` | chemin | facultatif : ce préfabriqué est une **variante** de celui-là ; il en part (entités, composants, surcharges déjà fusionnées) |
+| `overrides` | objet | variante seulement : `chemin d'entité → composant → champs`, fusionnés champ par champ dans ceux de la base (un objet fusionne, une liste ou une valeur remplace) |
+| `removed` | liste | variante seulement : entités de la base retirées, avec tout ce qui est sous elles |
+| `entities` | liste | les entités du fichier (ajoutées à celles de la base pour une variante) |
+| `entities[].id` | entier > 0 | identifiant **stable** dans le fichier (les surcharges, niveaux et sauvegardes y renvoient) ; unique, y compris face à la base |
+| `entities[].parent` | identifiant | l'entité parente (du fichier ou de la base) ; **exactement une** entité n'en a pas : la racine |
+| `entities[].name` | texte | facultatif : donné en composant `Name` à l'instanciation (sauf si l'entité a déjà un `name`) |
+| `entities[].components` | objet | `nom du composant → valeur` (seuls les champs qui changent sont nécessaires) |
+| `entities[].prefab` | chemin | facultatif : l'entité est une **instance imbriquée** de ce préfabriqué ; sa racine devient cette entité (ses `components` par-dessus ceux de la racine), ses entités prennent le chemin `id/identifiant intérieur` (`"6/2"`) |
+| `entities[].overrides` | objet | instance imbriquée seulement : `chemin intérieur → composant → champs` |
+
+**Ce que fait le lecteur** : la base et les préfabriqués imbriqués sont chargés (et gardés) par le gestionnaire d'assets ; un cycle (`Prefab cycle: a > b > a`) est refusé. Tout est fusionné, puis chaque composant est lu **une fois** par sa description (l'instanciation ne fait que copier) ; les champs d'asset (le modèle d'un `model`) sont chargés et tenus par le préfabriqué. Un composant de nom inconnu est un **avertissement** (il est laissé de côté) ; tout le reste est une **erreur** et le préfabriqué est refusé avec toutes ses erreurs : JSON invalide, autre version, `overrides` ou `removed` sans `base`, identifiant non entier, nul ou déjà pris, parent inconnu, plusieurs racines ou aucune, cycle de parents, entité de surcharge inconnue, valeur fausse, référence d'entité vers une entité qui n'existe pas (une variante qui retire une entité référencée doit aussi effacer la référence). Rechargé à chaud avec ses dépendances (son fichier, ses bases, ses imbriqués) ; les entités déjà créées ne changent pas.
+
+**Instanciation** (`instantiate(world, prefab, placement)`) : une entité par entité du préfabriqué, ses composants, son `Parent` (la racine : celui du placement, s'il en donne un), son `Name` ; la racine reçoit la transformation du placement **composée** avec la sienne ; `moving` lui donne un `PreviousTransform`. Les champs d'entité sont reliés aux nouvelles entités. `placement.overrides` (même forme que `overrides`) change des champs pour cette instance seulement : c'est ce qu'un niveau garde de chaque instance.
+
+Composants du moteur utilisables dans un préfabriqué (en plus de ceux du jeu) : `transform`, `name`, `hidden`, `parent` (rarement : la hiérarchie le donne), `bone_attachment`, `light`, `halo`, `collider` (avec `height`, la hauteur de la capsule dans un niveau 3D), `mover`, `model` (`model` : référence du glTF ; `hidden_parts` : indices dans les parties du modèle), `static_collision` (la pièce fait partie de la géométrie de collision du niveau : `from_model`, la collision de son modèle, et `boxes`, des boîtes `{"centre", "half_size", "top", "sides"}` dans son espace, genres `"walkable"`, `"wall"`, `"obstacle"`, `"void"`).
+
+Sauvegardes : le `mover` écrit avant la partie 5 du jalon 9 (`goal`, `path`, `tick_start` sur le plan : `[x, z]`) se lit encore, en points 3D `[x, 0, z]` (`upgrade_mover`).
+
+---
+
+## 15. Identité des assets : `.meta` et registre
+
+**Rôle** (jalon 9, partie 4) : chaque asset a un **identifiant permanent** (UUID v4), écrit dans un fichier voisin `<asset>.meta` ; ce qui désigne un asset (préfabriqués, niveaux, champs `Asset<T>`) le fait par cet identifiant : renommer ou déplacer un fichier avec son `.meta` ne casse rien. **Lecteur** : `parse_asset_meta`, `AssetRegistry::scan` (`src/moteur/asset_registry.cpp`). **Écrivains** : `asset_meta_text` (le moteur en développement), `tools/assets/assets.py`.
+
+**Ce qui est un asset** (`is_identified_asset`) : tout fichier des dossiers d'assets, sauf les `.meta`, les tampons glTF (`.bin`, partie de leur modèle), les tables de données (`data/`, désignées par leurs lignes), la documentation (`.md`, `.txt`) et les fichiers et dossiers cachés (nom commençant par `.` : `.git`, `.imported`…).
+
+### 15.1 Fichier `.meta`
+
+```json
+{
+  "id": "6f1c2a4e-9b7d-4c1e-8a2f-3d5e7f901b2c",
+  "import": {"lods": 2, "textures": "ktx2"},
+  "version": 1
+}
+```
+
+| Clé | Type | Rôle |
+|---|---|---|
+| `version` | entier | `1` (une autre version est refusée) |
+| `id` | texte | l'identifiant, UUID (`8-4-4-4-12` chiffres hexadécimaux, casse indifférente, écrit en minuscules) ; **jamais recalculé** |
+| `import` | objet | facultatif : les **réglages d'import** de l'asset ; pour un modèle, ceux du tableau ci-dessous ; une clé inconnue ou fausse est un avertissement et garde sa valeur par défaut ; les clés qui commencent par `_` sont des commentaires |
+
+Écriture : clés triées, deux espaces, une fin de ligne (comme `assets.py`) ; écrit de façon atomique.
+
+Réglages d'import d'un modèle (`ModelImportSettings`, `model_import.hpp`) :
+
+| Clé | Défaut | Bornes | Sens |
+|---|---|---|---|
+| `lods` | 3 | 0 à 8 | niveaux de détail faits au-delà du maillage complet (0 : aucun) |
+| `lod_reduction` | 0.5 | 0.05 à 0.95 | triangles d'un niveau sur ceux du précédent |
+| `lod_error` | 0.02 | 0 à 1 | l'erreur la plus grande d'un niveau, en part de la taille du modèle (diagonale de sa boîte) |
+| `lod_min_triangles` | 96 | ≥ 0 | une partie de moins de triangles n'a pas de niveau de détail |
+| `optimize` | `true` | — | triangles dans l'ordre du cache de sommets du GPU, sommets dans l'ordre de leur premier usage |
+| `textures` | `"ktx2"` | `"ktx2"`, `"keep"` | images intégrées au modèle encodées en KTX2 (UASTC, mipmaps ; deux canaux pour les cartes de normales) ; `"keep"` : telles quelles |
+| `collision` | `"named"` | `"named"`, `"visible"`, `"none"` | sa géométrie de collision (jalon 9, partie 5) : les nœuds `COL_...` / `UCX_...` (jamais dessinés, quel que soit le réglage) ; `"visible"` : eux et tous les triangles visibles ; `"none"` : aucune. Le genre d'un nœud vient de son nom (`COL_wall`, `COL_walk` ou `COL_floor`, `COL_obstacle` ou `COL_block`, `COL_void` ou `COL_pit`, sans casse), sinon de la pente : sol jusqu'à 45 degrés, mur au-delà |
+
+### 15.2 Registre en développement
+
+Au démarrage, `Application` parcourt les dossiers d'assets (le dossier des sources, celui du moteur `MOTEUR_ENGINE_ASSETS_DIR`, les dossiers montés `ApplicationConfig::asset_folders`) et construit le registre `identifiant → clé, réglages d'import`. Règles :
+
+- deux dossiers donnent la même clé : le **premier** gagne, l'autre est signalé (`shadowed`) ;
+- un asset sans `.meta` en reçoit un (nouvel identifiant), **seulement** quand le programme tourne sur les sources (pas depuis des archives) ;
+- deux assets avec le **même identifiant** (une copie faite avec son `.meta`) : celui dont la clé vient **après** dans l'ordre des octets en reçoit un nouveau (`reassigned`), si bien que l'original garde le sien quel que soit l'ordre du disque ;
+- un `.meta` sans son asset est signalé (`orphans`) : son asset a été déplacé sans lui ;
+- un `.meta` illisible est un problème signalé (l'asset reste sans identité).
+
+Une référence se résout ainsi (`Assets::resolve_reference`) : un identifiant connu donne sa clé actuelle ; inconnu avec un chemin, le chemin est pris avec un avertissement (`unknown identifier X, 'chemin' used by its path`) ; inconnu sans chemin, c'est une erreur. `Assets::reference_to(clé)` écrit `{"id", "path"}` pour un asset identifié, le chemin seul sinon.
+
+### 15.3 Registre figé `asset_registry.mreg`
+
+Le jeu livré ne parcourt pas de dossiers : la préparation écrit le registre des assets **livrés** dans `assets/asset_registry.mreg` (`ApplicationConfig::kRegistryFile`), rangé dans les archives ; le programme le lit au démarrage quand des archives sont montées.
+
+| Position | Taille | Champ |
+|---|---|---|
+| 0 | 4 | magie `MREG` (ASCII) |
+| 4 | 4 | version, u32 = 1 (`kRegistryVersion` ; une autre est refusée : `registry format N (expected 1)`) |
+| 8 | reste | CBOR : une liste de lignes `[identifiant (texte), clé (texte), import (objet)]` |
+
+Le CBOR passe d'abord le [contrôle de structure](#23-contrôle-de-la-structure-cbor) ; un identifiant qui n'est pas un UUID ou une ligne mal formée rend le fichier illisible (`unreadable: ...`).
+
+### 15.4 Préparation et outil
+
+À la préparation (section [8](#8-préparation-des-assets)) : les dépendances d'un préfabriqué sont suivies **par identifiant** ; un identifiant inconnu sans chemin est une **erreur** ; un chemin écrit qui n'est plus celui de l'asset est un avertissement (`the asset X is now 'clé' (written 'ancien': save the file again)`) ; deux assets de même identifiant sont une erreur ; les assets livrés sans `.meta` sont comptés dans un avertissement (ils partent sans identité).
+
+`tools/assets/assets.py` : `check` (identifiants en double, `.meta` orphelins, assets sans `.meta`), `meta` (donne un `.meta` à ceux qui n'en ont pas), `move DOSSIER ANCIEN NOUVEAU` (déplace le fichier **et** son `.meta`, puis réécrit les chemins écrits à côté des identifiants), `find DOSSIER... ID`, `refresh` (réécrit ces chemins). Code de sortie 0 sans problème, 1 avec, 2 pour une ligne de commande fausse.
+
+---
+
+## 16. Modèles préparés `.mmdl`
+
+**Rôle** (jalon 9, partie 4) : la forme d'un modèle que le moteur charge à la place du glTF, en développement comme dans le jeu livré : déjà **importé** (niveaux de détail, ordre pour le cache, textures intégrées en KTX2, clips en archive ozz). **Lecteur** : `decode_prepared_model` (`src/moteur/model_import.cpp`). **Écrivain** : `encode_prepared_model`, appelé par l'import (`Assets`, `bac_a_sable --import-assets`) et la préparation.
+
+**Emplacement** : `<cache>/<clé du modèle>.mmdl` (`prepared_model_key` : `models/a.glb` → `.imported/models/a.glb.mmdl`). En développement, le cache est le dossier `.imported/` à côté du dossier des sources (`import_cache_folder` : `moteur/.imported/` pour `moteur/assets/`), ignoré par le dépôt ; il sert aussi pour les modèles des dossiers montés. Dans le jeu livré, le `.mmdl` est dans les archives sous `assets/.imported/<clé>.mmdl`, rangé dans le groupe d'archive de sa source ; le glTF et ses tampons ne sont **pas** livrés.
+
+### 16.1 Disposition
+
+Petit-boutiste. Textes : longueur u32 puis octets UTF-8 ; tableaux : nombre d'éléments u32 puis les éléments bout à bout (types simples, tels qu'en mémoire) ; blobs : taille u32 puis octets.
+
+| Champ | Type |
+|---|---|
+| magie | `MMDL` (4 octets ASCII) |
+| version | u32 = 3 (`kPreparedModelVersion` ; 2 : clips sous forme ozz ; 3 : géométrie de collision ; une autre est refusée : `prepared model format N (expected 3)`) |
+| empreinte de la source | u64 (ci-dessous) |
+| parties | u32 N, puis par partie : nom, nœud, sommets, indices, poids de peau, **niveaux de détail** (`MeshLod` : premier indice, nombre d'indices, erreur), matrice 4×4, matériau i32, peau i32, articulation i32, décalage d'articulation 4×4, rayon de peau f32 |
+| matériaux | u32 N, puis : nom, couleur de base vec4, métal f32, rugosité f32, échelle de normale f32, occlusion f32, émission vec3, deux faces u8, seuil alpha f32, cinq indices d'image i32 (couleur, métal-rugosité, normale, occlusion, émission ; −1 : aucune) |
+| images | u32 N, puis : nom, largeur i32, hauteur i32, pixels (blob, vide si KTX2), KTX2 (blob), sRGB u8, carte de normales u8, fichier (texte : une image dans son propre fichier, chargée comme texture à part) |
+| squelette | u32 N articulations : nom, parent i32, repos (translation vec3, rotation quat, échelle vec3) |
+| peaux | u32 N : nom, articulations (tableau i32), matrices inverses (tableau mat4) |
+| clips bruts | u32 N (0 dans un modèle importé : les clips sont dans le champ suivant) |
+| clips préparés | blob : la `ClipLibrary` sauvegardée (`ClipLibrary::save`, magie `CLPS`, archive ozz, somme FNV) |
+| fichiers | u32 N textes : les fichiers dont le modèle est fait (tampons, images), relatifs à son dossier |
+| collision : sommets | tableau de vec3 (espace du modèle) |
+| collision : indices | tableau d'u32, trois par triangle (sens trigonométrique vu de l'extérieur) |
+| collision : genres | tableau d'u8, un par triangle : `0` sol, `1` mur, `2` obstacle, `3` vide (`SurfaceKind`) |
+
+Le lecteur refuse le fichier, avec le nom du modèle et la position (`clé: <raison> (at byte N)`), pour : une autre magie ou version, une lecture au-delà de la fin, un nombre d'éléments plus grand que ce que les octets restants peuvent contenir, une partie sans triangle, un indice au-delà des sommets, un niveau de détail au-delà des indices (ou plus de 255), une image de taille fausse, un matériau, une peau ou une articulation absents, une articulation avant son parent, une peau de plus de 256 articulations, un clip de durée fausse ou de clés désordonnées, une collision incohérente (indices qui ne font pas des triangles entiers, indice au-delà des sommets, pas un genre par triangle, sommet non fini, genre inconnu), et des octets après le dernier champ. L'archive ozz des clips est contrôlée à son tour par `ClipLibrary::load` (somme, version).
+
+### 16.2 Empreinte et ré-import
+
+L'empreinte (u64, FNV-1a) couvre les octets du glTF et de ses fichiers, les réglages d'import (`ModelImportSettings::hash`) et la version de l'importeur. En développement, `Assets` recharge le `.mmdl` s'il est à jour, sinon importe de nouveau depuis le glTF (sur un fil de travail, un import à la fois par modèle) et réécrit le `.mmdl` ; une modification du glTF ou du `.meta` déclenche le ré-import au rechargement à chaud. Sans source (jeu livré), le `.mmdl` est pris tel quel.
+
+**Signature `.mmdl.files`** (développement seulement) : à côté du `.mmdl`, un JSON `{"stamp": "<empreinte>", "settings": "<empreinte des réglages>", "files": [[chemin, taille, date], ...]}` ; si les fichiers sources ont encore la même taille et la même date, le modèle est à jour **sans relire les sources** (le calcul complet de l'empreinte sinon). Fichier de cache, jamais écrit à la main.
+
+---
+
+## 17. Documents livrés en CBOR
+
+**Rôle** (jalon 9, partie 4) : le jeu livré ne lit aucun JSON. La préparation écrit chaque asset `.json` (cartes, effets, descriptions d'animation, préfabriqués, liaisons, crédits, atlas…) en **CBOR** (RFC 8949) **sous le même nom** (`shipped_document`) ; tous les lecteurs du moteur prennent les deux formes (`parse_document`, `src/moteur/document.cpp`) : le contenu est le même document, seule l'écriture change.
+
+**Distinction** : un document dont le premier octet est entre `0x80` et `0xBF` (CBOR, liste ou map) est lu en CBOR, sinon en JSON (`is_cbor_document`). Le CBOR passe le [contrôle de structure](#23-contrôle-de-la-structure-cbor) (128 niveaux au plus) avant d'être lu. Messages : `invalid CBOR: ...`, `invalid JSON: ...`, précédés du nom du fichier par chaque lecteur.
+
+La préparation relit chaque document livré et refuse celui qui serait encore du JSON (`read-back: 'clé' is still JSON`) ; `tools/package/check_package.py` vérifie sur les archives installées qu'il n'y a ni glTF ni document JSON.
+
+---
+
+## 18. Maillages de navigation `.mnav`
+
+**Rôle** (jalon 9, partie 6) : le maillage de navigation d'un niveau pour une taille de personnage, construit une fois (préparation, éditeur) et relu tel quel. **Lecteur** : `NavMesh::load` ; **écrivain** : `NavMesh::save` (`src/moteur/navigation.cpp`). Petit-boutiste.
+
+| Champ | Contenu |
+|---|---|
+| magie | `MNAV` |
+| version | u32 = 1 (une autre est refusée : `navigation mesh format N (expected 1)`) |
+| agent | `NavAgent` : rayon, hauteur, marche, pente (4 f32) |
+| réglages | `NavBuildSettings` (9 f32) |
+| bornes | deux vec3 : la boîte du niveau |
+| tuilage | tuiles en x et en z (i32), polygones au plus par tuile (i32), paramètres de Detour (`dtNavMeshParams` : origine vec3, largeur et profondeur des tuiles f32, tuiles et polygones au plus i32) |
+| zones | u32 N, puis par zone : boîte (deux vec3), zone u8 (`NavArea`) |
+| liaisons | u32 N, puis : départ vec3, arrivée vec3, rayon f32, deux sens u8, zone u8, identifiant u32 |
+| obstacles | u32 N, puis : identifiant u32, boîte (deux vec3) ; puis l'identifiant suivant (u32) |
+| portes fermées | u32 N identifiants |
+| points d'élagage | u32 N vec3 (`prune()`) |
+| tuiles | u32 N, puis chaque tuile : taille u32 et les octets de Detour (son en-tête, sa magie `DNAV` et sa version, contrôlés à l'ajout) |
+| somme | u64 : FNV-1a 64 bits de tout ce qui suit la magie et la version |
+
+Refus : magie absente (`not a navigation mesh (MNAV)`), somme fausse (`damaged navigation mesh (checksum)`), autre version, tuilage nul, tuile trop courte ou refusée par Detour, octets après la fin. **Confiance** : Detour lit ses tuiles sans tout vérifier ; le fichier ne vient que de la préparation du jeu (archives contrôlées par CRC-32) et la somme écarte une copie abîmée ; un fichier fabriqué pour nuire n'est pas un cas traité.
+
+---
+
+## 19. Niveaux v3 `.level.json`
+
+**Rôle** (jalon 9, partie 8) : un niveau tel que l'éditeur l'écrit : des préfabriqués placés (pièces de kit, accessoires, lumières), des points nommés, des volumes, un sol peint et les réglages de sa navigation. Texte, pour le versionnement et les fusions. **Lecteur** : `LevelDocument::parse` (`src/moteur/level.cpp`) ; **écrivain** : `LevelDocument::to_json`. Remplace les cartes v1 et v2 (section 1), qui se migrent (`migrate_map`, `bac_a_sable --migrate-map CARTE SORTIE RÈGLES`).
+
+```json
+{
+  "version": 3,
+  "description": "La crypte",
+  "chunk_size": 32,
+  "next_id": 13,
+  "layers": [{"name": "default", "visible": true, "locked": false}, {"name": "decor", "visible": true, "locked": false}],
+  "instances": [
+    {"id": 1, "prefab": {"id": "6f1c...", "path": "prefabs/kit/mur_4m.prefab.json"}, "layer": "default",
+     "transform": {"position": [4, 0, 0], "rotation": [1, 0, 0, 0], "scale": [1, 1, 1]}},
+    {"id": 2, "prefab": {"id": "9a0b...", "path": "models/props/lampadaire_gothique.prefab.json"}, "layer": "decor",
+     "transform": {"position": [6, 0, 2]}, "overrides": {"2": {"light": {"intensity": 12}}}},
+    {"id": 3, "prefab": {"id": "41d2...", "path": "prefabs/apparition.prefab.json"}, "layer": "default",
+     "transform": {"position": [9, 0, 5]}, "properties": {"personnage": "squelette_sbire", "vie": 30}}
+  ],
+  "points": [{"name": "start", "position": [1, 0, 1], "rotation": [1, 0, 0, 0]}],
+  "volumes": [{"id": 12, "kind": "nav_area", "min": [10, -1, 4], "max": [14, 1, 8], "properties": {"area": "water"}}],
+  "ground": {"origin": [0, 0], "cell_size": 8, "width": 4, "height": 4, "level": 0,
+             "prefabs": [{"id": "...", "path": "models/sols/sol_paves_humides_a_8m.prefab.json"}], "cells": [1, 1, 0, 1, ...]},
+  "navigation": {"agents": [{"radius": 0.35, "height": 1.8, "max_climb": 0.35, "min_ground_normal_y": 0.7071}],
+                 "build": {"cell_size": 0.15, "cell_height": 0.1}},
+  "lighting": {"sun_yaw": 60, "sun_elevation": 55, "sun_color": [1, 0.93, 0.8], "sun_intensity": 3,
+               "sky_intensity": 1, "exposure": 1, "background": [0.05, 0.06, 0.08]}
+}
+```
+
+| Clé | Rôle |
+|---|---|
+| `version` | `3` ; un autre nombre est refusé (`level format N (expected 3; ...)`) |
+| `chunk_size` | mètres, de 4 à 1024 : la grille des morceaux (et des tuiles de navigation) |
+| `next_id` | le prochain identifiant donné ; jamais rendu plus petit (les sauvegardes renvoient aux identifiants : un identifiant retiré n'est pas redonné) |
+| `layers` | les calques (nom unique, `visible`, `locked`) ; un calque inconnu d'une instance est ajouté avec un avertissement |
+| `instances[]` | `id` (entier > 0, unique avec les volumes), `prefab` (référence, exigée), `layer`, `transform` (comme le composant `transform`), `overrides` (comme `PrefabPlacement::overrides` : chemin d'entité → composant → champs), `properties` (objet libre : les données du **jeu** pour cette instance, ce qu'une apparition fait apparaître, le butin d'un coffre ; le moteur les transmet sans les lire, partie 10) |
+| `points[]` | `name` (unique), `position`, `rotation` (`[w, x, y, z]`) : entrées, apparitions, connecteurs |
+| `volumes[]` | `id`, `kind` (libre pour le jeu ; `nav_area` : `properties.area` `water` ou `fire`, une zone de coût de la navigation), `min`, `max`, `properties` (objet) |
+| `ground` | `origin` (x, z du coin de la case (0, 0)), `cell_size`, `width`, `height`, `level` (hauteur), `prefabs` (références), `cells` (`width` x `height` entiers, ligne après ligne : 0 aucun, `i` le préfabriqué `prefabs[i - 1]` posé au coin de la case) |
+| `navigation` | `agents` (un maillage par taille de créature, champs de `NavAgent`), `build` (champs de `NavBuildSettings` ; `tile_size` prend `chunk_size`, aussi à l'écriture) |
+| `lighting` | l'éclairage du niveau (partie 10, champs de `LevelLighting`) : `sun_yaw` et `sun_elevation` (degrés), `sun_color` (sRGB), `sun_intensity`, `sky_intensity` (la lumière du ciel), `exposure`, `background` (sRGB). Le jeu et l'éditeur le donnent au rendu par `apply_lighting()` ; absent : les valeurs par défaut |
+
+Erreurs (le niveau est refusé avec toutes) : identifiant absent, nul ou en double, instance sans préfabriqué, calque ou point sans nom propre, sol dont les cases ne font pas `width` x `height` ou désignent un préfabriqué absent, vecteur ou rotation mal formés, champ hors bornes (réflexion).
+
+**Règles de migration** (un JSON, exemple `assets/levels/tranche.migration.json`) : `ground_tile` et `ground_prefab` (le type de tuile qui est le sol, et ce qui le pose), `tiles` (type de tuile → préfabriqué : une instance par suite de cases le long de x, mise à l'échelle sur x), `objects` (type d'objet → préfabriqué ; angle en degrés converti en rotation, `props` en `properties`), `object_points` (types d'objets qui deviennent des points `<type>_<id>`), `chunk_size`. Les points nommés deviennent des points (au centre de leur case, numérotés s'ils sont plusieurs), les connecteurs des volumes `connector`.
+
+**État d'une partie** (`LevelState`, une section de sauvegarde que le jeu enregistre) : `{"overrides": {"<id>": {chemin: {composant: champs}}}, "removed": [ids]}` : ce que la partie a changé dans les instances, appliqué à chaque fois que leur morceau se charge.
+
+---
+
+## 20. Niveaux préparés `.mlvl` et `.mlvc`
+
+**Rôle** (jalon 9, partie 8) : un niveau prêt à charger par morceaux : un **en-tête** (`<niveau>.mlvl`) et **un fichier par morceau** de la grille qui contient quelque chose (`<niveau>.chunks/<x>_<z>.mlvc`) ; seuls les morceaux autour du héros sont lus. **Écrivains** : la préparation (`bake_level`, `encode_level_header`, `encode_level_chunk` ; `cook` pour chaque `.level.json` livré), l'éditeur. **Lecteurs** : `LevelStreamer` (`decode_level_header`, `decode_level_chunk`). Sans forme préparée (développement), `LevelStreamer::open_any()` prépare le niveau en mémoire depuis sa source.
+
+Les deux commencent par une magie (`MLVL`, `MLVC`) et une version u32 = 2 (2 depuis la partie 10 : les propriétés des instances), et finissent par la somme FNV-1a 64 bits de tout ce qui suit la version. Refus : magie absente (`not a prepared level`, `not a level chunk`), somme fausse (`damaged ... (checksum)`), autre version, contenu illisible, grille fausse (taille nulle, `present` d'une autre taille), collision incohérente, octets après la fin.
+
+| En-tête `.mlvl` | |
+|---|---|
+| magie, version | `MLVL`, 2 |
+| document | un blob (taille u32) CBOR : `description`, `chunk_size`, `origin` (le coin bas du morceau (0, 0), sur un multiple de la taille), `chunks` (`[x, z]`), `bounds`, `points` (`[nom, position, rotation]`), `volumes` (`[id, genre, min, max, propriétés]`), `lighting` (partie 11 : l'éclairage du niveau, comme dans le `.level.json`), `navigation` (par agent : `[agent, réglages, origine, tuiles x, tuiles z]`, de quoi `NavMesh::start_tiled()`), `present` (un octet par morceau, 1 : il a un fichier) |
+| somme | u64 |
+
+| Morceau `.mlvc` | |
+|---|---|
+| magie, version | `MLVC`, 2 |
+| coordonnées | x, z (i32) |
+| instances | un blob CBOR `{"instances": [[id, clé du préfabriqué, transformation, surcharges, propriétés], ...]}` : celles dont la racine est dans le morceau (id 0 : une tuile du sol, sans identité) |
+| collision | sommets (tableau de vec3, monde), indices (u32), genres (u8) : les triangles dont le centre est dans le morceau |
+| navigation | u32 N agents, puis une tuile de Detour par agent (blob, vide : aucune) ; la tuile (x, z) du maillage est le morceau (x, z) : celles des voisins se raccordent quand elles s'ajoutent |
+| somme | u64 |
+
+**Cache de développement** (partie 11) : sans forme préparée dans les assets, `LevelStreamer::open_any()` écrit l'en-tête et les morceaux préparés dans le cache d'import (`.imported/levels/<niveau>.level.mlvl`, `.chunks/<x>_<z>.mlvc`) avec une signature (`.mlvl.files` : `{"paths": [...], "signature": {"format": 2, "files": [[chemin, taille, date], ...]}}` : le niveau, ses préfabriqués et leurs bases, ses modèles et leurs `.meta`) ; la fois suivante, si la signature est la même, il les relit au lieu de préparer le niveau. Les fichiers sont les mêmes que ceux de la préparation livrée.
+
+---
+
 ## Annexe : sommes de contrôle
 
 - **CRC-32** (sauvegardes, entrées d'archive) : le CRC-32 courant (IEEE 802.3, celui de zlib et du ZIP) : polynôme réfléchi `0xEDB88320`, valeur initiale `0xFFFFFFFF`, complément final. `crc32("123456789") = 0xCBF43926`.
-- **FNV-1a 64 bits** (index des archives, `source_hash` des tables, empreintes de `cook_state.json`) : valeur initiale `14695981039346656037` (`0xcbf29ce484222325`), pour chaque octet `h = (h XOR octet) × 1099511628211` (`0x100000001b3`) modulo 2^64. Exception : les empreintes de `cook_state.json` partent de `kCookVersion × 1099511628211` au lieu de la valeur initiale standard (la version de l'outil change toutes les empreintes).
+- **FNV-1a 64 bits** (index des archives, `source_hash` des tables, empreintes de `cook_state.json`, empreintes des modèles préparés, maillages de navigation, niveaux préparés) : valeur initiale `14695981039346656037` (`0xcbf29ce484222325`), pour chaque octet `h = (h XOR octet) × 1099511628211` (`0x100000001b3`) modulo 2^64. Exception : les empreintes de `cook_state.json` partent de `kCookVersion × 1099511628211` au lieu de la valeur initiale standard (la version de l'outil change toutes les empreintes).
 
 ---
 

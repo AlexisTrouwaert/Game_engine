@@ -19,9 +19,9 @@ glm::ivec2 SpatialHash::bucket(glm::vec2 p) const {
     return {static_cast<int>(std::floor(p.x / bucket_size_)), static_cast<int>(std::floor(p.y / bucket_size_))};
 }
 
-void SpatialHash::insert(entt::entity entity, glm::vec2 position, float radius, std::uint32_t layer) {
+void SpatialHash::insert(entt::entity entity, glm::vec2 position, float radius, std::uint32_t layer, HeightSpan heights) {
     const auto index = static_cast<std::uint32_t>(entries_.size());
-    entries_.push_back({entity, position, radius, layer});
+    entries_.push_back({entity, position, radius, layer, heights});
     largest_radius_ = std::max(largest_radius_, radius);
     const glm::ivec2 b = bucket(position);
     buckets_[key(b.x, b.y)].push_back(index);
@@ -54,7 +54,8 @@ std::vector<entt::entity> SpatialHash::sorted(std::vector<std::pair<float, entt:
     return result;
 }
 
-std::vector<entt::entity> SpatialHash::query_circle(glm::vec2 centre, float radius, std::uint32_t layers) const {
+std::vector<entt::entity> SpatialHash::query_circle(glm::vec2 centre, float radius, std::uint32_t layers,
+                                                    HeightSpan heights) const {
     candidates(centre - glm::vec2(radius), centre + glm::vec2(radius), scratch_);
     std::vector<std::pair<float, entt::entity>> found;
     for (const std::uint32_t i : scratch_) {
@@ -62,7 +63,7 @@ std::vector<entt::entity> SpatialHash::query_circle(glm::vec2 centre, float radi
         const glm::vec2 d = e.position - centre;
         const float reach = radius + e.radius;
         const float distance2 = glm::dot(d, d);
-        if ((e.layer & layers) != 0 && distance2 <= reach * reach) {
+        if ((e.layer & layers) != 0 && distance2 <= reach * reach && e.heights.overlaps(heights)) {
             found.emplace_back(distance2, e.entity);
         }
     }
@@ -70,14 +71,14 @@ std::vector<entt::entity> SpatialHash::query_circle(glm::vec2 centre, float radi
 }
 
 std::vector<entt::entity> SpatialHash::query_cone(glm::vec2 origin, glm::vec2 direction, float range,
-                                                  float cos_half_angle, std::uint32_t layers) const {
+                                                  float cos_half_angle, std::uint32_t layers, HeightSpan heights) const {
     const float length = std::sqrt(glm::dot(direction, direction));
     const glm::vec2 axis = length > 0.0f ? direction / length : glm::vec2(1.0f, 0.0f);
     candidates(origin - glm::vec2(range), origin + glm::vec2(range), scratch_);
     std::vector<std::pair<float, entt::entity>> found;
     for (const std::uint32_t i : scratch_) {
         const Entry& e = entries_[i];
-        if ((e.layer & layers) == 0) {
+        if ((e.layer & layers) == 0 || !e.heights.overlaps(heights)) {
             continue;
         }
         const glm::vec2 d = e.position - origin;
@@ -103,7 +104,7 @@ std::vector<entt::entity> SpatialHash::query_cone(glm::vec2 origin, glm::vec2 di
 }
 
 std::vector<entt::entity> SpatialHash::query_rect(glm::vec2 origin, glm::vec2 direction, float length, float half_width,
-                                                  std::uint32_t layers) const {
+                                                  std::uint32_t layers, HeightSpan heights) const {
     const float norm = std::sqrt(glm::dot(direction, direction));
     const glm::vec2 axis = norm > 0.0f ? direction / norm : glm::vec2(1.0f, 0.0f);
     const glm::vec2 side(-axis.y, axis.x);
@@ -112,7 +113,7 @@ std::vector<entt::entity> SpatialHash::query_rect(glm::vec2 origin, glm::vec2 di
     std::vector<std::pair<float, entt::entity>> found;
     for (const std::uint32_t i : scratch_) {
         const Entry& e = entries_[i];
-        if ((e.layer & layers) == 0) {
+        if ((e.layer & layers) == 0 || !e.heights.overlaps(heights)) {
             continue;
         }
         const glm::vec2 d = e.position - origin;

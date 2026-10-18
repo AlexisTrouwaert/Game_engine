@@ -1,0 +1,51 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_StructuredBuffer_v4float
+{
+    float4 _m0[1];
+};
+
+struct type_Frame
+{
+    float4x4 view_projection;
+};
+
+struct main0_out
+{
+    uint out_var_TEXCOORD0 [[user(locn0)]];
+    float4 gl_Position [[position]];
+};
+
+struct main0_in
+{
+    float3 in_var_TEXCOORD0 [[attribute(0)]];
+    float4 in_var_TEXCOORD4 [[attribute(4)]];
+    float4 in_var_TEXCOORD5 [[attribute(5)]];
+    float4 in_var_TEXCOORD6 [[attribute(6)]];
+    float4 in_var_TEXCOORD8 [[attribute(8)]];
+    float4 in_var_TEXCOORD12 [[attribute(12)]];
+    uint4 in_var_TEXCOORD13 [[attribute(13)]];
+    float4 in_var_TEXCOORD14 [[attribute(14)]];
+};
+
+vertex main0_out main0(main0_in in [[stage_in]], constant type_Frame& Frame [[buffer(0)]], const device type_StructuredBuffer_v4float& palettes [[buffer(1)]])
+{
+    main0_out out = {};
+    uint _54 = uint(in.in_var_TEXCOORD12.w);
+    uint _58 = (_54 + in.in_var_TEXCOORD13.x) * 3u;
+    float3x4 _70 = float3x4(palettes._m0[_58], palettes._m0[_58 + 1u], palettes._m0[_58 + 2u]) * in.in_var_TEXCOORD14.x;
+    uint _74 = (_54 + in.in_var_TEXCOORD13.y) * 3u;
+    float3x4 _86 = float3x4(palettes._m0[_74], palettes._m0[_74 + 1u], palettes._m0[_74 + 2u]) * in.in_var_TEXCOORD14.y;
+    uint _99 = (_54 + in.in_var_TEXCOORD13.z) * 3u;
+    float3x4 _111 = float3x4(palettes._m0[_99], palettes._m0[_99 + 1u], palettes._m0[_99 + 2u]) * in.in_var_TEXCOORD14.z;
+    uint _121 = (_54 + in.in_var_TEXCOORD13.w) * 3u;
+    float3x4 _133 = float3x4(palettes._m0[_121], palettes._m0[_121 + 1u], palettes._m0[_121 + 2u]) * in.in_var_TEXCOORD14.w;
+    float4 _149 = float4(float4(in.in_var_TEXCOORD0, 1.0) * float3x4(((_70[0] + _86[0]) + _111[0]) + _133[0], ((_70[1] + _86[1]) + _111[1]) + _133[1], ((_70[2] + _86[2]) + _111[2]) + _133[2]), 1.0);
+    out.out_var_TEXCOORD0 = uint(in.in_var_TEXCOORD8.w + 0.5);
+    out.gl_Position = Frame.view_projection * float4(dot(in.in_var_TEXCOORD4, _149), dot(in.in_var_TEXCOORD5, _149), dot(in.in_var_TEXCOORD6, _149), 1.0);
+    return out;
+}
+

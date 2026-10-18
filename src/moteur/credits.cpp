@@ -6,6 +6,7 @@
 
 #include <iterator>
 
+#include "moteur/document.hpp"
 #include "moteur/paths.hpp"
 
 namespace moteur {
@@ -65,7 +66,7 @@ void append(std::vector<CreditEntry>& entries, const nlohmann::json& list) {
 void Credits::add_file(const std::string& path) {
     try {
         // All or nothing: the file's lists are read aside, then appended once all of them are read.
-        const nlohmann::json doc = nlohmann::json::parse(read_text_file(path));
+        const nlohmann::json doc = parse_document(read_text_file(path));
         std::vector<CreditEntry> read[5];
         append(read[0], doc.value("libraries", nlohmann::json::array()));
         append(read[1], doc.value("fonts", nlohmann::json::array()));

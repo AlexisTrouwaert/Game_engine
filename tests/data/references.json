@@ -2,9 +2,9 @@
   "_note": "Reference captures (first 12 hex digits of their SHA-256), per platform: written by tools/tests/check_references.py --record once a change is checked and explained in the milestone's document.",
   "windows": {
     "2d": "bd91e8b2c616",
-    "demo3d": "fdc076d9c3ae",
-    "demo3d_replay": "952477744ffb",
-    "slice": "da6c481570e6",
-    "exactness": "dc24e9427ee5"
+    "demo3d": "ebd194e461cb",
+    "demo3d_replay": "e30c5b725f33",
+    "slice": "98609fd4a8ed",
+    "exactness": "91e6eca81dc9"
   }
 }

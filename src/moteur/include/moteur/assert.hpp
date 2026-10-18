@@ -28,6 +28,11 @@ namespace moteur {
 /// Called through the macros, which fill `expression`, `file` and `line`, rather than directly.
 [[noreturn]] void assertion_failed(const char* expression, const char* message, const char* file, int line);
 
+/// True on the program's main thread: the one that initialized the engine's library (its static
+/// objects are built on it, before main()). Most of the engine is for that thread only (the
+/// Renderer, Assets, the World, the Console...); MOTEUR_ASSERT_MAIN_THREAD() checks it.
+bool on_main_thread();
+
 }  // namespace moteur
 
 /// Checks `condition` in every configuration, shipping included; on failure calls
@@ -52,3 +57,7 @@ namespace moteur {
 #else
 #define MOTEUR_ASSERT(condition, message) MOTEUR_VERIFY(condition, message)
 #endif
+
+/// Checks, in the development builds, that the caller is on the main thread (moteur::on_main_thread());
+/// `what` names the service in the message ("Renderer", "Assets"...), a string literal.
+#define MOTEUR_ASSERT_MAIN_THREAD(what) MOTEUR_ASSERT(::moteur::on_main_thread(), what " is for the main thread only")

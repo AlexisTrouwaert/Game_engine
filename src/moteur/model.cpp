@@ -746,7 +746,7 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
             SDL_Log("Model '%s': %zu skinned vertices have no weight; they follow their skin's first joint",
                     name.c_str(), skin_report.unweighted);
         }
-        if (gltf_options.meshes && model.parts.empty()) {
+        if (gltf_options.meshes && gltf_options.require_meshes && model.parts.empty()) {
             throw std::runtime_error("no triangle mesh in the default scene");
         }
 
@@ -857,6 +857,11 @@ TextureSettings model_texture_settings(const ModelImage& image) {
 
 Model Model::create(Renderer& renderer, const ModelData& data, const std::string& name,
                     const TextureSource& texture_source) {
+    return create(renderer, data, name, texture_source, {});
+}
+
+Model Model::create(Renderer& renderer, const ModelData& data, const std::string& name, const TextureSource& texture_source,
+                    const std::vector<std::shared_ptr<Texture>>& embedded) {
     Model model;
     // Colors in sRGB, data (normals, roughness, occlusion) as stored; mipmaps for all; straight alpha
     // (3D surfaces do not blend like sprites).
@@ -864,10 +869,14 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
         const TextureSettings settings = model_texture_settings(image);
         if (texture_source && !image.file.empty()) {
             model.textures.push_back(texture_source(image, settings));
+            model.texture_owned.push_back(false);
             continue;
         }
         std::shared_ptr<Texture> texture;
-        if (!image.ktx2.empty()) {
+        const std::size_t index = model.textures.size();
+        if (index < embedded.size() && embedded[index]) {
+            texture = embedded[index];
+        } else if (!image.ktx2.empty()) {
             const CompressedImage decoded = decode_ktx2(image.ktx2.data(), image.ktx2.size(), image.name, settings,
                                                         renderer.compressed_formats());
             texture = std::make_shared<Texture>(create_compressed_texture(renderer, decoded, image.name.c_str()));
@@ -878,9 +887,10 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
         }
         model.gpu_bytes += texture->gpu_bytes;
         model.textures.push_back(std::move(texture));
+        model.texture_owned.push_back(true);
     }
-    const auto texture = [&model](int index) -> const Texture* {
-        return index >= 0 ? model.textures[static_cast<std::size_t>(index)].get() : nullptr;
+    const auto texture = [&model](int index) -> Asset<Texture> {
+        return index >= 0 ? Asset<Texture>{model.textures[static_cast<std::size_t>(index)]} : Asset<Texture>{};
     };
     for (const ModelMaterial& source : data.materials) {
         Material material;
@@ -916,6 +926,7 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
     model.joint_count = data.skeleton.joints.size();
     model.bounds = data.bounds();
     model.triangle_count = data.triangle_count();
+    model.collision = data.collision;
     return model;
 }
 
@@ -930,15 +941,18 @@ void Model::replace_in_place(Model&& fresh) {
     }
     // A texture only this model holds was created by it, and can take the new pixels in place. A
     // shared one (from a cache) must be the very same.
+    const auto owned = [this](std::size_t i) { return i < texture_owned.size() && texture_owned[i]; };
     for (std::size_t i = 0; i < textures.size(); ++i) {
-        if (fresh.textures[i] != textures[i] && textures[i].use_count() > 1) {
+        if (fresh.textures[i] != textures[i] && !owned(i)) {
             throw std::runtime_error("it uses another texture file: reload the scene");
         }
     }
-    const auto remap = [&](const Texture* texture) -> const Texture* {
+    // A fresh material's texture is the fresh model's: the same index of this model's (kept at its
+    // address); a texture shared with a cache stays as it is.
+    const auto remap = [&](const Asset<Texture>& texture) -> Asset<Texture> {
         for (std::size_t i = 0; i < fresh.textures.size(); ++i) {
-            if (fresh.textures[i].get() == texture) {
-                return textures[i].get();
+            if (fresh.textures[i] == texture.handle()) {
+                return Asset<Texture>{textures[i]};
             }
         }
         return texture;
@@ -958,6 +972,7 @@ void Model::replace_in_place(Model&& fresh) {
         material.emissive_texture = remap(material.emissive_texture);
         materials[i] = material;
     }
+    collision = std::move(fresh.collision);
     for (std::size_t i = 0; i < parts.size(); ++i) {
         parts[i] = std::move(fresh.parts[i]);  // each Mesh stays at its address, with the new buffers
     }

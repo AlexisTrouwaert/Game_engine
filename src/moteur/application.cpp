@@ -1,3 +1,4 @@
+#include "moteur/assert.hpp"
 #include "moteur/application.hpp"
 
 #include <algorithm>
@@ -104,10 +105,35 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
             }
         }
 
+        // The screen asked for (the config, or MOTEUR_WINDOW_DISPLAY for the checks): the window is
+        // created hidden, centered on it, then shown, so that it never flashes on another screen.
+        int display_index = config_.window_display;
+        if (const char* forced = SDL_getenv("MOTEUR_WINDOW_DISPLAY"); forced != nullptr && *forced != '\0') {
+            display_index = SDL_atoi(forced);
+        }
+        SDL_DisplayID window_display = 0;
+        if (display_index >= 0) {
+            int count = 0;
+            if (SDL_DisplayID* ids = SDL_GetDisplays(&count)) {
+                if (display_index < count) {
+                    window_display = ids[display_index];
+                } else {
+                    SDL_Log("Window: screen %d asked for, %d connected: the system chooses", display_index, count);
+                }
+                SDL_free(ids);
+            }
+        }
         window_ = SDL_CreateWindow(config_.title.c_str(), config_.width, config_.height,
-                                   SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+                                   SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
+                                       (window_display != 0 ? SDL_WINDOW_HIDDEN : 0));
         if (window_ == nullptr) {
             throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
+        }
+        if (window_display != 0) {
+            SDL_SetWindowPosition(window_, static_cast<int>(SDL_WINDOWPOS_CENTERED_DISPLAY(window_display)),
+                                  static_cast<int>(SDL_WINDOWPOS_CENTERED_DISPLAY(window_display)));
+            SDL_ShowWindow(window_);
+            SDL_SyncWindow(window_);
         }
 
         if (config_.pixel_width > 0 && config_.pixel_height > 0) {
@@ -120,7 +146,8 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
         int w = 0, h = 0, pixel_w = 0, pixel_h = 0;
         SDL_GetWindowSize(window_, &w, &h);
         SDL_GetWindowSizeInPixels(window_, &pixel_w, &pixel_h);
-        SDL_Log("Window: %dx%d points, %dx%d pixels", w, h, pixel_w, pixel_h);
+        const char* screen = SDL_GetDisplayName(SDL_GetDisplayForWindow(window_));
+        SDL_Log("Window: %dx%d points, %dx%d pixels, on '%s'", w, h, pixel_w, pixel_h, screen != nullptr ? screen : "?");
         if (config_.pixel_width > 0 && (pixel_w != config_.pixel_width || pixel_h != config_.pixel_height)) {
             SDL_Log("Window: %dx%d pixels asked, %dx%d obtained (screen density %.2f)", config_.pixel_width,
                     config_.pixel_height, pixel_w, pixel_h, static_cast<double>(SDL_GetWindowPixelDensity(window_)));
@@ -156,6 +183,13 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
             }
         }
         assets_ = std::make_unique<Assets>(*renderer_, asset_path(""));
+        build_asset_registry();
+#if !defined(MOTEUR_SHIPPING)
+        if (!config_.assets_source_directory.empty()) {
+            // The import cache next to the sources: shared by every build (Debug, Release...).
+            assets_->set_import_cache(import_cache_folder(config_.assets_source_directory));
+        }
+#endif
         data_ = std::make_unique<DataTables>();
         assets_->add_file_listener([this](const std::string& key) { data_->reload_file(assets_->root(), key); });
         add_console_commands();
@@ -166,6 +200,11 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
         load_audio_settings();
         if (!config_.assets_source_directory.empty()) {
             assets_->enable_hot_reload(config_.assets_source_directory);
+#if !defined(MOTEUR_SHIPPING)
+            for (const std::string& folder : config_.asset_folders) {
+                assets_->watch_mounted_folder(folder);
+            }
+#endif
         }
 #if !defined(MOTEUR_SHIPPING)
         if (DebugUi* ui = renderer_->debug_ui()) {
@@ -281,11 +320,17 @@ std::string Application::variables_path() const {
 void Application::add_console_commands() {
     Console& c = *console_;
     c.add("quit", "", "quits the program", Console::Kind::Tool, [this](const Console::Args&, Console&) { quit(); });
-    c.add("crash", "[acces|abort|exception|assertion|gpu]", "crashes on purpose (checks the crash reports)", Console::Kind::Tool,
+    c.add("crash", "[acces|abort|exception|assertion|gpu|frame]",
+          "crashes on purpose (checks the crash reports; frame: a GPU failure inside a frame, which must not end the game)",
+          Console::Kind::Tool,
           [this](const Console::Args& args, Console&) {
               const std::string kind = args.empty() ? "acces" : args[0];
               if (kind == "gpu") {
                   renderer_->simulate_device_lost();  // reported at the next frame, then a clean end
+                  return;
+              }
+              if (kind == "frame") {
+                  renderer_->simulate_frame_failure();  // the next frame without its meshes, then normal
                   return;
               }
               crash_now(kind == "abort"       ? CrashKind::Abort
@@ -449,7 +494,92 @@ std::string Application::preferences_directory() const {
     return directory;
 }
 
+std::string import_cache_folder(const std::string& assets_source_directory) {
+    std::string folder = assets_source_directory;
+    while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\')) {
+        folder.pop_back();
+    }
+    const std::size_t slash = folder.find_last_of("/\\");
+    return (slash == std::string::npos ? std::string() : folder.substr(0, slash + 1)) + ".imported/";
+}
+
+void Application::build_asset_registry() {
+    // The shipped game: the registry frozen by the preparation, in the archives.
+    const std::string frozen = asset_path(ApplicationConfig::kRegistryFile);
+    if (file_exists(frozen)) {
+        const FileData file = read_file(frozen);
+        const auto* bytes = static_cast<const std::uint8_t*>(file.data());
+        assets_->registry() = AssetRegistry::decode(std::vector<std::uint8_t>(bytes, bytes + file.size()), frozen);
+        SDL_Log("Assets: %zu identified (frozen registry)", assets_->registry().size());
+        return;
+    }
+    // Development: the folders and their .meta files; a new asset gets its .meta in the sources
+    // (never in the copy next to the executable, which the next build replaces).
+    std::vector<std::string> roots;
+    bool write = false;
+    if (!config_.assets_source_directory.empty()) {
+        std::string source = config_.assets_source_directory;
+        if (source.back() != '/' && source.back() != '\\') {
+            source += '/';
+        }
+        roots.push_back(source);
+        write = true;
+#if defined(MOTEUR_ENGINE_ASSETS_DIR)
+        roots.emplace_back(MOTEUR_ENGINE_ASSETS_DIR);  // copied under the game's: the game's file wins
+#endif
+    } else {
+        roots.push_back(assets_->root());
+    }
+#if !defined(MOTEUR_SHIPPING)
+    for (const std::string& folder : config_.asset_folders) {
+        mount_asset_folder(folder);
+    }
+    for (const std::string& folder : mounted_asset_folders()) {
+        roots.push_back(folder);
+    }
+#endif
+    const Uint64 start = SDL_GetPerformanceCounter();
+    const AssetScanReport report = assets_->registry().scan(roots, write);
+    SDL_Log("Assets: %zu identified in %.1f ms (%zu new .meta%s)", report.assets,
+            static_cast<double>(SDL_GetPerformanceCounter() - start) * 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency()),
+            report.created.size(), write ? " written" : ", not written: no source folder");
+    for (const std::string& key : report.reassigned) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Assets: new identifier for %s", key.c_str());
+    }
+    for (const std::string& orphan : report.orphans) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Assets: '%s' has no asset (moved without it?)", orphan.c_str());
+    }
+    for (const std::string& problem : report.problems) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Assets: %s", problem.c_str());
+    }
+    if (!report.shadowed.empty()) {
+        SDL_Log("Assets: %zu file(s) of the mounted folders hidden by the program's own (%s%s)", report.shadowed.size(),
+                report.shadowed.front().c_str(), report.shadowed.size() > 1 ? "..." : "");
+    }
+}
+
+void Application::fail(const std::string& what) {
+    report_fatal_error(what, config_.crash_message.empty() ? std::string(kDefaultCrashMessage) : config_.crash_message);
+    ended_on_error_ = true;
+    running_ = false;
+}
+
+template <typename Body>
+bool Application::guarded(const char* phase, Body&& body) {
+    try {
+        body();
+        return true;
+    } catch (const std::exception& e) {
+        fail(std::string("uncaught exception in ") + phase + ": " + e.what());
+    } catch (...) {
+        fail(std::string("uncaught exception in ") + phase + " (not a std::exception)");
+    }
+    return false;
+}
+
 void Application::run(Game& game) {
+    MOTEUR_ASSERT_MAIN_THREAD("Application::run()");
+    MOTEUR_ASSERT(!running_, "Application::run() called from inside run()");
     FixedTimestep timestep(1.0 / static_cast<double>(tick_rate()), config_.max_frame_time);
     const auto frequency = static_cast<double>(SDL_GetPerformanceFrequency());
     const auto elapsed_ms = [frequency](std::uint64_t from, std::uint64_t to) {
@@ -541,12 +671,17 @@ void Application::run(Game& game) {
 
         {
             MOTEUR_PROFILE("assets");
-            assets_->update();  // hot reload, between two frames
+            const bool ok = guarded("the hot reload", [this] {
+                assets_->update();  // hot reload, between two frames
 #if !defined(MOTEUR_SHIPPING)
-            if (debug_tools_) {
-                debug_tools_->between_frames();  // the tools' reloads and frees, also between two frames
-            }
+                if (debug_tools_) {
+                    debug_tools_->between_frames();  // the tools' reloads and frees, also between two frames
+                }
 #endif
+            });
+            if (!ok) {
+                break;
+            }
         }
 
 #if !defined(MOTEUR_SHIPPING)
@@ -597,7 +732,12 @@ void Application::run(Game& game) {
                 input_->set_pointer(glm::vec2(-1.0f));
             }
             input_->process_event(event);
-            game.on_event(event);
+            if (!guarded("Game::on_event", [&] { game.on_event(event); })) {
+                break;
+            }
+        }
+        if (!running_ && ended_on_error_) {
+            break;
         }
 
         console_->flush_log();
@@ -613,10 +753,14 @@ void Application::run(Game& game) {
         }
         {
         MOTEUR_PROFILE("logic");
-        for (int i = 0; i < steps; ++i) {
+        for (int i = 0; i < steps && running_; ++i) {
             MOTEUR_PROFILE("tick");
-            if (game.waiting()) {
-                game.update(timestep.step());  // a tick that does not count: see Game::waiting()
+            bool waiting = false;
+            if (!guarded("Game::waiting", [&] { waiting = game.waiting(); })) {
+                break;
+            }
+            if (waiting) {
+                guarded("Game::update", [&] { game.update(timestep.step()); });  // a tick that does not count: see Game::waiting()
                 continue;
             }
             // The console's game commands of this tick: replayed, or typed and recorded.
@@ -640,10 +784,15 @@ void Application::run(Game& game) {
             for (const std::string& command : commands) {
                 console_->run_game_command(command);
             }
-            game.update(timestep.step());
+            if (!guarded("Game::update", [&] { game.update(timestep.step()); })) {
+                break;
+            }
             input_->end_tick();  // what this tick has seen is consumed
             ++tick;
         }
+        }
+        if (ended_on_error_) {
+            break;
         }
         stats_ticks += steps;
         const std::uint64_t update_end = SDL_GetPerformanceCounter();
@@ -676,12 +825,17 @@ void Application::run(Game& game) {
 #endif
             {
                 MOTEUR_PROFILE("render: record");
-                game.render(*renderer_, timestep.alpha());
+                // A failure here still ends the frame below (the swapchain image acquired must be
+                // submitted), then the loop.
+                guarded("Game::render", [&] { game.render(*renderer_, timestep.alpha()); });
             }
             const std::uint64_t record_end = SDL_GetPerformanceCounter();
             {
                 MOTEUR_PROFILE("render: submit");
-                renderer_->end_frame();
+                renderer_->end_frame();  // never throws (see Renderer::end_frame())
+            }
+            if (ended_on_error_) {
+                break;
             }
             const std::uint64_t submit_end = SDL_GetPerformanceCounter();
             ++stats_frames;
@@ -715,7 +869,9 @@ void Application::run(Game& game) {
         // The sounds the updates asked for, at the end of the frame (see Audio).
         {
             MOTEUR_PROFILE("audio");
-            audio_->update();
+            if (!guarded("the audio", [this] { audio_->update(); })) {
+                break;
+            }
         }
         // The player's frame limit, without vsync (DisplaySettings::frame_limit).
         if (!display_.vsync && display_.frame_limit > 0) {

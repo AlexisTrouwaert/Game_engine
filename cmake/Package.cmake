@@ -4,7 +4,9 @@
 #       MANIFEST <file>               # the delivery manifest (moteur/cook.hpp)
 #       [COOK_TOOL <target>]          # the game's cooking tool (cook_main); default moteur_cook
 #       [IDENTIFIER <reverse DNS>]    # com.publisher.game: the macOS bundle identifier
-#       [WINDOWS_APP_ID <GUID>])      # the installer's identity (default: derived from publisher + name)
+#       [WINDOWS_APP_ID <GUID>]       # the installer's identity (default: derived from publisher + name)
+#       [ASSET_FOLDERS <folder>...])  # other games' asset folders the game reads in place in development
+#                                     # (ApplicationConfig::asset_folders): cooked before the game's own
 #
 # Makes the target <target>_package, in the shipping configuration only (MOTEUR_SHIPPING): the
 # shipped game is the only one players get. It
@@ -30,7 +32,7 @@ set(MOTEUR_MACOS_NOTARY_PROFILE "" CACHE STRING
     "macOS: keychain profile of xcrun notarytool (store-credentials); empty: not notarized")
 
 function(moteur_package target)
-    cmake_parse_arguments(ARG "" "MANIFEST;COOK_TOOL;IDENTIFIER;WINDOWS_APP_ID" "" ${ARGN})
+    cmake_parse_arguments(ARG "" "MANIFEST;COOK_TOOL;IDENTIFIER;WINDOWS_APP_ID" "ASSET_FOLDERS" ${ARGN})
     if(NOT MOTEUR_SHIPPING)
         return()  # packages come from the shipping configuration (presets *-shipping)
     endif()
@@ -98,7 +100,7 @@ function(moteur_package target)
     endif()
 
     add_custom_target(${target}_package
-        COMMAND "$<TARGET_FILE:${ARG_COOK_TOOL}>" --sources "${_exe_dir}/assets" --manifest "${ARG_MANIFEST}"
+        COMMAND "$<TARGET_FILE:${ARG_COOK_TOOL}>" --sources ${ARG_ASSET_FOLDERS} "${_exe_dir}/assets" --manifest "${ARG_MANIFEST}"
                 --output "${_work}/cook" --shaders "${_exe_dir}/shaders"
         COMMAND "${CMAKE_COMMAND}" ${_common} ${_platform_args} -P "${_script}"
         COMMENT "Package of ${target} (${_name} ${_version})"

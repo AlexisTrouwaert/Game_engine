@@ -5,6 +5,7 @@
 
 #include <stdexcept>
 
+#include "moteur/document.hpp"
 #include "moteur/image.hpp"
 #include "moteur/paths.hpp"
 
@@ -34,7 +35,7 @@ TextureAtlas TextureAtlas::load(Renderer& renderer, const std::string& json_path
     atlas.source_ = json_path;
 
     try {
-        const nlohmann::json doc = nlohmann::json::parse(read_text_file(json_path));
+        const nlohmann::json doc = parse_document(read_text_file(json_path));
 
         const int version = doc.at("version").get<int>();
         if (version != kSupportedVersion) {

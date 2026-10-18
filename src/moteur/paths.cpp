@@ -21,6 +21,7 @@ namespace {
 struct Mounted {
     std::shared_mutex mutex;
     std::vector<std::unique_ptr<Archive>> archives;  // the last one first when looking
+    std::vector<std::string> folders;                // mounted asset folders, the first one first
     bool only = false;
 };
 
@@ -67,7 +68,71 @@ std::pair<const Archive*, const Archive::Entry*> find_in_archives(const std::str
     return {nullptr, nullptr};
 }
 
+// The asset key of `path` when it is inside the program's assets folder.
+std::optional<std::string> asset_key_of(const std::string& path) {
+    const std::optional<std::string> relative = program_relative(path);
+    if (!relative || !relative->starts_with("assets/")) {
+        return std::nullopt;
+    }
+    return relative->substr(7);
+}
+
+// The file of a mounted asset folder standing for `path`, if one has it. Under the lock.
+std::optional<std::string> in_asset_folders(const std::string& path) {
+    Mounted& state = mounted();
+    if (state.folders.empty()) {
+        return std::nullopt;
+    }
+    const std::optional<std::string> key = asset_key_of(path);
+    if (!key) {
+        return std::nullopt;
+    }
+    for (const std::string& folder : state.folders) {
+        std::string candidate = folder + *key;
+        SDL_PathInfo info;
+        if (SDL_GetPathInfo(candidate.c_str(), &info) && info.type == SDL_PATHTYPE_FILE) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
+}
+
 }  // namespace
+
+void mount_asset_folder(const std::string& folder) {
+    Mounted& state = mounted();
+    const std::unique_lock lock(state.mutex);
+    std::string normal = folder;
+    std::replace(normal.begin(), normal.end(), '\\', '/');
+    if (!normal.empty() && normal.back() != '/') {
+        normal += '/';
+    }
+    if (std::find(state.folders.begin(), state.folders.end(), normal) == state.folders.end()) {
+        state.folders.push_back(normal);
+    }
+}
+
+void unmount_asset_folders() {
+    Mounted& state = mounted();
+    const std::unique_lock lock(state.mutex);
+    state.folders.clear();
+}
+
+std::vector<std::string> mounted_asset_folders() {
+    Mounted& state = mounted();
+    const std::shared_lock lock(state.mutex);
+    return state.folders;
+}
+
+std::string disk_path(const std::string& path) {
+    SDL_PathInfo info;
+    if (SDL_GetPathInfo(path.c_str(), &info) && info.type == SDL_PATHTYPE_FILE) {
+        return path;
+    }
+    Mounted& state = mounted();
+    const std::shared_lock lock(state.mutex);
+    return in_asset_folders(path).value_or(path);
+}
 
 std::string base_path() {
     const char* path = SDL_GetBasePath();
@@ -122,7 +187,21 @@ FileData read_file(const std::string& path) {
     std::size_t size = 0;
     void* data = SDL_LoadFile(path.c_str(), &size);
     if (data == nullptr) {
-        throw std::runtime_error(std::string("cannot read the file: ") + SDL_GetError());
+        const std::string error = SDL_GetError();
+        std::optional<std::string> mounted_file;
+        {
+            const std::shared_lock lock(mounted().mutex);
+            mounted_file = in_asset_folders(path);
+        }
+        if (mounted_file) {
+            data = SDL_LoadFile(mounted_file->c_str(), &size);
+            if (data == nullptr) {
+                throw std::runtime_error("cannot read the file: " + std::string(SDL_GetError()));
+            }
+        }
+        if (data == nullptr) {
+            throw std::runtime_error("cannot read the file: " + error);
+        }
     }
     return FileData(data, size);
 }
@@ -140,7 +219,11 @@ bool file_exists(const std::string& path) {
         }
     }
     SDL_PathInfo info;
-    return SDL_GetPathInfo(path.c_str(), &info) && info.type == SDL_PATHTYPE_FILE;
+    if (SDL_GetPathInfo(path.c_str(), &info) && info.type == SDL_PATHTYPE_FILE) {
+        return true;
+    }
+    const std::shared_lock lock(mounted().mutex);
+    return in_asset_folders(path).has_value();
 }
 
 bool mount_archive(const std::string& path, std::string& error) {

@@ -215,6 +215,16 @@ public:
         return found != entries_.end() ? found->second.error : std::string();
     }
 
+    /// The key of the cached asset `asset` points to (an object of this cache), or empty. O(n).
+    std::string key_of(const T* asset) const {
+        for (const auto& [id, entry] : entries_) {
+            if (cache_[id].handle().get() == asset) {
+                return entry.key;
+            }
+        }
+        return {};
+    }
+
     /// Whether an asset is cached under `key` (loaded, or standing as a placeholder).
     bool contains(const std::string& key) const {
         return entries_.contains(entt::hashed_string::value(key.c_str(), key.size()));

@@ -110,6 +110,41 @@ Documentation détaillée : [Jalon 8 - Consolidation](JALON_8_CONSOLIDATION.md)
 - [x] Documentation de l'API du moteur *(Doxygen sans avertissement, [GUIDE.md](GUIDE.md), [FORMATS.md](FORMATS.md))*
 - [x] Revue des jalons 1 à 7 sous l'exigence d'un moteur professionnel : [REVUE_JALONS_1_A_7.md](REVUE_JALONS_1_A_7.md) *(décisions prises, corrections P1 faites ; P2 dans les jalons 9 et 10)*
 
+### 9. Niveau production : monde et données
+Documentation détaillée : [Jalon 9 - Niveau production : monde et données](JALON_9_NIVEAU_PRODUCTION.md) *(écrite et décidée le 2026-10-17)*.
+
+- [x] Règles de production (politique d'erreur, contrats) ; stockage des assets repoussé *(partie 2, 2026-10-17)*
+- [x] Réflexion des types (description `constexpr`) et préfabriqués (imbriqués, variantes) *(partie 3, 2026-10-17)*
+- [x] Assets : identifiants stables (UUID dans un `.meta`), import, formats préparés (maillages et niveaux de détail, animations, tout le reste) *(partie 4, 2026-10-17 ; sommets quantifiés reportés au jalon 10)*
+- [x] Monde en 3D : géométrie de niveau en briques assemblées, collisions, navigation (Recast & Detour), vision et sélection à la souris, niveaux v3 par morceaux *(collisions et contrôleur : partie 5 ; navigation : partie 6 ; vision et sélection : partie 7 ; niveaux v3 par morceaux : partie 8, 2026-10-18)*
+- [x] Image parallèle *(partie 9, 2026-10-18 : graphe de tâches, rendu, poses, déplacements ; TSan à passer sur le Mac)*
+- [x] Éditeur de niveaux et bibliothèque d'assets (socle, Dear ImGui) : briques, préfabriqués, sols peints *(partie 10, 2026-10-18 : `editeur --level`)*
+- [x] La tranche dans un niveau 3D *(partie 11, 2026-10-18, sous Windows ; reste le Mac : vérificateur, TSan, mesures M3, paquet .app/.dmg)*
+
+### 9 bis. Niveau production : présentation
+Documentation détaillée : [Jalon 9 bis - Niveau production : présentation](JALON_9BIS_PRESENTATION.md) *(écrite et décidée le 2026-10-17)*. Avant le jalon 1 de l'ARPG.
+
+- [ ] Matériaux (transparence, variantes) et shaders compilés sur le Mac
+- [ ] Animation : root motion, couches additives
+- [ ] Texte en champ de distance avec HarfBuzz, localisation (syntaxe inspirée de Fluent), système d'interface maison (balises et styles)
+- [ ] Audio par événements
+- [ ] La tranche refaite : interface, texte, sons
+
+### 10. Rendu et effets
+En parallèle de l'ARPG (change l'image, pas l'API du jeu) ; voir la [revue](REVUE_JALONS_1_A_7.md).
+
+- [ ] Rendu *clustered forward*, profondeur inversée
+- [ ] Post-traitement : bloom, occlusion ambiante, étalonnage, exposition, TAA
+- [ ] Particules sur le GPU, rubans, particules maillées, distorsion ; éditeur d'effets
+- [ ] Physique 3D (corps rigides, ragdolls, débris)
+
+### 11. Éditeur de production
+Issu de la [revue](REVUE_JALONS_1_A_7.md) ; sur le socle de la partie 16 du jalon 9.
+
+- [ ] Éditeurs de matériaux, de graphes d'animation, d'écrans d'interface
+- [ ] Outil de création sonore (événements, décision 4.1)
+- [ ] Édition des tables de données par la réflexion
+
 ## Plus tard (hors périmètre initial)
 
 - Réseau / multijoueur

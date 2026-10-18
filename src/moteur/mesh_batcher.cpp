@@ -14,11 +14,12 @@ bool MeshBatcher::Key::operator==(const Key& other) const {
             return false;
         }
     }
-    return double_sided == other.double_sided && skinned == other.skinned && masked == other.masked;
+    return double_sided == other.double_sided && skinned == other.skinned && masked == other.masked && lod == other.lod;
 }
 
 std::size_t MeshBatcher::KeyHash::operator()(const Key& key) const {
-    std::size_t hash = (key.double_sided ? 1u : 0u) + (key.skinned ? 2u : 0u) + (key.masked ? 4u : 0u);
+    std::size_t hash = (key.double_sided ? 1u : 0u) + (key.skinned ? 2u : 0u) + (key.masked ? 4u : 0u) +
+                       (static_cast<std::size_t>(key.lod) << 3);
     for (const void* pointer : key.pointers) {
         hash = hash * 1099511628211ull ^ std::hash<const void*>{}(pointer);
     }
@@ -29,13 +30,14 @@ MeshInstance MeshBatcher::make_instance(const MeshDraw& draw) {
     // GLM stores columns: row r of a matrix m is (m[0][r], m[1][r], m[2][r], m[3][r]). Normals only
     // need the 3 x 3 part, whose inverse is much cheaper than the full one.
     const glm::mat3 normal = glm::inverseTranspose(glm::mat3(draw.world));
-    const Material& material = draw.material;
+    const DrawMaterial& material = draw.material;
     MeshInstance instance = {};
     for (int r = 0; r < 3; ++r) {
         instance.world[r] = glm::vec4(draw.world[0][r], draw.world[1][r], draw.world[2][r], draw.world[3][r]);
         instance.normal_matrix[r] = glm::vec4(normal[0][r], normal[1][r], normal[2][r], 0.0f);
     }
     instance.normal_matrix[0].w = material.alpha_cutoff;
+    instance.normal_matrix[1].w = static_cast<float>(draw.pick_id);  // exact below 2^24
     instance.base_color = material.base_color;
     instance.factors = glm::vec4(material.metallic, material.roughness, material.normal_scale, material.occlusion_strength);
     // w: the palette of a skinned instance, or -1 for a mesh that fades before the hero (cutout).
@@ -81,9 +83,10 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
             continue;
         }
         ++submitted_;
-        const Material& material = draw.material;
+        const DrawMaterial& material = draw.material;
         const bool masked = material.alpha_cutoff > 0.0f;
-        Key key = {{draw.mesh, nullptr, nullptr, nullptr, nullptr, nullptr}, material.double_sided, draw.palette >= 0, masked};
+        const std::uint8_t lod = draw.lod < draw.mesh->lods.size() ? draw.lod : std::uint8_t{0};
+        Key key = {{draw.mesh, nullptr, nullptr, nullptr, nullptr, nullptr}, material.double_sided, draw.palette >= 0, masked, lod};
         if (pass == Pass::Main) {
             key.pointers[1] = material.base_color_texture;
             key.pointers[2] = material.metallic_roughness_texture;
@@ -161,6 +164,7 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
         batch.count = cursor_[g];
         batch.skinned = keys_[g].skinned;
         batch.masked = keys_[g].masked;
+        batch.lod = keys_[g].lod;
     }
     cursor_.assign(batch_count, 0);  // now: where the next instance of each batch goes
     std::uint32_t offset = 0;
@@ -168,7 +172,9 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
         batches_[b].first_instance = offset;
         cursor_[b] = offset;
         offset += batches_[b].count;
-        triangles_ += static_cast<std::size_t>(batches_[b].count) * (batches_[b].mesh->index_count / 3);
+        const std::uint32_t indices = batches_[b].mesh->lods.empty() ? batches_[b].mesh->index_count
+                                                                     : batches_[b].mesh->lods[batches_[b].lod].index_count;
+        triangles_ += static_cast<std::size_t>(batches_[b].count) * (indices / 3);
     }
 
     // 4. The instances, each at the next free place of its batch: recording order within a batch.

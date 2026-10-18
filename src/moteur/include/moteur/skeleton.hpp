@@ -94,6 +94,15 @@ public:
     /// the same name. Allocates; loading time.
     static ClipLibrary create(const SkeletonData& skeleton, const std::vector<ClipData>& clips, const std::string& source);
 
+    /// The prepared form of the library (milestone 9, part 4): its ozz animations as an ozz archive
+    /// (the runtime format, keys quantized), behind a checksum. What an imported model keeps
+    /// (ModelData::prepared_clips): the shipped game never builds clips from glTF keys.
+    std::vector<std::uint8_t> save() const;
+    /// A library from save()'s bytes, for `skeleton`. Throws std::runtime_error naming `source` for
+    /// bytes that are not such an archive (checksum, ozz tags and versions), or clips that do not fit
+    /// the skeleton (their number of tracks) or share a name.
+    static ClipLibrary load(const SkeletonData& skeleton, const std::vector<std::uint8_t>& bytes, const std::string& source);
+
     /// The clip `name`; the reference stays valid, at the same address, as long as the library,
     /// reloads included. Throws std::runtime_error naming the file and the clip if there is no
     /// such clip.

@@ -7,6 +7,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -14,10 +15,12 @@
 #include "moteur/animator.hpp"
 #include "moteur/application.hpp"
 #include "moteur/collision.hpp"
+#include "moteur/component_types.hpp"
 #include "moteur/debug_lines.hpp"
 #include "moteur/fixed_timestep.hpp"
 #include "moteur/movement.hpp"
 #include "moteur/process_memory.hpp"
+#include "moteur/reflection_io.hpp"
 #include "moteur/variables.hpp"
 #include "moteur/state_stack.hpp"
 #include "moteur/world.hpp"
@@ -85,18 +88,6 @@ bool edit_linear_color(const char* label, glm::vec4& color) {
     return ImGui::ColorEdit4(label, &color.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 }
 
-bool edit_transform(Transform& transform) {
-    bool changed = ImGui::DragFloat3("Position", &transform.position.x, 0.05f, 0.0f, 0.0f, "%.3f");
-    // Shown as angles (degrees), kept as a quaternion: converted only when the angles are touched.
-    glm::vec3 angles = glm::degrees(glm::eulerAngles(transform.rotation));
-    if (ImGui::DragFloat3("Rotation (°)", &angles.x, 0.5f, 0.0f, 0.0f, "%.1f")) {
-        transform.rotation = glm::quat(glm::radians(angles));
-        changed = true;
-    }
-    changed |= ImGui::DragFloat3("Scale", &transform.scale.x, 0.01f, 0.0f, 0.0f, "%.3f");
-    return changed;
-}
-
 bool edit_material(Material& material) {
     bool changed = edit_linear_color("Color", material.base_color);
     changed |= ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
@@ -112,7 +103,200 @@ bool edit_material(Material& material) {
     return changed;
 }
 
+// One value of a described type (see inspect_reflected()). `field` gives the label, bounds, unit,
+// documentation and flags; null for an element of an array (labelled `label`).
+bool inspect_value(const char* label, void* value, const TypeInfo& type, const FieldInfo* field) {
+    std::string text = label;
+    if (field != nullptr && !field->unit.empty()) {
+        text += " (" + field->unit + ")";
+    }
+    const char* shown = text.c_str();
+    const bool read_only = field != nullptr && (field->flags & kFieldReadOnly) != 0;
+    const double low = field != nullptr ? field->min : -INFINITY;
+    const double high = field != nullptr ? field->max : INFINITY;
+    bool changed = false;
+    if (read_only) {
+        ImGui::BeginDisabled();
+    }
+    switch (type.kind) {
+        case TypeKind::Bool:
+            changed = ImGui::Checkbox(shown, static_cast<bool*>(value));
+            break;
+        case TypeKind::Int:
+        case TypeKind::Float: {
+            // Edited as a double, written back clamped into the field's bounds and the type's range.
+            double number = number_value(value, type);
+            const double min = std::isfinite(low) ? low : -1e300;
+            const double max = std::isfinite(high) ? high : 1e300;
+            const bool integer = type.kind == TypeKind::Int;
+            if (ImGui::DragScalar(shown, ImGuiDataType_Double, &number, integer ? 0.2f : 0.01f, &min, &max,
+                                  integer ? "%.0f" : "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+                set_number_value(value, type, number);
+                changed = true;
+            }
+            break;
+        }
+        case TypeKind::String: {
+            auto& string = *static_cast<std::string*>(value);
+            char buffer[256] = {};
+            std::snprintf(buffer, sizeof(buffer), "%s", string.c_str());
+            if (ImGui::InputText(shown, buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                string = buffer;
+                changed = true;
+            }
+            break;
+        }
+        case TypeKind::FloatVector: {
+            auto* v = static_cast<float*>(value);
+            if (field != nullptr && (field->flags & kFieldColor) != 0 && type.components >= 3) {
+                changed = type.components == 3 ? edit_linear_color(shown, *reinterpret_cast<glm::vec3*>(v))
+                                               : edit_linear_color(shown, *reinterpret_cast<glm::vec4*>(v));
+            } else {
+                const float min = std::isfinite(low) ? static_cast<float>(low) : 0.0f;
+                const float max = std::isfinite(high) ? static_cast<float>(high) : 0.0f;
+                changed = ImGui::DragScalarN(shown, ImGuiDataType_Float, v, type.components, 0.01f, &min, &max, "%.3f");
+            }
+            break;
+        }
+        case TypeKind::IntVector:
+            changed = ImGui::DragScalarN(shown, ImGuiDataType_S32, value, type.components, 0.2f);
+            break;
+        case TypeKind::Quat: {
+            // Shown as angles (degrees), kept as a quaternion: converted only when the angles are touched.
+            auto& q = *static_cast<glm::quat*>(value);
+            glm::vec3 angles = glm::degrees(glm::eulerAngles(q));
+            if (ImGui::DragFloat3((text + " (deg)").c_str(), &angles.x, 0.5f, 0.0f, 0.0f, "%.1f")) {
+                q = glm::quat(glm::radians(angles));
+                changed = true;
+            }
+            break;
+        }
+        case TypeKind::Enum: {
+            const auto index = static_cast<std::size_t>(number_value(value, type));
+            const char* current = index < type.enum_names.size() ? type.enum_names[index].c_str() : "?";
+            if (ImGui::BeginCombo(shown, current)) {
+                for (std::size_t i = 0; i < type.enum_names.size(); ++i) {
+                    if (ImGui::Selectable(type.enum_names[i].c_str(), i == index)) {
+                        // An enumeration's value is an integer of its size: written as one.
+                        TypeInfo as_int = type;
+                        as_int.kind = TypeKind::Int;
+                        set_number_value(value, as_int, static_cast<double>(i));
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            break;
+        }
+        case TypeKind::Struct:
+            if (ImGui::TreeNodeEx(shown, ImGuiTreeNodeFlags_DefaultOpen)) {
+                changed = inspect_reflected(value, type);
+                ImGui::TreePop();
+            }
+            break;
+        case TypeKind::Array: {
+            const std::size_t count = type.array_size(value);
+            if (ImGui::TreeNode(value, "%s [%zu]", shown, count)) {
+                std::size_t remove = count;
+                for (std::size_t i = 0; i < count; ++i) {
+                    ImGui::PushID(static_cast<int>(i));
+                    const std::string element = "[" + std::to_string(i) + "]";
+                    changed |= inspect_value(element.c_str(), type.array_at(value, i), *type.element, field);
+                    if (!read_only) {
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("x")) {
+                            remove = i;
+                        }
+                    }
+                    ImGui::PopID();
+                }
+                if (!read_only && ImGui::SmallButton("+")) {
+                    type.array_resize(value, count + 1);
+                    changed = true;
+                }
+                if (remove < count) {
+                    // Shift the following elements down, then drop the last one.
+                    for (std::size_t i = remove; i + 1 < count; ++i) {
+                        type.element->copy(type.array_at(value, i), type.array_at(value, i + 1));
+                    }
+                    type.array_resize(value, count - 1);
+                    changed = true;
+                }
+                ImGui::TreePop();
+            }
+            break;
+        }
+        case TypeKind::Optional: {
+            bool has = type.optional_has(value);
+            if (!read_only && ImGui::Checkbox(("##has" + text).c_str(), &has)) {
+                if (has) {
+                    type.optional_emplace(value);
+                } else {
+                    type.optional_reset(value);
+                }
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (type.optional_has(value)) {
+                changed |= inspect_value(label, type.optional_emplace(value), *type.element, field);
+            } else {
+                ImGui::TextDisabled("%s: none", shown);
+            }
+            break;
+        }
+        case TypeKind::DataRef: {
+            std::string& id = *type.ref_id(value);
+            char buffer[128] = {};
+            std::snprintf(buffer, sizeof(buffer), "%s", id.c_str());
+            if (ImGui::InputText(shown, buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                id = buffer;
+                changed = true;  // resolved again by the next reload of the tables
+            }
+            if (!type.ref_resolved(value) && !id.empty()) {
+                ImGui::SameLine();
+                ImGui::TextColored(kWarning, "(not resolved)");
+            }
+            break;
+        }
+        case TypeKind::Entity: {
+            const entt::entity entity = *static_cast<const entt::entity*>(value);
+            if (entity == entt::null) {
+                ImGui::Text("%s: none", shown);
+            } else {
+                ImGui::Text("%s: entity #%u", shown, static_cast<unsigned>(entt::to_entity(entity)));
+            }
+            break;
+        }
+        case TypeKind::Asset:
+            ImGui::Text("%s: (an asset)", shown);
+            break;
+    }
+    if (read_only) {
+        ImGui::EndDisabled();
+    }
+    if (field != nullptr && !field->doc.empty()) {
+        ImGui::SetItemTooltip("%s", field->doc.c_str());
+    }
+    return changed && !read_only;
+}
+
 }  // namespace
+
+bool inspect_reflected(void* object, const TypeInfo& type) {
+    if (type.kind != TypeKind::Struct) {
+        return inspect_value(type.name.c_str(), object, type, nullptr);
+    }
+    bool changed = false;
+    for (const FieldInfo& field : type.fields) {
+        if ((field.flags & kFieldEdit) == 0) {
+            continue;
+        }
+        ImGui::PushID(field.name.c_str());
+        changed |= inspect_value(field.name.c_str(), field.in(object), *field.type, &field);
+        ImGui::PopID();
+    }
+    return changed;
+}
 
 // --- ComponentInspectors ---
 
@@ -120,53 +304,50 @@ std::string ComponentInspectors::name(const entt::type_info& type) const {
     if (const auto found = entries_.find(type.hash()); found != entries_.end()) {
         return found->second.name;
     }
+    if (const ComponentType* described = component_types().find(type.hash())) {
+        return described->type->name;
+    }
     return std::string(type.name());
+}
+
+bool ComponentInspectors::registered(const entt::type_info& type) const {
+    return entries_.contains(type.hash()) || component_types().find(type.hash()) != nullptr;
 }
 
 bool ComponentInspectors::edit(entt::registry& registry, entt::entity entity, const entt::type_info& type) const {
     const auto found = entries_.find(type.hash());
-    if (found == entries_.end() || !found->second.edit) {
+    if (found == entries_.end()) {
+        // A described component nobody registered here: drawn from its description, on a copy.
+        const ComponentType* described = component_types().find(type.hash());
+        if (described == nullptr || described->tag) {
+            return false;
+        }
+        ScratchObject copy(*described->type);
+        described->type->copy(copy.get(), described->get(registry, entity));
+        if (!inspect_reflected(copy.get(), *described->type)) {
+            return false;
+        }
+        described->assign(registry, entity, copy.get());
+        return true;
+    }
+    if (!found->second.edit) {
         return false;
     }
     return found->second.edit(registry, entity);
 }
 
 void ComponentInspectors::add_engine_components() {
-    add<Transform>("Transform", edit_transform);
+    add_reflected<Transform>("Transform");
     add<PreviousTransform>("Previous tick transform", [](PreviousTransform& previous) {
         const glm::vec3& p = previous.value.position;
         ImGui::Text("Position: %.3f %.3f %.3f", static_cast<double>(p.x), static_cast<double>(p.y), static_cast<double>(p.z));
         ImGui::TextDisabled("(copied every tick: the entity moves, it is interpolated)");
         return false;
     });
-    add<Parent>("Parent", [](Parent& parent) {
-        if (parent.entity == entt::null) {
-            ImGui::TextUnformatted("none");
-        } else {
-            ImGui::Text("Entity #%u", static_cast<unsigned>(entt::to_entity(parent.entity)));
-        }
-        return false;
-    });
-    add<BoneAttachment>("Bone attachment", [](BoneAttachment& attachment) {
-        char buffer[128] = {};
-        std::snprintf(buffer, sizeof(buffer), "%s", attachment.point.c_str());
-        if (ImGui::InputText("Point", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
-            attachment.point = buffer;
-            return true;
-        }
-        ImGui::SetItemTooltip("An attachment point of the parent's description, or a bone name.");
-        return false;
-    });
-    add<Name>("Name", [](Name& name) {
-        char buffer[128] = {};
-        std::snprintf(buffer, sizeof(buffer), "%s", name.value.c_str());
-        if (ImGui::InputText("Name", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
-            name.value = buffer;
-            return true;
-        }
-        return false;
-    });
-    add_tag<Hidden>("Hidden");
+    add_reflected<Parent>("Parent");
+    add_reflected<BoneAttachment>("Bone attachment");
+    add_reflected<Name>("Name");
+    add_reflected<Hidden>("Hidden");
     add<MeshComponent>("Mesh", [](MeshComponent& component) {
         if (component.mesh) {
             ImGui::Text("%u triangles, %.2f MB", component.mesh->index_count / 3, megabytes(component.mesh->gpu_bytes));
@@ -224,33 +405,9 @@ void ComponentInspectors::add_engine_components() {
         }
         return false;
     });
-    add<Collider>("Collision", [](Collider& collider) {
-        bool changed = ImGui::DragFloat("Radius (m)", &collider.radius, 0.01f, 0.05f, 5.0f);
-        changed |= ImGui::DragInt("Push weight", &collider.push_weight, 0.1f, 0, 100);
-        changed |= ImGui::Checkbox("Blocked by walls", &collider.blocked_by_walls);
-        ImGui::Text("Layer %08X, mask %08X", collider.layer, collider.mask);
-        return changed;
-    });
-    add<Mover>("Movement", [](Mover& mover) {
-        static const char* const kModes[] = {"Stopped", "To point", "Direct", "Flow field"};
-        static const char* const kStates[] = {"Idle", "Waiting for path", "Moving", "Arrived", "Blocked", "No path"};
-        bool changed = ImGui::DragFloat("Speed (m/s)", &mover.speed, 0.05f, 0.0f, 30.0f);
-        changed |= ImGui::DragFloat("Turn rate", &mover.turn_rate, 0.1f, 0.0f, 100.0f);
-        ImGui::Text("Mode: %s, state: %s", kModes[static_cast<int>(mover.mode)], kStates[static_cast<int>(mover.state)]);
-        ImGui::Text("Actual speed: %.2f m/s, path: %zu / %zu points", mover.actual_speed, mover.next_point,
-                    mover.path.size());
-        if (mover.mode == MoveMode::ToPoint) {
-            ImGui::Text("Goal: (%.2f, %.2f)", mover.goal.x, mover.goal.y);
-        }
-        return changed;
-    });
-    add<LightSource>("Light", [](LightSource& light) {
-        bool changed = edit_linear_color("Color", light.color);
-        changed |= ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 1000.0f);
-        changed |= ImGui::DragFloat("Range (m)", &light.range, 0.05f, 0.0f, 1000.0f);
-        changed |= ImGui::Checkbox("Shadows", &light.casts_shadows);
-        return changed;
-    });
+    add_reflected<Collider>("Collision");
+    add_reflected<Mover>("Movement");
+    add_reflected<LightSource>("Light");
     add<Billboard>("Billboard", [](Billboard& billboard) {
         bool changed = ImGui::DragFloat2("Size (m)", &billboard.size.x, 0.01f, 0.0f, 100.0f);
         changed |= edit_linear_color("Color", billboard.options.color);

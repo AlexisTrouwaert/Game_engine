@@ -48,6 +48,7 @@ cbuffer Frame : register(b0, space3) {
     float4 fog_rect;    // xy: world (x, z) of the texture's corner; zw: 1 / its size in metres
     float4 cutout;      // xyz: the point kept visible (the hero); w: radius (m) of the dithered hole, 0 off
     float4 view_forward;  // xyz: the direction the camera looks (unit)
+    float4 ceiling;       // x: height above the cutout's focus that is cut away (0: off); y: radius (m)
 };
 
 #include "alpha_test.hlsli"
@@ -204,6 +205,17 @@ float3 apply_fog(float3 color, float3 world_position) {
 void cut_out(Input input) {
     if (cutout.w <= 0.0 || input.emissive.w > -0.5) {
         return;
+    }
+    static const float bayer_ceiling[16] = {0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0};
+    if (ceiling.x > 0.0 && input.world_position.y > cutout.y + ceiling.x) {
+        // The floors and roofs above the hero (milestone 9, part 7), within a radius on the plane;
+        // a dithered metre at the edge.
+        const float across = length(input.world_position.xz - cutout.xz);
+        const float keep = saturate(across - ceiling.y + 1.0);
+        const uint2 cell = (uint2)input.position.xy % 4;
+        if (keep < (bayer_ceiling[cell.y * 4 + cell.x] + 0.5) / 16.0) {
+            discard;
+        }
     }
     const float3 to_focus = cutout.xyz - eye.xyz;
     const float focus_distance = length(to_focus);

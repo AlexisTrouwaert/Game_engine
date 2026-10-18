@@ -6,7 +6,10 @@
   tests/data/references.json for this platform;
 - the exactness test of the saves: the slice saved after tick 120 (and 250), then loaded, goes on
   exactly as the slice never interrupted (the three captures A, B and C must be the same);
-- the map editor's self-test (edits, undo, objects, saving, a file changed elsewhere, "Essayer").
+- the map editor's self-test (edits, undo, objects, saving, a file changed elsewhere, "Essayer");
+- the level editor's self-test (milestone 9, part 10: ground painted, a lamp placed and moved with
+  the handles, undo and redo, its thumbnail, the navigation built, saved and opened again, baked,
+  "Essayer").
 
 BUILD_DIR: the build to test (default: build/windows-release, or build/macos-release on a Mac).
 --record writes the hashes found as this platform's references (after checking the change is
@@ -29,6 +32,9 @@ import sys
 import tempfile
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# The windows of the programs this script runs open on the second screen (the first stays the
+# developer's); one screen: the system's choice (ApplicationConfig::window_display).
+os.environ.setdefault("MOTEUR_WINDOW_DISPLAY", "1")
 REFERENCES = os.path.join(ROOT, "tests", "data", "references.json")
 
 
@@ -83,6 +89,13 @@ def main():
     if os.path.exists(bindings):
         shutil.move(bindings, aside)
     found, failures = {}, []
+    # The assets imported first (milestone 9, part 4): a capture must not depend on how long the
+    # first import of a model takes.
+    code, output = run(exe, ["--import-assets"], app_dir)
+    if code != 0:
+        print(output[-3000:])
+        print("the import of the assets failed")
+        return 1
     try:
         captures = {
             "2d": ["--demo", "--seed", "42", "--freeze-after", "30", "--no-input", "--run-seconds", "3"],
@@ -134,6 +147,11 @@ def main():
             print(f"editor self-test {'ok' if passed else 'FAILED'}")
             if not passed:
                 failures.append("editor self-test: " + "; ".join(l for l in text.splitlines() if "FAILED" in l)[:400])
+            code, text = run(editor, ["--level", "--self-test", "--run-seconds", "90"], app_dir)
+            passed = code == 0 and "Level editor self-test: passed" in text
+            print(f"level editor self-test {'ok' if passed else 'FAILED'}")
+            if not passed:
+                failures.append("level editor self-test: " + "; ".join(l for l in text.splitlines() if "FAILED" in l)[:400])
     finally:
         if os.path.exists(aside):
             shutil.move(aside, bindings)

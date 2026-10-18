@@ -168,13 +168,24 @@ Mesh Mesh::create(Renderer& renderer, const MeshData& data, const char* name) {
         throw std::invalid_argument(label + " has " + std::to_string(data.skin.size()) + " skin entries for " +
                                     std::to_string(data.vertices.size()) + " vertices");
     }
+    for (const MeshLod& lod : data.lods) {
+        if (lod.index_count == 0 || lod.index_count % 3 != 0 ||
+            static_cast<std::size_t>(lod.first_index) + lod.index_count > data.indices.size()) {
+            throw std::invalid_argument(label + " has a level of detail outside its indices");
+        }
+    }
     try {
         Mesh mesh;
         mesh.vertices = renderer.create_geometry(SDL_GPU_BUFFERUSAGE_VERTEX, data.vertices.data(),
                                                  data.vertices.size() * sizeof(Vertex3D));
         mesh.indices = renderer.create_geometry(SDL_GPU_BUFFERUSAGE_INDEX, data.indices.data(),
                                                 data.indices.size() * sizeof(std::uint32_t));
-        mesh.index_count = static_cast<std::uint32_t>(data.indices.size());
+        if (data.lods.empty()) {
+            mesh.lods.push_back({0, static_cast<std::uint32_t>(data.indices.size()), 0.0f});
+        } else {
+            mesh.lods = data.lods;
+        }
+        mesh.index_count = mesh.lods.front().index_count;
         mesh.bounds = data.bounds();
         mesh.gpu_bytes = data.vertices.size() * sizeof(Vertex3D) + data.indices.size() * sizeof(std::uint32_t);
         if (!data.skin.empty()) {

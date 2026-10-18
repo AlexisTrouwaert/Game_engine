@@ -1,5 +1,7 @@
 #include "moteur/animation_set.hpp"
 
+#include "moteur/document.hpp"
+
 #include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
 
@@ -12,8 +14,13 @@ namespace moteur {
 AnimationSet AnimationSet::parse(std::string_view json_text, const std::string& source) {
     AnimationSet set;
     set.source_ = source;
+    nlohmann::json doc;
     try {
-        const nlohmann::json doc = nlohmann::json::parse(json_text);
+        doc = parse_document(json_text);
+    } catch (const std::runtime_error& e) {
+        throw std::runtime_error("Animation set '" + source + "' is not valid: " + e.what());
+    }
+    try {
         const int version = doc.value("version", 0);
         if (version != kVersion) {
             throw std::runtime_error("format version " + std::to_string(version) + " is not supported (expected " +

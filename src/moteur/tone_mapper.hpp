@@ -2,6 +2,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <glm/glm.hpp>
+
 #include <cstdint>
 
 #include "moteur/gpu_resource.hpp"
@@ -24,10 +26,26 @@ public:
     // `raw`: no tone mapping (debug views, whose values are meant to be seen as they are).
     void render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass, SDL_GPUTexture* scene, float exposure,
                 bool raw = false);
+    // The outline of the hovered entity (milestone 9, part 7): `ids` the id pass's texture (null:
+    // none), `id` the outlined pick id (0: none), its size in pixels, the color (linear, a: strength).
+    void set_outline(SDL_GPUTexture* ids, std::uint32_t id, glm::ivec2 size, glm::vec4 color, float thickness) {
+        ids_ = ids;
+        outline_id_ = id;
+        ids_size_ = size;
+        outline_color_ = color;
+        thickness_ = thickness;
+    }
 
 private:
     GpuGraphicsPipeline pipeline_;
     GpuSampler sampler_;
+    GpuSampler id_sampler_;
+    GpuTexture no_ids_;  ///< 1 x 1, 0: bound when there is no id pass
+    SDL_GPUTexture* ids_ = nullptr;
+    std::uint32_t outline_id_ = 0;
+    glm::ivec2 ids_size_{1, 1};
+    glm::vec4 outline_color_{1.0f};
+    float thickness_ = 2.0f;
 };
 
 // Internal too: FXAA (fxaa.frag.hlsl), for AntiAliasing::Fxaa. The tone mapping first draws the

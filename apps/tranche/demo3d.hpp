@@ -14,14 +14,17 @@
 #include "moteur/environment.hpp"
 #include "moteur/font.hpp"
 #include "moteur/input.hpp"
+#include "moteur/level_streamer.hpp"
 #include "moteur/map_data.hpp"
 #include "moteur/material.hpp"
 #include "moteur/mesh.hpp"
 #include "moteur/model.hpp"
 #include "moteur/movement.hpp"
 #include "moteur/nav_grid.hpp"
+#include "moteur/navigation.hpp"
 #include "moteur/particles.hpp"
 #include "moteur/pathfinding.hpp"
+#include "moteur/picking.hpp"
 #include "moteur/renderer.hpp"
 #include "moteur/spatial_hash.hpp"
 #include "moteur/tilemap.hpp"
@@ -94,19 +97,32 @@ public:
         // pause, with 30 fires and 32 lights (4 shadowed) around; "traversee": the hero walks across
         // the whole map along fixed waypoints (culling, shadows, fog uncovering). Empty: none.
         std::string measure;
+        // Milestone 9, part 11: the slice in a level of version 3 (an asset key, see kSliceLevel),
+        // loaded as a closed zone by LevelStreamer; the logic in 3D: collisions, navigation mesh
+        // (paths, a flow field towards the hero), lines of sight, the fog of war by floor, creatures
+        // picked by rays. Empty: the map of milestones 6 and 7 (assets/maps/tranche.json).
+        std::string level;
+        // The slice on the map of milestones 6 and 7 rather than its level (comparisons).
+        bool slice_map = false;
+        // The level editor's "Essayer" (milestone 9, part 11): the level already baked as the editor
+        // has it (saved or not) rather than read; where the hero starts rather than the level's
+        // start point; the level's night (night_lighting()).
+        std::shared_ptr<moteur::BakedLevel> baked_level;
+        std::optional<glm::vec3> start;
+        bool night = false;
     };
 
     // The assets it loads from files (a loading screen loads them ahead: see StatesDemo).
     static constexpr const char* kFont = "fonts/Inter-Regular.ttf";
     static constexpr float kFontPixelHeight = 20.0f;
     static constexpr const char* kBarrel = "models/polyhaven/wine_barrel_01/wine_barrel_01_1k.gltf";
-    // The ARPG's first assets (tools/models/fetch_arpg_models.py; without them, the slice keeps its
-    // checkered floor and its lamps are plain posts): wet cobblestones, 8 m tiles (B in patches),
-    // and a gothic street lamp, whose light is described next to it (.prop.json).
-    static constexpr const char* kPavingA = "models/arpg/sol_paves_humides_a_8m/sol_paves_humides_a_8m.gltf";
-    static constexpr const char* kPavingB = "models/arpg/sol_paves_humides_b_8m/sol_paves_humides_b_8m.gltf";
-    static constexpr const char* kStreetLamp = "models/arpg/lampadaire_gothique/lampadaire_gothique.gltf";
-    static constexpr const char* kStreetLampProp = "models/arpg/lampadaire_gothique/lampadaire_gothique.prop.json";
+    // The ARPG's first assets, read in place from the game's folder (ApplicationConfig::asset_folders,
+    // milestone 9 part 4; without it, the slice keeps its checkered floor and its lamps are plain
+    // posts): wet cobblestones, 8 m tiles (B in patches), and the gothic street lamp's prefab (the
+    // model, its light and its halo: the same file as the ARPG's street).
+    static constexpr const char* kPavingA = "models/sols/sol_paves_humides_a_8m.glb";
+    static constexpr const char* kPavingB = "models/sols/sol_paves_humides_b_8m.glb";
+    static constexpr const char* kStreetLamp = "models/props/lampadaire_gothique.prefab.json";
     // The hero's sounds (tools/audio/fetch_test_sounds.py; without them, the slice is silent).
     static constexpr const char* kSteps[5] = {
         "audio/kenney_impact/footstep_concrete_000.ogg", "audio/kenney_impact/footstep_concrete_001.ogg",
@@ -124,6 +140,8 @@ public:
     static constexpr const char* kSkeletons[2] = {"models/characters/kaykit_skeletons/Skeleton_Warrior.glb",
                                                   "models/characters/kaykit_skeletons/Skeleton_Minion.glb"};
     static constexpr const char* kAnimationSet = "animations/kaykit.json";
+    // The slice's level (milestone 9, part 11; tools/levels/make_slice_level.py, the level editor).
+    static constexpr const char* kSliceLevel = "levels/tranche.level.json";
     // Whether the slice has its animated characters (else the bodies of primitives of milestone 4).
     static bool characters_available(moteur::Assets& assets);
 
@@ -146,6 +164,9 @@ public:
 
     // The slice: blows landed on creatures.
     int hits() const { return hits_; }
+    // The slice: where the hero's feet are, and whether it stands on something (a level's tests).
+    glm::vec3 hero_position() const;
+    bool hero_grounded() const;
 
     // The slice's whole state as a save (milestone 7, part 6): the persistent entities (hero,
     // creatures) and the scene's own state (ticks, camera, exploration...). Between ticks.
@@ -188,6 +209,7 @@ private:
         glm::vec3 color;
         float health;
         std::string character;  // row of the characters' table (the slice)
+        float height = 0.0f;    // where its feet are (a level of several heights)
     };
     entt::entity spawn_creature(const CreatureSpawn& spawn, int index);
     // Milestone 7, part 11: the slice's console commands (game commands: queued, run at the start
@@ -217,7 +239,6 @@ private:
     void play_steps(glm::vec2 before);
     void light_braziers();
     void place_street_lamps();  // on the map's "lampadaire" points (the slice)
-    void read_lamp_light();     // the street lamp's .prop.json
     // A still entity: floor, wall, decor.
     void add_static(const moteur::Asset<moteur::Mesh>& mesh, const moteur::Transform& transform, const moteur::Material& material);
     void move_creatures(float dt);
@@ -299,17 +320,7 @@ private:
     moteur::Asset<moteur::Model> barrel_;     // Poly Haven's wine barrel, when downloaded
     moteur::Asset<moteur::Model> paving_a_;   // the ARPG's cobblestones, when copied (empty: checkered floor)
     moteur::Asset<moteur::Model> paving_b_;
-    moteur::Asset<moteur::Model> street_lamp_;  // the ARPG's street lamp (empty: a plain post)
-    // The street lamp's light, in its own space (its .prop.json; defaults without it).
-    struct LampLight {
-        glm::vec3 position{0.0f, 3.52f, 0.0f};
-        glm::vec3 color{1.0f, 0.55f, 0.25f};
-        float intensity = 12.0f;
-        float range = 12.0f;
-        bool casts_shadows = true;
-        float shadow_near = 0.55f;
-    };
-    LampLight lamp_light_;
+    moteur::Asset<moteur::Prefab> street_lamp_;  // the ARPG's street lamp (empty: a plain post)
     std::optional<moteur::Environment> sky_;
     moteur::Asset<moteur::Font> font_;
     moteur::Asset<moteur::Texture> glow_;
@@ -330,7 +341,7 @@ private:
     // The slice (Options::hero).
     entt::entity hero_ = entt::null;
     bool measure_started_ = false;
-    std::vector<glm::vec2> waypoints_;  // "traversee": where the hero goes, in order
+    std::vector<glm::vec3> waypoints_;  // "traversee": where the hero goes, in order
     std::size_t waypoint_ = 0;
     bool pressed_on_creature_ = false;  // the click began on a creature: holding it does not walk
     float step_distance_ = 0.0f;        // walked since the last footstep (hero without animation)
@@ -370,6 +381,34 @@ private:
     bool stop_after_export_ = false;
     bool god_ = false;  // "god": the hero takes no blow
     bool from_objects() const;  // the slice whose map has objects: no draws
+
+    // Milestone 9, part 11: the slice in a level of version 3 (Options::level).
+    bool level_mode() const { return level_ != nullptr; }
+    void open_level();
+    glm::vec3 foot_of(entt::entity entity) const;  // where its feet are (its Transform)
+    const moteur::NavMesh* navmesh() const;        // the level's, for the characters' size
+    // The nearest place a character fits near `wanted` (the navigation mesh; the grid of the map).
+    std::optional<glm::vec3> free_place(glm::vec3 wanted) const;
+    bool fits(glm::vec3 at) const;
+    // The grid of the floor at `height` for the field of view and the fog (made once per floor).
+    const moteur::NavGrid& floor_grid(int floor);
+    void level_moves(float dt);
+    void level_sight();
+    void level_steer(moteur::Mover& hero);
+    struct LevelSpawn {
+        std::uint32_t id = 0;       // the instance's, in the level
+        glm::vec3 position{0.0f};
+        nlohmann::json properties;  // the instance's: who comes (the characters' table)
+    };
+    std::unique_ptr<moteur::LevelStreamer> level_;
+    std::vector<LevelSpawn> level_spawns_;  // by instance identifier, once the level is loaded
+    moteur::NavFlowField nav_field_;         // towards the hero, for the creatures that chase it
+    glm::vec3 nav_field_target_{0.0f};       // where the hero was when it was computed
+    bool nav_field_set_ = false;
+    glm::vec2 fog_origin_{0.0f};             // the fog's cell (0, 0), world x and z
+    std::map<int, moteur::NavGrid> floor_grids_;  // by floor: height in half metres
+    int view_floor_ = -1000;
+    std::optional<moteur::PickHit> pointed_;  // what the pointer is over, at this tick
 
     moteur::Camera3D camera_;
     glm::vec2 mouse_{-1.0f};

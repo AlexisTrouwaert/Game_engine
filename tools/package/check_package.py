@@ -23,6 +23,8 @@ BUILD_DIR: the shipping build (default build/windows-shipping) after `--target <
 4. The uninstaller: the folder, the shortcut and the uninstall entry are gone; the player's folder
    (saves, settings) is still there.
 5. The portable archive: it holds the same files as the installation.
+6. What the archives hold (milestone 9, part 4): no glTF model and no JSON document; the models are
+   prepared (.mmdl) and the documents kept under their names are CBOR.
 
 The player's own settings and key bindings are moved aside while the game runs (they change the
 capture) and put back. Exit code 0 when everything holds, 2 for a wrong command line or no
@@ -38,11 +40,16 @@ import os
 import shutil
 import subprocess
 import sys
+import struct
 import tempfile
 import time
 import zipfile
+from compression import zstd
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# The windows of the programs this script runs open on the second screen (the first stays the
+# developer's); one screen: the system's choice (ApplicationConfig::window_display).
+os.environ.setdefault("MOTEUR_WINDOW_DISPLAY", "1")
 sys.path.insert(0, os.path.join(ROOT, "tools", "ci"))
 import verify as verifier  # noqa: E402  (the Visual Studio environment, for dumpbin)
 
@@ -54,6 +61,25 @@ def digest(path):
         return "absent"
     with open(path, "rb") as file:
         return hashlib.sha256(file.read()).hexdigest()[:12]
+
+
+def archive_entries(path):
+    """The entries of a .pak (moteur_doc/FORMATS.md, 7): (path, the first bytes it gives back)."""
+    with open(path, "rb") as file:
+        data = file.read()
+    if data[:4] != b"MPAK":
+        raise ValueError(f"{path}: not an archive of the engine")
+    count, index_size = struct.unpack_from("<II", data, 8)
+    position, entries = 24, []
+    for _ in range(count):
+        (length,) = struct.unpack_from("<H", data, position)
+        name = data[position + 2:position + 2 + length].decode("utf-8")
+        offset, stored, _size = struct.unpack_from("<QQQ", data, position + 2 + length)
+        compression = data[position + 26 + length]
+        raw = data[offset:offset + stored]
+        entries.append((name, zstd.decompress(raw)[:16] if compression == 1 else raw[:16]))
+        position += 31 + length
+    return entries
 
 
 def installed_files(folder):
@@ -167,6 +193,13 @@ def main():
         check(exe_name in files, "program installed")
         check(any(f.startswith("archives/") and f.endswith(".pak") for f in files), "archives installed")
         check(any(f.startswith("licenses/") for f in files), "license texts installed")
+        # 6. Only prepared formats in the archives.
+        packed = [entry for f in files if f.startswith("archives/") and f.endswith(".pak")
+                  for entry in archive_entries(os.path.join(folder, f))]
+        models = [name for name, _ in packed if name.lower().endswith((".gltf", ".glb"))]
+        documents = [name for name, head in packed if name.lower().endswith(".json") and not (head and 0x80 <= head[0] <= 0xBF)]
+        check(not models, f"no glTF model in the archives {models[:3]}")
+        check(not documents, f"no JSON document in the archives (CBOR) {documents[:3]}")
         check(not any(f.startswith("assets/") or f.startswith("shaders/") for f in files),
               "no loose assets or shaders (everything is packed)")
         check(os.path.exists(os.path.join(folder, "unins000.exe")), "uninstaller present")

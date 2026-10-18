@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "moteur/image.hpp"
 #include "moteur/renderer.hpp"
 
 namespace moteur {
@@ -43,6 +44,15 @@ CompressedImage decode_ktx2(const void* data, std::size_t size, const std::strin
 // do: content already BC7, BC5 or RGBA8, or a size that is not a multiple of 4 (BC works on 4 x 4
 // blocks: such a texture keeps its UASTC and is transcoded at load). Throws like decode_ktx2().
 std::vector<std::uint8_t> transcode_ktx2_for_shipping(const void* data, std::size_t size, const std::string& name);
+
+// Encodes an RGBA8 image into a KTX2 file of Basis Universal UASTC (the import of a texture,
+// milestone 9 part 4; what tools/textures/convert_gltf_textures.py did with the ktx tool): a full
+// chain of mipmaps made here (a 2 x 2 box filter, in linear light for an sRGB color, clamped at odd
+// edges), UASTC at its default quality, Zstandard level 18. `srgb`: the pixels are colors (the file
+// says sRGB); else data. `normal_map`: x and y of a tangent-space normal map in red and green, kept
+// as two channels (x in RGB, y in alpha), which decode_ktx2() reads as BC5. Throws
+// std::runtime_error naming `name` if libktx refuses it.
+std::vector<std::uint8_t> encode_ktx2(const Image& image, bool srgb, bool normal_map, const std::string& name);
 
 // A texture of `image`, every level as given, in its GPU format (block-compressed or not), through
 // Renderer::create_texture_levels(); gpu_bytes is the size of all its levels. Throws

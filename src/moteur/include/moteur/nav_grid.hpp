@@ -33,6 +33,9 @@ inline glm::vec2 cell_centre(glm::ivec2 cell) {
 class NavGrid {
 public:
     NavGrid() = default;  ///< 0 x 0
+    /// `width` x `height` cells, every one blocked and opaque, to be set() one by one (a grid made
+    /// from something else than a TileMap: nav_grid_view()).
+    NavGrid(int width, int height);
     /// The grid of `map`, same size, every cell read from the types of its tiles in `tileset`. Keeps
     /// no reference to either. Throws std::out_of_range if the map holds an id the tileset does not
     /// have. O(width x height x layers).

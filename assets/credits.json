@@ -12,6 +12,14 @@
   ],
   "models": [
     {
+      "name": "Pièces de maquette (blocs clair et foncé)",
+      "authors": "Moteur (tools/models/make_blockout.py)",
+      "license": "CC0",
+      "source": "fait pour le moteur",
+      "url": "",
+      "file": "assets/models/blockout/block_dark.glb"
+    },
+    {
       "name": "Wine Barrel 01",
       "authors": "James Ray Cock",
       "license": "CC0",
@@ -95,7 +103,7 @@
       "name": "Lampadaire gothique (ARPG)",
       "authors": "ARPG (Blender : ARPG/assets_source/props/lampadaire_gothique/pipeline.py)",
       "license": "Propriétaire (projet ARPG)",
-      "file": "assets/models/arpg/lampadaire_gothique/lampadaire_gothique.gltf"
+      "file": "assets/models/props/lampadaire_gothique.glb"
     },
     {
       "name": "Rusty Metal 04 (textures du lampadaire)",
@@ -103,7 +111,7 @@
       "license": "CC0",
       "source": "Poly Haven",
       "url": "https://polyhaven.com/a/rusty_metal_04",
-      "file": "assets/models/arpg/lampadaire_gothique/lampadaire_gothique.gltf"
+      "file": "assets/models/props/lampadaire_gothique.glb"
     },
     {
       "name": "Rust Coarse 01 (textures du lampadaire)",
@@ -111,13 +119,13 @@
       "license": "CC0",
       "source": "Poly Haven",
       "url": "https://polyhaven.com/a/rust_coarse_01",
-      "file": "assets/models/arpg/lampadaire_gothique/lampadaire_gothique.gltf"
+      "file": "assets/models/props/lampadaire_gothique.glb"
     },
     {
       "name": "Sols pavés humides (ARPG)",
       "authors": "ARPG (ARPG/assets_source/sols/paves_humides/make_textures.py, make_tiles.py)",
       "license": "Propriétaire (projet ARPG)",
-      "file": "assets/models/arpg/sol_paves_humides_a_8m/sol_paves_humides_a_8m.gltf"
+      "file": "assets/models/sols/sol_paves_humides_a_8m.glb"
     },
     {
       "name": "Cobblestone Floor 07 (pavés humides A)",
@@ -125,7 +133,7 @@
       "license": "CC0",
       "source": "Poly Haven",
       "url": "https://polyhaven.com/a/cobblestone_floor_07",
-      "file": "assets/models/arpg/sol_paves_humides_a_8m/sol_paves_humides_a_8m.gltf"
+      "file": "assets/models/sols/sol_paves_humides_a_8m.glb"
     },
     {
       "name": "Cobblestone 01 (pavés humides B)",
@@ -133,7 +141,7 @@
       "license": "CC0",
       "source": "Poly Haven",
       "url": "https://polyhaven.com/a/cobblestone_01",
-      "file": "assets/models/arpg/sol_paves_humides_b_8m/sol_paves_humides_b_8m.gltf"
+      "file": "assets/models/sols/sol_paves_humides_b_8m.glb"
     }
   ],
   "sounds": [

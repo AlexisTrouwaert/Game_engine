@@ -10,6 +10,8 @@
 #include <string_view>
 #include <vector>
 
+#include "moteur/assert.hpp"
+
 namespace moteur {
 
 // Typed reading of game data (milestone 7, part 2). The game describes the fields of each table in
@@ -78,9 +80,12 @@ struct DataRef {
     explicit operator bool() const { return resolved(); }
     /// The row. Only on a resolved reference (undefined behaviour otherwise). The reference returned
     /// is invalidated by a reload of #table: dereference again rather than keeping it.
-    const T& operator*() const { return (*table)[index]; }
+    const T& operator*() const {
+        MOTEUR_ASSERT(table != nullptr, "DataRef dereferenced without a resolved row (check resolved() first)");
+        return (*table)[index];
+    }
     /// The row's members; same rules as operator*().
-    const T* operator->() const { return &(*table)[index]; }
+    const T* operator->() const { return &**this; }
 };
 
 /// Reads the fields of one JSON object (a row, or an object inside it). Each read records the field
@@ -172,6 +177,19 @@ public:
 
     /// Warns about the fields that were never read. Call once reading is done.
     void finish();
+
+    /// For generic readers (the reflection, reflection_io.hpp): the field `key` as a JSON value,
+    /// counted as read; null when missing or `null` (an error "required field missing" if
+    /// `required`).
+    const nlohmann::json* value(std::string_view key, bool required) { return field(key, required); }
+    /// Counts `key` as read without reading it (an alias already handled).
+    void mark_read(std::string_view key) { read_.emplace_back(key); }
+    /// The object read (an empty object if the value given was not one).
+    const nlohmann::json& json() const { return *value_; }
+    /// Where the problems go.
+    DataIssues& issues() { return *issues_; }
+    /// `where() > key`, as messages locate a field.
+    std::string location(std::string_view key) const { return at(key); }
 
 private:
     const nlohmann::json* field(std::string_view key, bool required);

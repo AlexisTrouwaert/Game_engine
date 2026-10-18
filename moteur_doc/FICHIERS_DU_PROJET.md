@@ -21,14 +21,14 @@ Retour à la [documentation du jalon 1](JALON_1_FONDATIONS.md#squelette-réalis�
 ```
 moteur/
   CMakeLists.txt                      racine du build (le moteur seul, ou sous-dossier d'un jeu)
-  CMakePresets.json                   configurations Windows / macOS : debug, release, shipping, asan, fuzz
+  CMakePresets.json                   configurations Windows / macOS : debug, release, shipping, asan, tsan, fuzz
   vcpkg.json                          dépendances
   vcpkg-configuration.json            dossier des ports ajoutés (overlay ports)
   ports/ozz-animation/                port vcpkg d'ozz-animation (absent du registre)
   triplets/arm64-osx.cmake            triplet vcpkg du Mac (cible macOS 13.0)
   .clang-tidy                         vérifications de l'analyse statique
   cmake/
-    Warnings.cmake                    avertissements, erreurs, AddressSanitizer, fuzzing, /utf-8
+    Warnings.cmake                    avertissements, erreurs, AddressSanitizer, ThreadSanitizer, fuzzing, /utf-8
     Shipping.cmake                    réglages de la version livrée (LTO, symboles à part, runtime statique)
     Shaders.cmake                     chaîne de compilation des shaders
     Assets.cmake                      copie des assets et des licences à côté de l'exécutable
@@ -44,7 +44,7 @@ moteur/
   src/moteur/                         bibliothèque du moteur
     CMakeLists.txt
     include/moteur/*.hpp              en-têtes publics : ce qu'un jeu inclut (liste ci-dessous)
-    private/moteur/                   en-têtes internes : cbor_check, debug_ui, ktx_texture, screenshot
+    private/moteur/                   en-têtes internes : binary_io, cbor_check, debug_ui, ktx_texture, screenshot
     *.cpp                             implémentations, plus tone_mapper.hpp / .cpp (interne)
     miniaudio.c                       miniaudio et stb_vorbis (C, bibliothèque à part)
   apps/
@@ -70,13 +70,15 @@ moteur/
       audio_test.hpp, .cpp            scène « Audio »
       world_test.hpp, .cpp            scène « World »
       map_editor.hpp, .cpp            éditeur de cartes
+      level_editor.hpp, .cpp          éditeur de niveaux (jalon 9)
       editeur_main.cpp                le programme editeur
   examples/jeu_minimal/               le plus petit jeu : modèle de l'usage du moteur par un jeu
   tools/
     atlas_packer/                     outil d'empaquetage d'atlas (C++)
     cook/                             moteur_cook : préparation des assets d'un jeu sans tables (C++)
     ci/                               verify.py (la vérification), static_analysis.py (clang-tidy)
-    tests/                            check_references.py (captures de référence)
+    tests/                            check_references.py (captures de référence), check_error_policy.py (règle des erreurs)
+    assets/                           assets.py (identité des assets : .meta, déplacement, vérification)
     measures/                         measure.py (scènes de mesure)
     fuzz/                             fuzzer.py (fuzzing des lecteurs de fichiers)
     crash/                            read_report.py (rapports de plantage)
@@ -193,6 +195,7 @@ Le premier build est long à cause de la compilation des dépendances par vcpkg.
 - `macos-debug` / `macos-release` : actifs uniquement sur macOS. Architecture `arm64`, cible minimale `13.0`, triplet `arm64-osx` pris dans `triplets/` (`VCPKG_OVERLAY_TRIPLETS`).
 - `windows-shipping` / `macos-shipping` : la version livrée (`MOTEUR_SHIPPING`), au-dessus de la Release ; sous Windows, triplet `x64-windows-static` (runtime C++ statique : rien à installer à côté du jeu).
 - `windows-asan` / `macos-asan` : AddressSanitizer (et UBSan sur macOS) sur le code du projet (`MOTEUR_ASAN`).
+- `macos-tsan` (jalon 9, partie 9) : ThreadSanitizer sur le code du projet (`MOTEUR_TSAN`) : les accès concurrents du travail réparti sur les cœurs. Clang seulement (MSVC n'en a pas).
 - `windows-fuzz` / `macos-fuzz` : les programmes de fuzzing seulement (`MOTEUR_FUZZ`, les autres programmes coupés).
 - `buildPresets` : un preset de compilation par preset de configuration, pour `cmake --build --preset ...`.
 
@@ -246,6 +249,7 @@ Le premier build est long à cause de la compilation des dépendances par vcpkg.
 - `moteur_enable_warnings(<cible>)` : MSVC `/W4 /permissive-` (refuse le code non conforme que MSVC tolère par défaut) ; Clang / GCC `-Wall -Wextra -Wpedantic`. `PRIVATE` : ces options ne se propagent pas aux utilisateurs de la cible.
 - `MOTEUR_WARNINGS_AS_ERRORS` (désactivée par défaut, activée par `tools/ci/verify.py`) : `/WX` ou `-Werror`. Le build de tous les jours ne casse donc pas à chaque mise à jour du compilateur, mais la vérification refuse tout avertissement.
 - `MOTEUR_ASAN` (presets `*-asan`, jalon 8, partie 8) : AddressSanitizer sur les cibles du projet (et UBSan hors MSVC). Les bibliothèques de vcpkg ne sont pas instrumentées : les annotations des conteneurs sont coupées partout (`_DISABLE_VECTOR_ANNOTATION`, `_DISABLE_STRING_ANNOTATION`), sinon leur désaccord signale de faux débordements.
+- `MOTEUR_TSAN` (preset `macos-tsan`, jalon 9, partie 9) : ThreadSanitizer (`-fsanitize=thread`) sur les cibles du projet ; une erreur de configuration avec MSVC ou avec `MOTEUR_ASAN`.
 - `MOTEUR_FUZZ` (presets `*-fuzz`) : active ASan et la couverture de libFuzzer sur le code du projet (`tests/fuzz`).
 - **`/utf-8`** pour MSVC, sur toute la compilation Windows. Sans lui, MSVC lit les fichiers source dans la page de codes du système : un caractère accentué d'une chaîne est corrompu, **y compris dans un littéral `u8"..."`**, car le compilateur doit d'abord décoder les octets du fichier source et se trompe de page de codes à cette étape. Clang et GCC supposent déjà une source UTF-8. La bibliothèque `moteur` transmet aussi `/utf-8` aux jeux qui la lient (option `PUBLIC`).
 
@@ -364,6 +368,8 @@ Tout arrive dans `build/<preset>/packages/`. Les deux scripts d'OS sont lancés 
 
 **Quand le modifier** : chaque nouveau fichier source du moteur, chaque nouvelle dépendance.
 
+**glm** (jalon 9, partie 5) : `GLM_FORCE_EXPLICIT_CTOR` est une définition publique de la cible `moteur` : une conversion entre tailles de vecteurs s'écrit (`glm::vec2(p.x, p.z)`, `glm::vec3(m * v)`) ; une affectation implicite d'un `vec3` à un `vec2` prenait `(x, y)` en silence.
+
 ### `apps/tranche/CMakeLists.txt`
 
 **Rôle** (jalon 8, partie 12) : le code de la **tranche jouable**, dans la bibliothèque **`tranche_commun`** (tables, objets des cartes, monde `Demo3D`, écrans `StatesDemo`, interface `SliceUi`), partagée par le programme `tranche` et par le bac à sable (sa scène de la tranche, les captures de référence). Elle est construite dans toutes les configurations, la livrée comprise (Dear ImGui n'y sert qu'aux panneaux de debug, retirés de la version livrée). Hors version livrée, `MOTEUR_ASSETS_SOURCE_DIR` donne le dossier `assets/` des sources (rechargement à chaud, écriture des cartes par l'éditeur).
@@ -391,7 +397,7 @@ Avec `MOTEUR_BUILD_SLICE` : le programme **`tranche`** (`moteur_add_game` avec l
 
 ### `tests/CMakeLists.txt` et `tests/fuzz/CMakeLists.txt`
 
-**Rôle** : l'exécutable **`moteur_tests`** (doctest), enregistré auprès de CTest. Les tests de la 2D du bac à sable (`test_animation.cpp`, `test_camera.cpp`, `test_iso.cpp`) n'y sont ajoutés que si `bac_a_sable_2d` est construite. `MOTEUR_SOURCE_ASSETS` et `MOTEUR_TEST_DATA` donnent aux tests les dossiers `assets/` et `tests/data/` des sources ; les en-têtes `private/` du moteur sont visibles, pour tester ses internes. `tests/fuzz/` : un programme de fuzzing par lecteur de fichiers (`fuzz_map`, `fuzz_effect`, `fuzz_animation`, `fuzz_save`, `fuzz_ktx2`, `fuzz_gltf`, `fuzz_table`, `fuzz_bindings`, `fuzz_image`, `fuzz_archive`), tous depuis `fuzz.cpp`, avec libFuzzer (`MOTEUR_FUZZ`).
+**Rôle** : l'exécutable **`moteur_tests`** (doctest), enregistré auprès de CTest. Les tests de la 2D du bac à sable (`test_animation.cpp`, `test_camera.cpp`, `test_iso.cpp`) n'y sont ajoutés que si `bac_a_sable_2d` est construite. `MOTEUR_SOURCE_ASSETS` et `MOTEUR_TEST_DATA` donnent aux tests les dossiers `assets/` et `tests/data/` des sources ; les en-têtes `private/` du moteur sont visibles, pour tester ses internes. `tests/fuzz/` : un programme de fuzzing par lecteur de fichiers (`fuzz_map`, `fuzz_effect`, `fuzz_animation`, `fuzz_save`, `fuzz_ktx2`, `fuzz_gltf`, `fuzz_table`, `fuzz_bindings`, `fuzz_image`, `fuzz_archive`, `fuzz_model`, `fuzz_registry`, `fuzz_document`, `fuzz_prefab`), tous depuis `fuzz.cpp`, avec libFuzzer (`MOTEUR_FUZZ`).
 
 ---
 
@@ -587,7 +593,7 @@ Enfin, si `request_capture()` a été demandé : un copy pass relit l'image du s
 
 ### `src/moteur/include/moteur/material.hpp`
 
-**Rôle** : le matériau PBR du moteur, celui de glTF (métal / rugosité) : facteurs (couleur de base, métal, rugosité, force des normales et de l'occlusion, émissif, double face) et cinq textures facultatives (couleur et émissif en sRGB ; métal / rugosité, normales, occlusion en linéaire). Une texture absente compte comme blanche (plate pour les normales). Depuis la revue des jalons 1 à 7 (3.1), le **test alpha** de glTF (`alphaMode MASK`, `alpha_cutoff` ; 0 : matériau opaque) : un pixel sous le seuil n'est dessiné ni dans la scène ni dans les ombres (`shaders/alpha_test.hlsli`). `casts_shadow` retire un matériau des ombres (une flamme), `fades` estompe en trame un mur qui cacherait le héros.
+**Rôle** : le matériau PBR du moteur, celui de glTF (métal / rugosité) : facteurs (`MaterialFactors` : couleur de base, métal, rugosité, force des normales et de l'occlusion, émissif, double face) et cinq textures facultatives (couleur et émissif en sRGB ; métal / rugosité, normales, occlusion en linéaire). Depuis le jalon 9 (partie 4), `Material` **tient** ses textures par des poignées `Asset<Texture>` : le rechargement à chaud et le ramasse-miettes ne peuvent plus laisser de pointeur pendant ; le rendu reçoit `DrawMaterial` (les mêmes facteurs, des pointeurs bruts valables pour l'image), par `Material::view()`. Une texture absente compte comme blanche (plate pour les normales). Depuis la revue des jalons 1 à 7 (3.1), le **test alpha** de glTF (`alphaMode MASK`, `alpha_cutoff` ; 0 : matériau opaque) : un pixel sous le seuil n'est dessiné ni dans la scène ni dans les ombres (`shaders/alpha_test.hlsli`). `casts_shadow` retire un matériau des ombres (une flamme), `fades` estompe en trame un mur qui cacherait le héros.
 
 ### `src/moteur/include/moteur/environment.hpp` et `environment.cpp`
 
@@ -1162,11 +1168,19 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 
 ### `tools/ci/verify.py`
 
-**Rôle** (jalon 8, partie 2) : **la vérification du moteur** en une commande, les mêmes étapes que lancera une intégration continue hébergée : `python tools/ci/verify.py [--quick] [--configs debug,release] [--no-references] [--no-msl] [--no-example] [--no-analysis] [--no-asan] [--no-docs] [--no-package] [--keep-going]`.
+**Rôle** (jalon 8, partie 2) : **la vérification du moteur** en une commande, les mêmes étapes que lancera une intégration continue hébergée : `python tools/ci/verify.py [--quick] [--configs debug,release] [--no-references] [--no-msl] [--no-example] [--no-analysis] [--no-asan] [--no-tsan] [--no-docs] [--no-package] [--keep-going]`.
 
-Pour chaque configuration (debug et release ; `--quick` : release seulement) : configuration avec le preset de l'OS et les **avertissements en erreurs**, build complet, tests unitaires, vérification et compilation des tables de données. Puis, une fois : `examples/jeu_minimal` construit et lancé **de l'extérieur** du moteur, comme un jeu qui l'a en sous-module ; sous Windows, export du MSL comparé à celui versionné ; les captures de référence, le test d'exactitude des sauvegardes et l'auto-test de l'éditeur (`check_references.py`) ; l'analyse statique (`static_analysis.py`) ; les tests sous AddressSanitizer (preset `<os>-asan`) ; la référence de l'API (`check_docs.py`) ; la configuration livrée avec le paquet de la tranche, installé, joué sur le rejeu de référence et désinstallé sous Windows (`check_package.py` ; sauté par `--quick`).
+Pour chaque configuration (debug et release ; `--quick` : release seulement) : configuration avec le preset de l'OS et les **avertissements en erreurs**, build complet, tests unitaires, vérification et compilation des tables de données. Puis, une fois : `examples/jeu_minimal` construit et lancé **de l'extérieur** du moteur, comme un jeu qui l'a en sous-module ; sous Windows, export du MSL comparé à celui versionné ; les captures de référence, le test d'exactitude des sauvegardes et l'auto-test de l'éditeur (`check_references.py`) ; l'analyse statique (`static_analysis.py`) ; les tests sous AddressSanitizer (preset `<os>-asan`) ; sous macOS, les tests sous ThreadSanitizer (preset `macos-tsan`) ; la référence de l'API (`check_docs.py`) ; la configuration livrée avec le paquet de la tranche, installé, joué sur le rejeu de référence et désinstallé sous Windows (`check_package.py` ; sauté par `--quick`).
 
 **À savoir** : le script prépare son environnement lui-même (l'environnement de développement de Visual Studio, le CMake et le Ninja de CLion, qui partagent ses dossiers de build, et le vcpkg de `MOTEUR_VCPKG_ROOT`, de CLion ou de `VCPKG_ROOT`, dans cet ordre). Sous Windows, chaque commande tourne dans sa propre console cachée : les builds sont les mêmes depuis un terminal, un IDE ou un programme sans console. Les autres scripts l'importent pour cet environnement. Code de sortie 0 quand tout passe.
+
+### `tools/tests/check_error_policy.py`
+
+**Rôle** (jalon 9, partie 2) : vérifie la **règle des erreurs** sur le programme `tranche` : une exception qui s'échappe d'une image ou de la logique (`--test-plantage frame|update`) donne un arrêt contrôlé (rapport de plantage, message, code de sortie d'erreur), jamais un plantage silencieux ni une fenêtre figée. Lancé par `verify.py` après les captures.
+
+### `tools/assets/assets.py`
+
+**Rôle** (jalon 9, partie 4) : l'**identité des assets** en ligne de commande, avec les règles du moteur : `check` (identifiants en double, `.meta` orphelins, assets sans `.meta`), `meta` (en donne un à ceux qui n'en ont pas), `move DOSSIER ANCIEN NOUVEAU` (le fichier **et** son `.meta`, puis les chemins écrits à côté des identifiants réécrits), `find`, `refresh`. Code de sortie 0, 1 pour des problèmes, 2 pour une ligne de commande fausse. L'éditeur (partie 10) fera la même chose.
 
 ### `tools/ci/static_analysis.py`
 
@@ -1178,7 +1192,7 @@ Pour chaque configuration (debug et release ; `--quick` : release seulement) : c
 
 ### `tools/fuzz/fuzzer.py`
 
-**Rôle** (jalon 8, partie 8) : le **fuzzing** des lecteurs de fichiers : `python tools/fuzz/fuzzer.py [--seconds S] [--targets map,effect,...] [--parallel] [BUILD_DIR]`. Chaque programme de `tests/fuzz` (cibles `map`, `effect`, `animation`, `save`, `ktx2`, `gltf`, `table`, `bindings`, `image`, `archive`) tourne un moment sur un corpus amorcé par les fichiers du projet (et par une sauvegarde, des tables compilées et une archive que fabrique le build Release) ; ce qui le fait planter est gardé. BUILD_DIR : le build de fuzzing (preset `<os>-fuzz`). Corpus et trouvailles dans `build/fuzz/<cible>/`. Une trouvaille, une fois corrigée, devient un cas de `tests/test_robustness.cpp`. Code de sortie 1 si quelque chose a été trouvé.
+**Rôle** (jalon 8, partie 8) : le **fuzzing** des lecteurs de fichiers : `python tools/fuzz/fuzzer.py [--seconds S] [--targets map,effect,...] [--parallel] [BUILD_DIR]`. Chaque programme de `tests/fuzz` (cibles `map`, `effect`, `animation`, `save`, `ktx2`, `gltf`, `table`, `bindings`, `image`, `archive`, et depuis le jalon 9 `model` (modèles préparés et leurs clips), `registry` (registre figé, `.meta`), `document` (JSON et CBOR), `prefab`) tourne un moment sur un corpus amorcé par les fichiers du projet (et par une sauvegarde, des tables compilées et une archive que fabrique le build Release) ; ce qui le fait planter est gardé. BUILD_DIR : le build de fuzzing (preset `<os>-fuzz`). Corpus et trouvailles dans `build/fuzz/<cible>/`. Une trouvaille, une fois corrigée, devient un cas de `tests/test_robustness.cpp`. Code de sortie 1 si quelque chose a été trouvé.
 
 ### `tools/crash/read_report.py`
 
@@ -1271,9 +1285,119 @@ Le format est décrit dans `FORMATS.md`.
 
 ### `src/moteur/include/moteur/jobs.hpp` et `jobs.cpp`
 
-**Rôle** (jalon 8, partie 5) : un petit **système de tâches** (`JobSystem`, et `jobs()`, celui du processus) : une file unique (premier entré, premier sorti), des fils de travail (autant que de cœurs moins un), `submit()`, `wait()` (le fil qui attend exécute d'autres tâches en attendant) et `parallel_for()`. Il sert au chargement en arrière-plan (`Assets::prefetch_*()`) et à découper les longs calculs (le préfiltrage d'un environnement).
+**Rôle** (jalon 8, partie 5) : un petit **système de tâches** (`JobSystem`, et `jobs()`, celui du processus) : des fils de travail (autant que de cœurs moins un), `submit()`, `wait()` (le fil qui attend exécute d'autres tâches en attendant) et `parallel_for()`. Il sert au chargement en arrière-plan (`Assets::prefetch_*()`) et à découper les longs calculs (le préfiltrage d'un environnement).
+
+**Jalon 9, partie 9** : deux files, `JobPriority::Frame` (le travail de l'image, pris d'abord ; `parallel_for()`) et `Background` (le défaut de `submit()`) ; une attente de l'image n'exécute jamais une tâche d'arrière-plan. `TaskGraph` : des tâches nommées avec leurs dépendances, lancées par `run()` (chacune par la dernière de ses dépendances), leur durée, une zone Tracy par tâche. Le rendu (`MeshRenderer::prepare`), l'échantillonnage des poses (`World::collect`) et `move_movers()` s'en servent.
 
 **Règles du moteur** : la logique du jeu n'y tourne jamais (l'ordre de ses calculs ne doit pas dépendre des fils : déterminisme des rejeux et des sauvegardes) ; une tâche ne touche ni au GPU, ni aux caches d'assets, ni aux registres ECS : elle calcule des données que le fil principal utilise ensuite ; une tâche qui lève une exception est finie, et `wait()` relance son exception.
+
+### `src/moteur/include/moteur/reflection.hpp`, `reflection_io.hpp` et `reflection.cpp`
+
+**Rôle** (jalon 9, partie 3) : la **réflexion des types** : décrire une fois les champs d'une structure (nom, anciens noms, bornes, unité, documentation, drapeaux d'usage) pour la lire et l'écrire en JSON / CBOR, la comparer, l'éditer dans l'inspecteur et en tirer un schéma JSON.
+
+**Choix** : une fonction `constexpr moteur_reflect(const T*)` trouvée par recherche dépendante des arguments, écrite à côté du type par les macros `MOTEUR_REFLECT`, `MOTEUR_FIELD`, `MOTEUR_FIELD_AS`, `MOTEUR_REFLECT_ENUM`, `MOTEUR_REFLECT_NAMED` : pas de générateur de code ni d'étape de build, et un jeu décrit ses types dans son propre espace de noms. La description devient une `TypeInfo` d'exécution une fois (`type_info<T>()`), ce qui permet de travailler sur un type sans le connaître en C++ (`ScratchObject`, l'inspecteur, les préfabriqués). Les messages de lecture sont ceux de `DataReader`. MSVC : `/Zc:preprocessor` est public sur la cible `moteur` (`__VA_OPT__` des macros).
+
+### `src/moteur/include/moteur/component_types.hpp` et `component_types.cpp`
+
+**Rôle** (jalon 9, partie 3) : le **registre des composants** par nom stable (`component_types()`) : ce qui permet aux sauvegardes, aux préfabriqués et à l'inspecteur de manipuler un composant décrit sans son type C++, et ses **fonctions de mise à niveau** (formes plus anciennes : tableaux, valeur seule). Les composants du moteur y sont (`transform`, `name`, `hidden`, `parent`, `bone_attachment`, `light`, `halo`, `collider`, `mover`, `model`) ; un jeu y ajoute les siens.
+
+### `src/moteur/include/moteur/prefab.hpp` et `prefab.cpp`
+
+**Rôle** (jalon 9, partie 3) : les **préfabriqués** (`.prefab.json`) : lecture (imbrication, variantes, surcharges fusionnées champ par champ, références entre entités, cycles refusés), chaque composant lu une fois, puis `instantiate()` dans un `World` avec placement et surcharges par instance. Chargés par `Assets::prefab()`, rechargés à chaud avec leurs dépendances. Format : `FORMATS.md`, 14.
+
+### `src/moteur/include/moteur/asset_registry.hpp` et `asset_registry.cpp`
+
+**Rôle** (jalon 9, partie 4) : l'**identité des assets** : `AssetId` (UUID v4), les fichiers `.meta` (identifiant et réglages d'import), `AssetRegistry` (parcours des dossiers d'assets, `.meta` créés, doublons réattribués, orphelins listés, déplacement, registre figé `asset_registry.mreg` du jeu livré). `Application::build_asset_registry()` le construit au démarrage ; `Assets` résout les références `{"id", "path"}` par lui.
+
+**Choix** : un identifiant aléatoire et jamais recalculé (un identifiant tiré du chemin changerait au premier renommage) ; un `.meta` voisin plutôt qu'une base centrale, pour qu'un asset et son identité se copient et se versionnent ensemble (comme Unity et Godot 4). Format : `FORMATS.md`, 15.
+
+### `src/moteur/include/moteur/model_import.hpp` et `model_import.cpp`
+
+**Rôle** (jalon 9, partie 4) : l'**import des modèles** : réglages lus du `.meta` (`ModelImportSettings`), `import_model()` (niveaux de détail, ordre pour le cache et la lecture des sommets, images intégrées encodées en KTX2, clips construits en archive ozz) et la forme préparée `.mmdl` (`encode_prepared_model()`, `decode_prepared_model()`), ce que le moteur charge à la place du glTF en développement (cache `.imported/`) et dans le jeu livré. Le lecteur est fait pour des fichiers abîmés : chaque taille et chaque indice sont contrôlés avant usage. Format : `FORMATS.md`, 16.
+
+### `src/moteur/include/moteur/mesh_optimize.hpp` et `mesh_optimize.cpp`
+
+**Rôle** (jalon 9, partie 4) : les algorithmes des maillages préparés, **maison** : `simplify()` (quadriques d'erreur de Garland et Heckbert, effondrement d'arêtes sur demi-arêtes, bords et coutures d'UV verrouillés, refus des triangles retournés, aplatis ou dont la normale s'écarte trop de l'original), `optimize_vertex_cache()` (algorithme de Forsyth), `average_cache_miss_ratio()` (pour le mesurer), `vertex_fetch_order()`. *meshoptimizer* reste la proposition si la qualité venait à manquer.
+
+### `src/moteur/include/moteur/collision_scene.hpp` et `collision_scene.cpp`
+
+**Rôle** (jalon 9, partie 5) : la **géométrie de collision** d'un niveau pour la logique : triangles marqués (`SurfaceKind`), `CollisionMeshData` (ce qu'un modèle ou une pièce porte ; boîtes, escaliers et rampes de maquette), `CollisionScene` (arbre de volumes englobants construit par la médiane, égalités départagées par l'indice) et ses requêtes : rayon, segment (ligne de vue), sol sous un point, contacts d'une sphère ou d'une capsule, triangles d'une boîte. Le nom des nœuds `COL_` / `UCX_` donne le genre (`surface_kind_of_node`).
+
+**Choix** : maison (la collision cinématique de la logique, sans simulation physique : celle-ci est au jalon 10) ; déterministe (seulement + − × ÷ et racine carrée, résultats triés par distance puis par indice) ; requêtes `const` sûres entre fils (une pile locale chacune).
+
+### `src/moteur/include/moteur/character_controller.hpp` et `character_controller.cpp`
+
+**Rôle** (jalon 9, partie 5) : le **contrôleur de personnage** : une capsule debout déplacée contre une `CollisionScene` par petits pas (au plus la moitié de son rayon), poussée hors des murs (le contact le plus profond d'abord, un nombre borné de passes), posée sur le sol à portée d'une marche ou de la distance d'accroche, sinon en chute (gravité, vitesse limite) jusqu'à se poser. Le bas de la capsule est relevé de la hauteur de marche pour les murs : les marches se montent au lieu de bloquer. Une marche sous un plafond trop bas est refusée.
+
+### `src/moteur/include/moteur/level_collision.hpp` et `level_collision.cpp`
+
+**Rôle** (jalon 9, partie 5) : le composant `StaticCollision` (une pièce du niveau : la collision de son modèle, des boîtes) et `gather_static_collision()`, qui construit la `CollisionScene` d'un monde à partir des entités marquées, dans l'ordre de leurs identifiants.
+
+### `src/moteur/include/moteur/navigation.hpp` et `navigation.cpp`
+
+**Rôle** (jalon 9, partie 6) : la **navigation en 3D** : `NavMesh` (construction par tuiles depuis une `CollisionScene` avec Recast, chemins et requêtes avec Detour, zones, liaisons hors maillage et portes, obstacles, élagage des îlots, forme sauvegardée `MNAV`), `NavFlowField` (champs de flux sur les polygones, pour les foules), `nav_grid_view()` (la grille d'un étage vue du maillage) et `draw_nav_mesh()`.
+
+**Choix** : Recast & Detour (décision de l'utilisateur), **derrière l'API du moteur** : aucun de leurs types dans l'en-tête (un `Impl` privé), pour pouvoir changer d'implémentation. Références de polygones 32 bits de Detour (tuiles et polygones par tuile calculés à la construction). L'évitement local n'est pas celui de DetourCrowd (trigonométrie) : il est dans `movement.cpp`.
+
+### `src/moteur/include/moteur/picking.hpp` et `picking.cpp`
+
+**Rôle** (jalon 9, partie 7) : la **vue et la sélection en 3D** : `Selectable` (composant), `pick()` (rayons de la caméra contre les formes sélectionnables devant la géométrie, priorités, puis le sol ramené sur le maillage de navigation), `ray_capsule()`, `ray_box()`, `line_of_sight()` (symétrique) et `floor_sight_grid()` (la grille de vision d'un étage). Le survol au pixel près est dans le rendu (passe d'identifiants : `MeshRenderer::set_ids()`, `Renderer::request_pick()`, `shaders/mesh_id.*.hlsl`), jamais dans la logique.
+
+### `shaders/mesh_id.vert.hlsl`, `mesh_id_skinned.vert.hlsl` et `mesh_id.frag.hlsl`
+
+**Rôle** (jalon 9, partie 7) : la **passe d'identifiants** : les lots de la scène redessinés dans une cible R32_UINT (l'identifiant de sélection de chaque instance, `MeshInstance::normal_matrix[1].w`), avec une profondeur à elle. `tonemap.frag.hlsl` lit cette cible pour le contour de l'entité survolée.
+
+### `src/moteur/include/moteur/level.hpp` et `level.cpp`
+
+**Rôle** (jalon 9, partie 8) : le **niveau v3 source** (`LevelDocument` : instances à identifiants stables, calques, points, volumes, sol peint, réglages de navigation ; lecture et écriture), la **migration** des cartes v1 et v2 (`migrate_map`, `MapMigration`) et l'**état d'une partie** (`LevelState`). Partie 10 : les **propriétés** de jeu des instances, l'**éclairage** du niveau (`LevelLighting`, `apply_lighting()`, `night_lighting()`).
+
+### `src/moteur/include/moteur/level_edit.hpp` et `level_edit.cpp`
+
+**Rôle** (jalon 9, partie 10) : un **niveau en cours d'édition** (`EditableLevel`) : chaque changement (instances, points, volumes, sol peint, réglages) passe par lui, est enregistré pour annuler et refaire (une action = un pas ; les changements d'une même chose dans un pas fusionnent : un glissement de centaines d'images est un seul changement) et signalé à l'éditeur (`LevelChange`) pour qu'il ne reconstruise que ce qui a changé. `ground_cell()`, `grow_ground()` : la grille du sol peint qui s'agrandit là où l'on peint. Sans GPU, testé (`tests/test_level_edit.cpp`).
+
+### `src/moteur/include/moteur/gizmo.hpp` et `gizmo.cpp`
+
+**Rôle** (jalon 9, partie 10) : les **poignées de manipulation** d'un éditeur (`Gizmo`) : flèches et carrés de plan pour déplacer, anneaux pour tourner, cubes pour mettre à l'échelle ; leur forme en pixels (même taille où que soit l'objet), la poignée sous le pointeur, le glissement en monde (point le plus proche d'un axe, intersection d'un plan, angle autour d'un axe), l'aimantation (`GizmoSnap`). Ni dessin ni entrée : l'éditeur dessine `shape()` et passe le pointeur. Testé.
+
+### `src/moteur/include/moteur/thumbnails.hpp` et `thumbnails.cpp`
+
+**Rôle** (jalon 9, partie 10) : les **vignettes** de la bibliothèque de l'éditeur, rendues par le moteur : `ThumbnailRenderer` (un second `MeshRenderer` dans des cibles à lui, hors écran, entre deux images, suréchantillonné, même mappage des tons que le jeu, fond transparent) et `ThumbnailCache` (un PNG par asset et par empreinte dans un dossier, l'ancien retiré ; textures gardées). `encode_png()` est dans `image.hpp` ; `Renderer::submit_pending_uploads()` envoie la géométrie d'un modèle tout juste chargé avant ce rendu.
+
+### `src/moteur/include/moteur/level_bake.hpp` et `level_bake.cpp`
+
+**Rôle** (jalon 9, partie 8) : la **préparation d'un niveau** (`bake_level` : collision des instances par leurs préfabriqués, découpage en morceaux, maillages de navigation du niveau entier gardés tuile par tuile) et ses **fichiers** (en-tête `.mlvl`, morceaux `.mlvc`) ; `prefab_collision()` pour l'éditeur.
+
+### `src/moteur/include/moteur/level_streamer.hpp` et `level_streamer.cpp`
+
+**Rôle** (jalon 9, partie 8) : le **chargement par morceaux** (`LevelStreamer` ; partie 10 : le crochet d'instance `set_instance_hook()`, où le jeu donne ses composants aux instances d'après leurs propriétés) : lecture et décodage en arrière-plan, préfabriqués préchargés, instanciation sous un budget de temps par mise à jour, scène de collision reconstruite en arrière-plan, tuiles de navigation ajoutées et retirées, déchargement avec marge et budget de morceaux ; `asset_level_sources()` et `read_level()` pour préparer un niveau depuis le gestionnaire d'assets.
+
+### `apps/bac_a_sable/level_editor.hpp` et `level_editor.cpp`
+
+**Rôle** (jalon 9, partie 10) : l'**éditeur de niveaux** (`editeur --level`, DEBUG > Engine tests > Level editor) : bibliothèque d'assets avec vignettes et familles de kit, placement aux poignées avec aimantation, sol peint, inspecteur des surcharges et des propriétés, éclairage jour et nuit, navigation reconstruite en arrière-plan, enregistrement, copie de secours, autotest (`--self-test`, lancé par `check_references.py`). « Essayer » fait jouer le niveau ouvert par la tranche (`Demo3D`, partie 11).
+
+### `apps/bac_a_sable/level_stream_test.hpp` et `level_stream_test.cpp`
+
+**Rôle** (jalon 9, partie 8) : la scène « Level streaming » (`--level-stream`, `--level CLÉ`) : un niveau généré de 512 x 512 m traversé pendant que ses morceaux se chargent et se déchargent ; la mesure `streaming` de `measure.py`.
+
+### `tools/models/make_blockout.py`, `assets/models/blockout/` et `assets/prefabs/blockout/`
+
+**Rôle** (jalon 9, partie 8) : les **pièces de maquette** du moteur (boîtes claires et foncées, sol, dalle de 8 m, mur, pilier, caisse, marche, avec leur collision), pour monter un niveau avant ses assets et pour la migration des cartes. `assets/levels/` : la carte de la tranche migrée (`tranche_migree.level.json`) et ses règles ; le niveau de la tranche (`tranche.level.json`, partie 11).
+
+### `tools/levels/make_slice_level.py`, `assets/levels/tranche.level.json` et `assets/prefabs/tranche/`
+
+**Rôle** (jalon 9, partie 11) : le **niveau de la tranche** : une rue gothique du kit de l'ARPG, une place, le parvis de la cathédrale 0,84 m plus haut par trois escaliers, les pavés peints, les lampadaires et braséros, 40 apparitions de squelettes (`apparition.prefab.json` : une racine sans modèle, ses propriétés disent qui vient), le socle du parvis (`socle_terrasse.prefab.json`). Le script en fait le premier état (fixe : les références en dépendent) ; l'éditeur l'ouvre et le joue. Dans l'ARPG : `assets_source/commun/collisions.py` donne leur collision aux accessoires du kit et fait les préfabriqués des sols.
+
+### `apps/bac_a_sable/level3d_test.hpp` et `level3d_test.cpp`
+
+**Rôle** (jalon 9, partie 5) : la scène « Level 3D » du bac à sable (`--level3d` ; `--level3d-auto` : seule, le héros sur un parcours fixe, pour les captures) : un niveau en maquette (escalier, plateforme, pont, rampes, rebord, plafond bas), le héros au clic (rayon contre le niveau) ou au clavier, des marcheurs sur le pont et dessous, l'affichage `debug.collision`.
+
+### `src/moteur/include/moteur/document.hpp` et `document.cpp`
+
+**Rôle** (jalon 9, partie 4) : un **document structuré en JSON ou en CBOR** : `parse_document()` (le premier octet dit lequel ; le CBOR passe d'abord `check_cbor_structure`), `shipped_document()` (le CBOR qu'écrit la préparation), `is_cbor_document()`. Tous les lecteurs de documents du moteur passent par lui : le jeu livré ne lit aucun JSON. Format : `FORMATS.md`, 17.
+
+### `src/moteur/private/moteur/binary_io.hpp` (interne)
+
+**Rôle** (jalon 9, partie 4) : `BinaryWriter` et `BinaryReader`, l'écriture et la lecture petit-boutistes des formats binaires maison (`.mmdl`) : textes, tableaux, blobs, chaque lecture bornée, et un échec qui dit le fichier et la position (`at byte N`).
 
 ### `src/moteur/private/moteur/cbor_check.hpp` et `cbor_check.cpp` (internes)
 
@@ -1311,7 +1435,7 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 
 **Rôle** : la scène de démonstration du jalon 3 (partie 11), dans le menu (« 3D demo ») ou avec `--demo3d`, devenue le **monde de la tranche jouable**. Elle est dans `tranche_commun` depuis le jalon 8, partie 12. Elle porte aussi les scènes de mesure (`Options::measure`, `--mesure` du bac à sable, voir `tools/measures/`), la sauvegarde et le chargement de l'état du monde (`--save-at`, `--load`) et le monde construit depuis les objets de la carte `tranche.json`.
 
-**Contenu** : la carte 100×100 de la démo 2D construite en 3D (sol fusionné par blocs de 10×10, murs de 1,5 m, un brasero-torche par pièce), le décor (rochers, arbres, caisses, tonneaux glTF), les créatures de la démo 2D (demi-tour devant les murs) avec barres de vie, le soleil et les torches avec ombres, la caméra (déplacement, zoom, suivi). Commandes : les actions de `assets/input/demo3d.json` (profils « clic » et « zqsd », manette). Depuis la partie 5 du jalon 4, le monde est une `moteur::World` : sol, murs et décor sont des entités fixes, chaque créature une entité qui bouge (`Walker` et `Health`, composants propres à la démo) avec un corps et une tête attachés, chaque torche une entité (flamme, lumière, halo), l'anneau de sélection est attaché à la créature choisie, et la marque de destination est cachée (`Hidden`) quand il n'y en a pas. Réglages, tableau des passes et temps de collecte du monde dans le panneau du menu (`draw_controls()`) ; `world collection` en fin de ligne de commande. Options : `--seed`, `--map`, `--creatures`, `--decor`, `--tile-floor`, `--point-shadows`, et celles des captures. `Demo3D::declare_actions()` déclare les actions (et celles des menus) et lit les touches, pour la démo et pour les états qui l'entourent. `Options::hero` (la tranche jouable, jalon 4 partie 9) : un héros à lui, suivi par la caméra, qui frappe les créatures (clic sur une créature à portée, ou compétence 1), avec pas, impacts et ambiance. Depuis la partie 11 du jalon 5, si les personnages de test sont là : le héros est le chevalier KayKit animé (locomotion à sa vitesse, épée d'un fichier à part sur `right_hand`, attaque sur la couche du haut, dégâts à l'événement `impact`, pas aux événements), les créatures des squelettes KayKit animés (touché sur la couche du haut, mort au sol), les barres au-dessus de la boîte de chacun (`Stature`).
+**Contenu** : la carte 100×100 de la démo 2D construite en 3D (sol fusionné par blocs de 10×10, murs de 1,5 m, un brasero-torche par pièce), le décor (rochers, arbres, caisses, tonneaux glTF), les créatures de la démo 2D (demi-tour devant les murs) avec barres de vie, le soleil et les torches avec ombres, la caméra (déplacement, zoom, suivi). Commandes : les actions de `assets/input/demo3d.json` (profils « clic » et « zqsd », manette). Depuis la partie 5 du jalon 4, le monde est une `moteur::World` : sol, murs et décor sont des entités fixes, chaque créature une entité qui bouge (`Walker` et `Health`, composants propres à la démo) avec un corps et une tête attachés, chaque torche une entité (flamme, lumière, halo), l'anneau de sélection est attaché à la créature choisie, et la marque de destination est cachée (`Hidden`) quand il n'y en a pas. Réglages, tableau des passes et temps de collecte du monde dans le panneau du menu (`draw_controls()`) ; `world collection` en fin de ligne de commande. Options : `--seed`, `--map`, `--creatures`, `--decor`, `--tile-floor`, `--point-shadows`, et celles des captures. `Demo3D::declare_actions()` déclare les actions (et celles des menus) et lit les touches, pour la démo et pour les états qui l'entourent. **Jalon 9, partie 11** : la tranche joue un **niveau v3** (`Options::level`, par défaut `levels/tranche.level.json` ; `--slice-map` garde la carte) : chargé par `LevelStreamer` en zone fermée et dans l'ordre, ses apparitions et braséros relevés par le crochet d'instance, la logique en 3D (navigation Recast, contrôleur de personnage, champ de flux sur le maillage, lignes de vue 3D, brouillard par étage, créatures choisies par rayons et soulignées au survol), la sauvegarde avec le niveau et son état ; `Options::baked_level`, `start` et `night` pour « Essayer » de l'éditeur. `Options::hero` (la tranche jouable, jalon 4 partie 9) : un héros à lui, suivi par la caméra, qui frappe les créatures (clic sur une créature à portée, ou compétence 1), avec pas, impacts et ambiance. Depuis la partie 11 du jalon 5, si les personnages de test sont là : le héros est le chevalier KayKit animé (locomotion à sa vitesse, épée d'un fichier à part sur `right_hand`, attaque sur la couche du haut, dégâts à l'événement `impact`, pas aux événements), les créatures des squelettes KayKit animés (touché sur la couche du haut, mort au sol), les barres au-dessus de la boîte de chacun (`Stature`).
 
 ### `apps/tranche/states_demo.hpp` et `states_demo.cpp`
 
@@ -1373,7 +1497,8 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 |---|---|
 | Programme et plateforme | `test_fixed_timestep`, `test_frame_stats`, `test_state_stack`, `test_input` (actions, profils, fichier du joueur, changement des touches, rejeu), `test_display` (points et pixels, réglages d'affichage), `test_jobs` (système de tâches), `test_user_paths` (dossier du joueur au nom accentué, disque plein, dossier où rien ne s'écrit : les données du joueur restent intactes) |
 | Rendu | `test_sprite_batcher`, `test_sprite_region`, `test_atlas_builder`, `test_image`, `test_utf8`, `test_text_layout`, `test_color`, `test_camera3d`, `test_mesh`, `test_mesh_batcher`, `test_billboard_batcher`, `test_debug_lines`, `test_environment`, `test_shadow`, `test_anti_aliasing`, `test_geometry_pool` (tranches, alignement, réutilisation différée), `test_model` |
-| Assets et données | `test_asset_cache`, `test_ktx_texture`, `test_archive` (aller-retour, casse, archive abîmée, montage), `test_cook` (globs, clés du manifeste), `test_data_table`, `test_save_file`, `test_world_save`, `test_robustness` (fichiers abîmés, dont ceux trouvés par le fuzzing, `tests/data/fuzz/`) |
+| Assets et données | `test_asset_cache`, `test_ktx_texture`, `test_archive` (aller-retour, casse, archive abîmée, montage), `test_cook` (globs, clés du manifeste), `test_data_table`, `test_save_file`, `test_world_save`, `test_robustness` (fichiers abîmés, dont ceux trouvés par le fuzzing, `tests/data/fuzz/`), `test_reflection` (description, lecture et écriture, alias, schéma), `test_prefab` (instanciation, imbrication, variantes, surcharges), `test_asset_registry` (identifiants, `.meta`, doublons, déplacement, registre figé, dossiers montés), `test_mesh_optimize` (simplification, cache), `test_model_import` (import, `.mmdl`), `test_document` (JSON et CBOR) |
+| Monde en 3D | `test_collision_scene` (arbre comparé à la force brute, sol sur deux hauteurs, murs, marches, pentes, pont, rebord, déterminisme au bit près, collision importée, `StaticCollision`), `test_navigation` (maillage sur plusieurs étages, liaisons, portes, zones, obstacles, forme sauvegardée, déplacements planifiés, 500 monstres), `test_picking` (formes, priorités, monstre à moitié caché, sol à travers un trou, lignes de vue, grille d'un étage), `test_level` (document v3, migration, état de partie, préparation par morceaux, fichiers, navigation raccordée) ; `test_levels.hpp` : le niveau de test partagé |
 | Monde | `test_tilemap`, `test_map_data`, `test_world_grid` (collisions, chemins, requêtes, vision, déplacements, et mesures), `test_particles`, `test_world`, `test_map_document` |
 | Animation | `test_ozz`, `test_skeleton`, `test_animator`, `test_blending`, `test_attachment`, `test_animation_debug`, `test_skinning`, `test_animation_graph` |
 | Audio | `test_audio` (règles, décodage, mixage sans périphérique) |

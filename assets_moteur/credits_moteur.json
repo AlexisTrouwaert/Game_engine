@@ -111,6 +111,14 @@
       "license_file": "licenses/ozz-animation.txt"
     },
     {
+      "name": "Recast & Detour",
+      "version": "1.6.0",
+      "license": "zlib",
+      "copyright": "Copyright (c) 2009 Mikko Mononen",
+      "url": "https://github.com/recastnavigation/recastnavigation",
+      "license_file": "licenses/recastnavigation.txt"
+    },
+    {
       "name": "Tracy",
       "version": "0.13.1",
       "license": "BSD 3-Clause",

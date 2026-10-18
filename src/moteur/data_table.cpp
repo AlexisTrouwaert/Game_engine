@@ -1,6 +1,7 @@
 #include "moteur/data_table.hpp"
 
 #include "moteur/cbor_check.hpp"
+#include "moteur/file_io.hpp"
 #include "moteur/paths.hpp"
 
 #include "moteur/profiler.hpp"
@@ -465,6 +466,24 @@ bool DataTables::reload(const std::string& root, const std::string& name) {
         return false;
     }
     return reload_table(root, *table);
+}
+
+bool DataTables::write_schemas(const std::string& directory, std::size_t& count, std::string& error) const {
+    count = 0;
+    std::error_code ignored;
+    std::filesystem::create_directories(utf8_path(directory), ignored);
+    for (const std::unique_ptr<DataTableBase>& table : tables_) {
+        if (table->schema().is_null()) {
+            continue;
+        }
+        const std::string path = directory + table->name() + ".schema.json";
+        const std::string text = table->schema().dump(2) + "\n";
+        if (!write_file_atomic(path, text.data(), text.size(), error)) {
+            return false;
+        }
+        ++count;
+    }
+    return true;
 }
 
 bool DataTables::compile(const std::string& root, const std::string& directory, DataIssues& issues) {

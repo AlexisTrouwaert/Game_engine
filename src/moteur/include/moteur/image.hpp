@@ -33,4 +33,8 @@ Image decode_image(const void* data, std::size_t size, const std::string& name);
 /// so files on disk stay in straight alpha. Fully opaque pixels are left untouched. In place, O(pixels).
 void premultiply_alpha(Image& image);
 
+/// The image as a PNG file's bytes (straight alpha kept). Throws std::runtime_error when encoding
+/// fails. Any thread.
+std::vector<std::uint8_t> encode_png(const Image& image);
+
 }  // namespace moteur

@@ -39,6 +39,14 @@ struct VertexSkin {
 };
 static_assert(sizeof(VertexSkin) == 12, "VertexSkin is uploaded as is: joints at 0, weights at 4");
 
+/// One level of detail of a mesh (milestone 9, part 4): a range of its indices, made at import by
+/// simplifying the full mesh (simplify()), and how far its surface may be from the full one.
+struct MeshLod {
+    std::uint32_t first_index = 0;  ///< in MeshData::indices / Mesh::indices
+    std::uint32_t index_count = 0;  ///< three per triangle
+    float error = 0.0f;             ///< the largest distance to the full surface, in the mesh's units (0 for level 0)
+};
+
 /// A mesh on the CPU: plain data that can be built, tested and inspected without a GPU.
 ///
 /// World conventions (see milestone 3, part 2): right-handed, Y up, 1 unit = 1 metre. Triangles are
@@ -48,6 +56,9 @@ struct MeshData {
     std::vector<Vertex3D> vertices;      ///< indexed by `indices`
     std::vector<std::uint32_t> indices;  ///< three per triangle
     std::vector<VertexSkin> skin;        ///< one per vertex for a skinned mesh, else empty
+    /// Its levels of detail, the full mesh first, coarser after: ranges of `indices`, over the same
+    /// vertices. Empty: one level, every index.
+    std::vector<MeshLod> lods;
 
     /// `indices.size() / 3`.
     std::size_t triangle_count() const { return indices.size() / 3; }
@@ -82,7 +93,10 @@ struct Mesh {
     GpuSlice vertices;       ///< Vertex3D, one after the other
     GpuSlice indices;        ///< 32-bit
     GpuSlice skin;           ///< one VertexSkin per vertex, for a skinned mesh (MeshData::skin)
-    std::uint32_t index_count = 0;  ///< three per triangle
+    std::uint32_t index_count = 0;  ///< of the full mesh (level 0), three per triangle
+    /// Its levels of detail (at least one: the full mesh), as MeshData::lods; the renderer draws the
+    /// coarsest whose error is under a pixel on the screen (MeshRenderer::set_lod_threshold()).
+    std::vector<MeshLod> lods;
     Aabb bounds;             ///< of the vertices, in the mesh's own space (MeshData::bounds())
     std::size_t gpu_bytes = 0;  ///< vertices, indices and skin
 

@@ -1,17 +1,12 @@
 {
   "version": 1,
-  "_note": "What the shipped program 'tranche' takes with it (moteur/cook.hpp; milestone 8, parts 6 and 12). Models pull their files, effects their textures.",
+  "_note": "What the shipped program 'tranche' takes with it (moteur/cook.hpp; milestone 8, parts 6 and 12). Models pull their files, effects their textures, prefabs their models, levels their prefabs (by identifier). Milestone 9, part 11: the slice plays its level (levels/tranche.level.json, prepared into its header and chunks), whose kit, props and cobblestones come from the game's folder (moteur_package ASSET_FOLDERS); the map of milestones 6 and 7 is no longer shipped.",
   "include": [
-    "maps/tranche.json",
+    "levels/tranche.level.json",
     "models/characters/kaykit_adventurers/Knight.glb",
     "models/characters/kaykit_adventurers/sword_1handed.gltf",
     "models/characters/kaykit_skeletons/Skeleton_Warrior.glb",
     "models/characters/kaykit_skeletons/Skeleton_Minion.glb",
-    "models/polyhaven/wine_barrel_01/wine_barrel_01_1k.gltf",
-    "models/arpg/sol_paves_humides_a_8m/sol_paves_humides_a_8m.gltf",
-    "models/arpg/sol_paves_humides_b_8m/sol_paves_humides_b_8m.gltf",
-    "models/arpg/lampadaire_gothique/lampadaire_gothique.gltf",
-    "models/arpg/lampadaire_gothique/lampadaire_gothique.prop.json",
     "animations/kaykit.json",
     "effects/*.json",
     "audio/kenney_impact/footstep_concrete_*.ogg",
@@ -32,6 +27,7 @@
   "archives": [
     {"name": "audio", "include": ["audio/**"]},
     {"name": "personnages", "include": ["models/characters/**", "animations/**"]},
-    {"name": "decor", "include": ["models/arpg/**"]}
+    {"name": "decor", "include": ["models/props/**", "models/sols/**", "models/blockout/**", "prefabs/**"]},
+    {"name": "niveaux", "include": ["levels/**"]}
   ]
 }

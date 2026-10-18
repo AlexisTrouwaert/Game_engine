@@ -83,6 +83,21 @@ void set_archives_only(bool only);
 /// Whether set_archives_only() is on.
 bool archives_only();
 
+/// Mounts a folder of assets read in place (milestone 9, part 4; development): a file of the
+/// program's assets folder (`asset_path(key)`) that neither the archives nor the disk have is looked
+/// for as `folder + key` (`folder` ends with a separator). Another game's assets used without
+/// copying them (the ARPG's, for the slice); the first folder mounted wins. Ignored for the files
+/// outside the assets folder, and while archives_only() is set. Mount at the start, as archives.
+void mount_asset_folder(const std::string& folder);
+/// Unmounts every folder of mount_asset_folder() (tests, tools).
+void unmount_asset_folders();
+/// The folders mounted by mount_asset_folder(), in order.
+std::vector<std::string> mounted_asset_folders();
+/// Where read_file() reads `path` from on disk: `path` itself, or the mounted asset folder that has
+/// the file (see mount_asset_folder()), or `path` when none has it. For the tools that need the real
+/// file (its time, its folder). Not for archived files.
+std::string disk_path(const std::string& path);
+
 /// read_file() as a string (text files, JSON): the bytes as they are, no conversion of the line
 /// ends nor check of the encoding. Throws as read_file().
 std::string read_text_file(const std::string& path);

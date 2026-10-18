@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "entities": [
+    {"id": 1, "name": "apparition", "components": {"transform": {}}}
+  ]
+}

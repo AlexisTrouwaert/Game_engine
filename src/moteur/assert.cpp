@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 #include "moteur/crash.hpp"
 
@@ -29,7 +30,14 @@ bool debugger_attached() {
 #endif
 }
 
+// Built with the library's static objects, before main(): on the main thread.
+const std::thread::id g_main_thread = std::this_thread::get_id();
+
 }  // namespace
+
+bool on_main_thread() {
+    return std::this_thread::get_id() == g_main_thread;
+}
 
 void assertion_failed(const char* expression, const char* message, const char* file, int line) {
     char text[1024];

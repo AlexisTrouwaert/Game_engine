@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "moteur/animation_data.hpp"
+#include "moteur/collision_scene.hpp"
 #include "moteur/image.hpp"
 #include "moteur/material.hpp"
 #include "moteur/mesh.hpp"
@@ -91,10 +92,17 @@ struct ModelData {
     std::vector<ModelImage> images;
     SkeletonData skeleton;          ///< empty without skins nor animations
     std::vector<SkinData> skins;    ///< in file order: ModelPart::skin indexes them
-    std::vector<ClipData> clips;    ///< the glTF animations, on `skeleton`
+    std::vector<ClipData> clips;    ///< the glTF animations, on `skeleton` (empty once imported: see prepared_clips)
+    /// An imported model's clips, ready to play (ClipLibrary::save(): ozz's runtime animations),
+    /// in place of `clips` (milestone 9, part 4). Empty for a model read from glTF.
+    std::vector<std::uint8_t> prepared_clips;
     /// The files next to the model it was read from (buffers, and the images it decoded), relative
     /// to its directory: what to watch for a reload.
     std::vector<std::string> files;
+    /// Its collision geometry for the logic (milestone 9, part 5), model space: made by the import
+    /// from its `COL_` / `UCX_` nodes (never drawn) or from its visible triangles, as the
+    /// `collision` import setting says. Empty for a model read from glTF, or without any.
+    CollisionMeshData collision;
 
     /// The box around every part, in model space, in the rest pose. O(vertices).
     Aabb bounds() const;
@@ -113,6 +121,9 @@ struct GltfOptions {
     /// false: only the skeleton and the clips are read (no parts, materials nor images), for a
     /// file loaded for its animations. A file without meshes is then fine.
     bool meshes = true;
+    /// false: with `meshes`, a file without any triangle mesh is fine too (no part): what an import
+    /// reads, the file serving as a model, a skeleton or clips.
+    bool require_meshes = true;
 };
 
 /// How Model::create() stores an image of a material (sRGB for a color, linear for data, normal
@@ -165,7 +176,11 @@ struct Model {
     std::vector<Material> materials;  ///< their textures point into `textures`
     /// One per ModelData::images: created by the model, or given by the TextureSource (shared).
     std::vector<std::shared_ptr<Texture>> textures;
+    /// One per texture: true for a texture this model created (an image inside it), false for one
+    /// given by the TextureSource (shared with a cache). replace_in_place() refills only its own.
+    std::vector<bool> texture_owned;
     Aabb bounds;                    ///< ModelData::bounds(): model space, rest pose
+    CollisionMeshData collision;    ///< ModelData::collision: model space (CPU only, for the level's CollisionScene)
     std::size_t triangle_count = 0; ///< ModelData::triangle_count()
     std::size_t gpu_bytes = 0;  ///< meshes, and the textures the model created itself
 
@@ -179,6 +194,11 @@ struct Model {
     /// been decoded (or kept as KTX2): throws std::runtime_error naming the image otherwise.
     static Model create(Renderer& renderer, const ModelData& data, const std::string& name,
                         const TextureSource& texture_source = {});
+    /// The same, with textures already made for some of the images inside the model (`embedded`,
+    /// indexed like ModelData::images; null entries are made here): their KTX2 transcoded on a worker
+    /// thread (Assets::prefetch_model()), only uploaded on the main thread. Those count as the model's own.
+    static Model create(Renderer& renderer, const ModelData& data, const std::string& name, const TextureSource& texture_source,
+                        const std::vector<std::shared_ptr<Texture>>& embedded);
     /// load_gltf() of `path` with the default GltfOptions, then create() with no TextureSource
     /// (every texture its own). Throws as both do.
     static Model load(Renderer& renderer, const std::string& path);

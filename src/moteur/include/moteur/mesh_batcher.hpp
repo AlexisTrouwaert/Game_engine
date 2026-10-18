@@ -21,10 +21,14 @@ struct Mesh;
 struct MeshDraw {
     const Mesh* mesh = nullptr;  ///< not owned: must stay alive until the frame is drawn
     glm::mat4 world{1.0f};       ///< object -> world
-    Material material;           ///< a copy (its textures are not owned)
+    DrawMaterial material;       ///< a copy (its textures are not owned)
     Aabb bounds;  ///< where the mesh is in the world (for a skinned one: in its pose)
     std::int32_t palette = -1;       ///< first matrix in the frame's palettes; -1: not skinned
     std::uint32_t palette_size = 0;  ///< matrices
+    std::uint8_t lod = 0;            ///< its level of detail (index in Mesh::lods), chosen by the renderer
+    /// What the id pass writes for its pixels (milestone 9, part 7): the selectable entity it shows,
+    /// as World::pick_id_of() makes it; 0: nothing to select (it still hides what is behind it).
+    std::uint32_t pick_id = 0;
 };
 
 /// What one instance sends to the GPU, laid out exactly as the per-instance vertex attributes of
@@ -32,7 +36,7 @@ struct MeshDraw {
 /// and only the three first: the last row of an object's matrix is always (0, 0, 0, 1).
 struct MeshInstance {
     glm::vec4 world[3];          ///< rows of the object -> world matrix
-    glm::vec4 normal_matrix[3];  ///< rows of its inverse transpose (xyz); [0].w: the alpha cutoff
+    glm::vec4 normal_matrix[3];  ///< rows of its inverse transpose (xyz); [0].w: the alpha cutoff; [1].w: MeshDraw::pick_id (a whole float)
     glm::vec4 base_color;        ///< linear
     glm::vec4 factors;           ///< metallic, roughness, normal scale, occlusion strength
     /// rgb: linear emitted light; w: first palette matrix of a skinned draw (see skinning.hlsli), else
@@ -46,11 +50,12 @@ static_assert(sizeof(MeshInstance) == 144, "MeshInstance is uploaded as is: keep
 /// a batch. `material` is the one of the first draw of the batch (for its textures and sides).
 struct MeshBatch {
     const Mesh* mesh = nullptr;          ///< drawn by every instance of the batch
-    const Material* material = nullptr;  ///< points into the draws given to MeshBatcher::build()
+    const DrawMaterial* material = nullptr;  ///< points into the draws given to MeshBatcher::build()
     std::uint32_t first_instance = 0;  ///< in instances()
     std::uint32_t count = 0;           ///< instances, one per visible draw
     bool skinned = false;  ///< its draws have palettes (a skinned mesh drawn without one is a still mesh)
     bool masked = false;   ///< alpha-tested material (Material::alpha_cutoff > 0)
+    std::uint8_t lod = 0;  ///< the level of detail of its draws (Mesh::lods)
 };
 
 /// Turns the draws of a frame into what one pass needs: the visible ones, grouped into batches, and
@@ -104,6 +109,7 @@ private:
         bool double_sided;
         bool skinned;
         bool masked;
+        std::uint8_t lod;
         bool operator==(const Key& other) const;
     };
     struct KeyHash {

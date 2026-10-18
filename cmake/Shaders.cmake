@@ -23,6 +23,9 @@ set(MOTEUR_ENGINE_SHADERS
     mesh.vert.hlsl
     mesh_skinned.vert.hlsl
     mesh.frag.hlsl
+    mesh_id.vert.hlsl
+    mesh_id_skinned.vert.hlsl
+    mesh_id.frag.hlsl
     tonemap.vert.hlsl
     tonemap.frag.hlsl
     fxaa.frag.hlsl

@@ -3,8 +3,10 @@
 #include <algorithm>
 
 #include "moteur/collision.hpp"
+#include "moteur/collision_scene.hpp"
 #include "moteur/debug_lines.hpp"
 #include "moteur/movement.hpp"
+#include "moteur/navigation.hpp"
 #include "moteur/nav_grid.hpp"
 #include "moteur/pathfinding.hpp"
 #include "moteur/variables.hpp"
@@ -39,11 +41,13 @@ WorldDebugFlags WorldDebugFlags::declare(Variables& variables) {
     flags.paths = &variables.add_bool("debug.paths", false, "remaining paths");
     flags.field = &variables.add_bool("debug.flowfield", false, "flow field arrows");
     flags.view = &variables.add_bool("debug.view", false, "field of view cells");
+    flags.collision = &variables.add_bool("debug.collision", false, "level collision triangles and capsules");
+    flags.navmesh = &variables.add_bool("debug.navmesh", false, "navigation mesh triangles");
     return flags;
 }
 
 bool WorldDebugFlags::any() const {
-    return on(grid) || on(clearance) || on(colliders) || on(paths) || on(field) || on(view);
+    return on(grid) || on(clearance) || on(colliders) || on(paths) || on(field) || on(view) || on(collision) || on(navmesh);
 }
 
 void draw_world_debug(DebugLineBuffer& lines, const WorldDebugFlags& flags, const WorldDebugSources& sources,
@@ -89,6 +93,30 @@ void draw_world_debug(DebugLineBuffer& lines, const WorldDebugFlags& flags, cons
             }
         }
     }
+    if (on(flags.collision) && sources.scene != nullptr) {
+        Aabb area;
+        area.add(centre - glm::vec3(radius, radius, radius));
+        area.add(centre + glm::vec3(radius, radius, radius));
+        std::vector<std::uint32_t> near;
+        sources.scene->box_triangles(area, kSurfaceAll, near);
+        for (const std::uint32_t index : near) {
+            const CollisionTriangle& t = sources.scene->triangles()[index];
+            const glm::vec4 color = t.kind == SurfaceKind::Walkable ? glm::vec4(0.3f, 1.0f, 0.4f, 1)
+                                    : t.kind == SurfaceKind::Wall   ? glm::vec4(1.0f, 0.3f, 0.3f, 1)
+                                    : t.kind == SurfaceKind::Obstacle ? glm::vec4(1.0f, 0.6f, 0.1f, 1)
+                                                                      : glm::vec4(0.7f, 0.3f, 1.0f, 1);
+            const glm::vec3 lift = t.normal * 0.01f;  // off the surface, not fighting with it
+            lines.line(t.a + lift, t.b + lift, color);
+            lines.line(t.b + lift, t.c + lift, color);
+            lines.line(t.c + lift, t.a + lift, color);
+        }
+    }
+    if (on(flags.navmesh) && sources.navmesh != nullptr) {
+        Aabb area;
+        area.add(centre - glm::vec3(radius, radius, radius));
+        area.add(centre + glm::vec3(radius, radius, radius));
+        draw_nav_mesh(lines, *sources.navmesh, area);
+    }
     if (sources.world == nullptr) {
         return;
     }
@@ -103,7 +131,7 @@ void draw_world_debug(DebugLineBuffer& lines, const WorldDebugFlags& flags, cons
             const glm::vec4 color = entity == sources.highlight ? glm::vec4(1.0f)
                                     : collider.push_weight == 0  ? glm::vec4(1, 0.9f, 0.2f, 1)
                                                                  : glm::vec4(1, 0.35f, 0.3f, 1);
-            lines.circle({p.x, 0.05f, p.z}, {0, 1, 0}, collider.radius, color, 24, true);
+            lines.circle({p.x, p.y + 0.05f, p.z}, {0, 1, 0}, collider.radius, color, 24, true);
         }
     }
     if (on(flags.paths)) {
@@ -112,12 +140,28 @@ void draw_world_debug(DebugLineBuffer& lines, const WorldDebugFlags& flags, cons
                 continue;
             }
             const glm::vec3 p = world.world_position(entity, alpha);
-            glm::vec3 from(p.x, 0.08f, p.z);
+            glm::vec3 from(p.x, p.y + 0.08f, p.z);
             for (std::size_t i = mover.next_point; i < mover.path.size(); ++i) {
-                const glm::vec3 to(mover.path[i].x, 0.08f, mover.path[i].y);
+                const glm::vec3 to = mover.path[i] + glm::vec3(0.0f, 0.08f, 0.0f);
                 lines.line(from, to, {0.2f, 1.0f, 1.0f, 1}, true);
                 lines.circle(to, {0, 1, 0}, 0.08f, {0.2f, 1.0f, 1.0f, 1}, 8, true);
                 from = to;
+            }
+        }
+    }
+    if (on(flags.collision)) {
+        for (const auto& [entity, collider] : registry.view<Collider>().each()) {
+            if (registry.all_of<Hidden>(entity)) {
+                continue;
+            }
+            const glm::vec3 p = world.world_position(entity, alpha);
+            const float r = collider.radius;
+            const float top = std::max(collider.height, 2.0f * r);
+            const glm::vec4 color = entity == sources.highlight ? glm::vec4(1.0f) : glm::vec4(0.4f, 0.8f, 1.0f, 1);
+            lines.circle(p + glm::vec3(0, r, 0), {0, 1, 0}, r, color, 16, true);
+            lines.circle(p + glm::vec3(0, top - r, 0), {0, 1, 0}, r, color, 16, true);
+            for (const glm::vec3 side : {glm::vec3(r, 0, 0), glm::vec3(-r, 0, 0), glm::vec3(0, 0, r), glm::vec3(0, 0, -r)}) {
+                lines.line(p + side + glm::vec3(0, r, 0), p + side + glm::vec3(0, top - r, 0), color, true);
             }
         }
     }

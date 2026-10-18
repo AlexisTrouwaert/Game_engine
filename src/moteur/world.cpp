@@ -1,5 +1,7 @@
+#include "moteur/assert.hpp"
 #include "moteur/world.hpp"
 
+#include "moteur/picking.hpp"
 #include "moteur/profiler.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -10,6 +12,7 @@
 
 #include "moteur/animator.hpp"
 #include "moteur/fixed_timestep.hpp"
+#include "moteur/jobs.hpp"
 
 namespace moteur {
 
@@ -210,6 +213,50 @@ const AnimationPose& World::sample_pose(entt::entity entity, const Animator& ani
     return pose;
 }
 
+void World::sample_poses(float alpha) {
+    // The poses of the animated models in view, over the cores (milestone 9, part 9): each entity
+    // has its own sampler, each job its own request; the clips and skeletons are only read. The
+    // components are made here, on this thread, before the jobs.
+    to_sample_.clear();
+    for (const AnimatedPlace& place : animated_) {
+        if (place.visible) {
+            AnimationPose& pose = registry_.get_or_emplace<AnimationPose>(place.entity);
+            if (pose.collection != collection_) {
+                to_sample_.push_back(place.entity);
+            }
+        }
+    }
+    if (to_sample_.empty()) {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    if (pose_requests_.size() < to_sample_.size()) {
+        pose_requests_.resize(to_sample_.size());
+    }
+    std::vector<AnimationPose*> poses(to_sample_.size());
+    for (std::size_t i = 0; i < to_sample_.size(); ++i) {
+        poses[i] = &registry_.get<AnimationPose>(to_sample_[i]);
+    }
+    jobs().parallel_for(to_sample_.size(), [&, this](std::size_t i) {
+        AnimationPose& pose = *poses[i];
+        if (pose.collection == collection_) {  // a parent sampled for a child on its joint
+            return;
+        }
+        const entt::entity entity = to_sample_[i];
+        const Animator& animator = registry_.get<Animator>(entity);
+        const ModelComponent* model = registry_.try_get<ModelComponent>(entity);
+        if (bind_pose_ && model != nullptr && model->model) {
+            pose.sampler.bind(*animator.skeleton, model->model->skins);
+        } else {
+            animator.pose(alpha, pose_requests_[i]);
+            pose.sampler.blend(*animator.skeleton, pose_requests_[i].inputs);
+        }
+        pose.collection = collection_;
+    });
+    animation_stats_.poses += static_cast<int>(to_sample_.size());
+    animation_stats_.sample_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
 glm::mat4 World::world_matrix(entt::entity entity, float alpha) const {
     glm::mat4 world(1.0f);
     if (registry_.valid(entity)) {
@@ -239,6 +286,7 @@ void World::destroy(entt::entity entity) {
 }
 
 void World::collect(WorldSink& sink, float alpha, const CollectOptions& options) {
+    MOTEUR_ASSERT_MAIN_THREAD("World");
     ++collection_;
     // A model or mesh reloaded in place (hot reload) fires no signal: its boxes may have changed
     // under the same handle. Reloads are rare (development): every cache goes, still entities
@@ -275,6 +323,9 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
         if (!instance.mesh) {
             continue;
         }
+        if (options.pick_ids) {
+            sink.pick(pick_id_of(entity));
+        }
         const Mesh& mesh = *instance.mesh;
         if (const WorldCache* cache = registry_.try_get<WorldCache>(entity)) {
             sink.mesh(mesh, cache->world, instance.material, cache->bounds);
@@ -292,9 +343,35 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
         }
     }
 
+    // The animated models first: where each is, whether it is in view. An animation reaches out of
+    // the rest pose: its box, twice as big around its centre (boxes per clip come with skinning).
+    animated_.clear();
+    for (const auto& [entity, instance] : registry_.storage<ModelComponent>().reach()) {
+        const Animator* animator = registry_.try_get<Animator>(entity);
+        if (!instance.model || animator == nullptr || !animator->skeleton) {
+            continue;
+        }
+        AnimatedPlace place{entity, glm::mat4(1.0f), false};
+        if (placed(entity, place.world)) {
+            const Aabb rest = transform_box(instance.model->bounds, place.world);
+            Aabb reach;
+            if (!rest.empty()) {
+                reach.add(rest.center() - rest.size());
+                reach.add(rest.center() + rest.size());
+            }
+            place.visible = rest.empty() || options.view.intersects(reach);
+        }
+        animated_.push_back(place);
+    }
+    sample_poses(alpha);
+
     // Models: each part with its own place and material.
     const Material fallback;
+    std::size_t next_animated = 0;  // animated_ is in the order of this loop
     for (const auto& [entity, instance] : registry_.storage<ModelComponent>().reach()) {
+        if (options.pick_ids) {
+            sink.pick(pick_id_of(entity));
+        }
         if (!instance.model) {
             continue;
         }
@@ -306,22 +383,12 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
         // An animated model: its pose between the last two ticks, sampled only when in view.
         if (const Animator* animator = registry_.try_get<Animator>(entity); animator != nullptr && animator->skeleton) {
             ++animation_stats_.animated;
-            glm::mat4 world;
-            if (!placed(entity, world)) {
+            const AnimatedPlace& place = animated_[next_animated++];
+            if (!place.visible) {
                 continue;
             }
-            // An animation reaches out of the rest pose: its box, twice as big around its centre
-            // (boxes per clip come with skinning).
-            const Aabb rest = transform_box(model.bounds, world);
-            Aabb reach;
-            if (!rest.empty()) {
-                reach.add(rest.center() - rest.size());
-                reach.add(rest.center() + rest.size());
-            }
-            if (!rest.empty() && !options.view.intersects(reach)) {
-                continue;
-            }
-            const AnimationPose& pose = sample_pose(entity, *animator, alpha);
+            const glm::mat4& world = place.world;
+            const AnimationPose& pose = sample_pose(entity, *animator, alpha);  // sampled: sample_poses()
             const std::vector<glm::mat4>& joints = pose.sampler.model();
             // Each skin's palette is given once, whatever the number of parts that use it.
             skin_palettes_.assign(model.skins.size(), MeshRenderer::Palette{-2, 0});  // -2: not yet
@@ -400,6 +467,9 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
         }
     }
 
+    if (options.pick_ids) {
+        sink.pick(0);
+    }
     // Lights: the nearest to the focus.
     lights_.clear();
     for (const auto& [entity, light] : registry_.storage<LightSource>().reach()) {
@@ -429,6 +499,25 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
             sink.billboard(*billboard.texture, glm::vec3(world[3]), billboard.size, billboard.options);
         }
     }
+
+    // The glows of lights, pulled toward the camera.
+    if (options.glow != nullptr) {
+        for (const auto& [entity, halo] : registry_.storage<LightHalo>().reach()) {
+            glm::mat4 world;
+            if (halo.size <= 0.0f || !placed(entity, world)) {
+                continue;
+            }
+            const glm::vec3 center(world[3]);
+            const glm::vec3 to_eye = options.eye - center;
+            const float distance = glm::length(to_eye);
+            const glm::vec3 pulled = distance > 1e-4f ? center + to_eye * (halo.pull * halo.size / distance) : center;
+            BillboardOptions glow;
+            glow.color = glm::vec4(halo.color, 1.0f);
+            glow.additive = true;
+            glow.soft = halo.soft;
+            sink.billboard(*options.glow, pulled, glm::vec2(halo.size), glow);
+        }
+    }
 }
 
 namespace {
@@ -449,6 +538,7 @@ public:
     void billboard(const Texture& texture, glm::vec3 center, glm::vec2 size, const BillboardOptions& options) override {
         billboards_.draw(texture, center, size, options);
     }
+    void pick(std::uint32_t id) override { meshes_.set_pick_id(id); }
 
 private:
     MeshRenderer& meshes_;
@@ -460,7 +550,38 @@ private:
 void World::submit(Renderer& renderer, float alpha, const CollectOptions& options) {
     MOTEUR_PROFILE("world: gather");
     RendererSink sink(renderer);
-    collect(sink, alpha, options);
+    CollectOptions with_glow = options;
+    if (with_glow.glow == nullptr && renderer.billboards().has_camera()) {
+        with_glow.glow = &renderer.billboards().glow_texture();
+        with_glow.eye = renderer.billboards().eye();
+    }
+    with_glow.pick_ids = with_glow.pick_ids || renderer.meshes().ids();
+    collect(sink, alpha, with_glow);
+    renderer.meshes().set_pick_id(0);
+}
+
+std::uint32_t World::pick_id_of(entt::entity entity) const {
+    for (int depth = 0; depth < 32 && registry_.valid(entity); ++depth) {
+        if (registry_.all_of<Selectable>(entity)) {
+            return static_cast<std::uint32_t>(entt::to_entity(entity)) + 1u;
+        }
+        const Parent* parent = registry_.try_get<Parent>(entity);
+        if (parent == nullptr) {
+            break;
+        }
+        entity = parent->entity;
+    }
+    return 0;
+}
+
+entt::entity World::entity_of_pick(std::uint32_t id) const {
+    if (id == 0) {
+        return entt::null;
+    }
+    using traits = entt::entt_traits<entt::entity>;
+    const auto index = static_cast<traits::entity_type>(id - 1u);
+    const entt::entity candidate = traits::construct(index, registry_.current(traits::construct(index, 0)));
+    return registry_.valid(candidate) && registry_.all_of<Selectable>(candidate) ? candidate : entt::null;
 }
 
 std::size_t World::entity_count() const {

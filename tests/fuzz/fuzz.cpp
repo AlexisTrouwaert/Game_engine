@@ -11,21 +11,28 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "moteur/animation_set.hpp"
 #include "moteur/archive.hpp"
+#include "moteur/asset_registry.hpp"
 #include "moteur/data_table.hpp"
+#include "moteur/document.hpp"
 #include "moteur/file_io.hpp"
 #include "moteur/image.hpp"
 #include "moteur/input.hpp"
 #include "moteur/ktx_texture.hpp"
 #include "moteur/map_data.hpp"
 #include "moteur/model.hpp"
+#include "moteur/model_import.hpp"
 #include "moteur/particles.hpp"
+#include "moteur/prefab.hpp"
 #include "moteur/save_file.hpp"
+#include "moteur/skeleton.hpp"
 
 namespace {
 
@@ -79,8 +86,33 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
                 }
             }
         }
+#elif MOTEUR_FUZZ_TARGET == 11
+        // A prepared model (milestone 9, part 4), then its clips as the engine builds them.
+        const moteur::ModelData model = moteur::decode_prepared_model(data, size, "fuzz.mmdl");
+        if (!model.prepared_clips.empty()) {
+            (void)moteur::ClipLibrary::load(model.skeleton, model.prepared_clips, "fuzz.mmdl");
+        }
+#elif MOTEUR_FUZZ_TARGET == 12
+        // The frozen asset registry and a .meta file.
+        (void)moteur::AssetRegistry::decode(std::vector<std::uint8_t>(data, data + size), "fuzz.mreg");
+        (void)moteur::parse_asset_meta(text_of(data, size), "fuzz.meta");
+#elif MOTEUR_FUZZ_TARGET == 13
+        // A document shipped in CBOR, or written in JSON.
+        (void)moteur::parse_document(text_of(data, size));
+#elif MOTEUR_FUZZ_TARGET == 14
+        // A prefab: its bases and nested prefabs refused (one file at a time), its asset fields too.
+        moteur::Prefab::Context context;
+        context.prefab = [](const std::string& path) -> std::shared_ptr<const moteur::Prefab> {
+            throw std::runtime_error("no prefab '" + path + "' while fuzzing");
+        };
+        context.asset = [](const moteur::TypeInfo&, const nlohmann::json&, void*, std::string& problem) {
+            problem = "no asset while fuzzing";
+            return false;
+        };
+        moteur::DataIssues issues;
+        (void)moteur::Prefab::parse(text_of(data, size), "fuzz.prefab.json", context, issues);
 #else
-#error "MOTEUR_FUZZ_TARGET: 1 to 10"
+#error "MOTEUR_FUZZ_TARGET: 1 to 14"
 #endif
     } catch (const std::exception&) {
         // Refused: what a reader must do with a bad file.

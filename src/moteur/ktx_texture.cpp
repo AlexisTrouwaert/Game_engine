@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <thread>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -278,6 +280,114 @@ std::vector<std::uint8_t> transcode_ktx2_for_shipping(const void* data, std::siz
     ktx_uint8_t* written = nullptr;
     ktx_size_t written_size = 0;
     check(ktxTexture_WriteToMemory(ktxTexture(target.get()), &written, &written_size), name, "cannot write it");
+    std::vector<std::uint8_t> file(written, written + written_size);
+    std::free(written);
+    return file;
+}
+
+namespace {
+
+float srgb_to_linear_value(std::uint8_t value) {
+    const float c = static_cast<float>(value) / 255.0f;
+    return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+std::uint8_t linear_to_srgb_value(float linear) {
+    const float c = std::clamp(linear, 0.0f, 1.0f);
+    const float s = c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+    return static_cast<std::uint8_t>(std::lround(s * 255.0f));
+}
+
+// The next level: each pixel the average of up to 2 x 2 pixels of `from` (a level of an odd size
+// takes its last row or column once).
+Image half(const Image& from, bool srgb) {
+    Image to;
+    to.width = std::max(1, from.width / 2);
+    to.height = std::max(1, from.height / 2);
+    to.pixels.resize(static_cast<std::size_t>(to.width) * static_cast<std::size_t>(to.height) * 4);
+    for (int y = 0; y < to.height; ++y) {
+        for (int x = 0; x < to.width; ++x) {
+            float sum[4] = {};
+            int count = 0;
+            for (int dy = 0; dy < 2; ++dy) {
+                for (int dx = 0; dx < 2; ++dx) {
+                    const int sx = std::min(x * 2 + dx, from.width - 1);
+                    const int sy = std::min(y * 2 + dy, from.height - 1);
+                    const std::uint8_t* p = &from.pixels[(static_cast<std::size_t>(sy) * static_cast<std::size_t>(from.width) +
+                                                          static_cast<std::size_t>(sx)) * 4];
+                    for (int c = 0; c < 4; ++c) {
+                        sum[c] += srgb && c < 3 ? srgb_to_linear_value(p[c]) : static_cast<float>(p[c]) / 255.0f;
+                    }
+                    ++count;
+                }
+            }
+            std::uint8_t* out = &to.pixels[(static_cast<std::size_t>(y) * static_cast<std::size_t>(to.width) +
+                                            static_cast<std::size_t>(x)) * 4];
+            for (int c = 0; c < 4; ++c) {
+                const float average = sum[c] / static_cast<float>(count);
+                out[c] = srgb && c < 3 ? linear_to_srgb_value(average)
+                                       : static_cast<std::uint8_t>(std::lround(std::clamp(average, 0.0f, 1.0f) * 255.0f));
+            }
+        }
+    }
+    return to;
+}
+
+}  // namespace
+
+std::vector<std::uint8_t> encode_ktx2(const Image& image, bool srgb, bool normal_map, const std::string& name) {
+    if (image.width <= 0 || image.height <= 0 ||
+        image.pixels.size() != static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.height) * 4) {
+        throw std::runtime_error("KTX2 texture '" + name + "': not an RGBA8 image");
+    }
+    std::vector<Image> levels;
+    levels.push_back(image);
+    while (levels.back().width > 1 || levels.back().height > 1) {
+        levels.push_back(half(levels.back(), srgb && !normal_map));
+    }
+    if (normal_map) {
+        // Two channels (x, y) in the file: the encoder's normal map mode stores them as Basis
+        // Universal's two-channel layout (x in RGB, y in alpha), read back as BC5.
+        for (Image& level : levels) {
+            std::vector<std::uint8_t> xy(level.pixels.size() / 2);
+            for (std::size_t i = 0, o = 0; i < level.pixels.size(); i += 4, o += 2) {
+                xy[o] = level.pixels[i];
+                xy[o + 1] = level.pixels[i + 1];
+            }
+            level.pixels = std::move(xy);
+        }
+    }
+    ktxTextureCreateInfo info{};
+    info.vkFormat = normal_map ? 16u /* VK_FORMAT_R8G8_UNORM */
+                               : (srgb ? 43u /* VK_FORMAT_R8G8B8A8_SRGB */ : 37u /* VK_FORMAT_R8G8B8A8_UNORM */);
+    info.baseWidth = static_cast<ktx_uint32_t>(image.width);
+    info.baseHeight = static_cast<ktx_uint32_t>(image.height);
+    info.baseDepth = 1;
+    info.numDimensions = 2;
+    info.numLevels = static_cast<ktx_uint32_t>(levels.size());
+    info.numLayers = 1;
+    info.numFaces = 1;
+    info.isArray = KTX_FALSE;
+    info.generateMipmaps = KTX_FALSE;
+    ktxTexture2* made = nullptr;
+    check(ktxTexture2_Create(&info, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &made), name, "cannot create the texture");
+    const std::unique_ptr<ktxTexture2, KtxDeleter> texture(made);
+    for (std::size_t level = 0; level < levels.size(); ++level) {
+        check(ktxTexture_SetImageFromMemory(ktxTexture(texture.get()), static_cast<ktx_uint32_t>(level), 0, 0,
+                                            levels[level].pixels.data(), levels[level].pixels.size()),
+              name, "cannot store a level");
+    }
+    ktxBasisParams params{};
+    params.structSize = sizeof(params);
+    params.uastc = KTX_TRUE;
+    params.uastcFlags = KTX_PACK_UASTC_LEVEL_DEFAULT;
+    params.threadCount = std::max(1u, std::thread::hardware_concurrency());
+    params.normalMap = normal_map ? KTX_TRUE : KTX_FALSE;
+    check(ktxTexture2_CompressBasisEx(texture.get(), &params), name, "cannot encode it (UASTC)");
+    check(ktxTexture2_DeflateZstd(texture.get(), 18), name, "cannot supercompress it");
+    ktx_uint8_t* written = nullptr;
+    ktx_size_t written_size = 0;
+    check(ktxTexture_WriteToMemory(ktxTexture(texture.get()), &written, &written_size), name, "cannot write it");
     std::vector<std::uint8_t> file(written, written + written_size);
     std::free(written);
     return file;

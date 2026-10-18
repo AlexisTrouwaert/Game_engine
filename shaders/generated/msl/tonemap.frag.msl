@@ -6,7 +6,11 @@ using namespace metal;
 struct type_ToneMapping
 {
     float4 settings;
+    float4 outline_color;
+    float4 outline;
 };
+
+constant bool _62 = {};
 
 struct main0_out
 {
@@ -18,47 +22,131 @@ struct main0_in
     float2 in_var_TEXCOORD0 [[user(locn0)]];
 };
 
-fragment main0_out main0(main0_in in [[stage_in]], constant type_ToneMapping& ToneMapping [[buffer(0)]], texture2d<float> scene [[texture(0)]], sampler scene_sampler [[sampler(0)]])
+fragment main0_out main0(main0_in in [[stage_in]], constant type_ToneMapping& ToneMapping [[buffer(0)]], texture2d<float> scene [[texture(0)]], texture2d<uint> ids [[texture(1)]], sampler scene_sampler [[sampler(0)]])
 {
     main0_out out = {};
-    float4 _55 = scene.sample(scene_sampler, in.in_var_TEXCOORD0);
-    float3 _59 = _55.xyz * ToneMapping.settings.x;
-    float3 _107;
+    float4 _70 = scene.sample(scene_sampler, in.in_var_TEXCOORD0);
+    float3 _74 = _70.xyz * ToneMapping.settings.x;
+    float3 _122;
     if (ToneMapping.settings.y > 0.5)
     {
-        _107 = fast::clamp(_59, float3(0.0), float3(1.0));
+        _122 = fast::clamp(_74, float3(0.0), float3(1.0));
     }
     else
     {
-        float3 _67 = precise::max(_59, float3(0.0));
-        float3 _106;
+        float3 _82 = precise::max(_74, float3(0.0));
+        float3 _121;
         do
         {
-            float _74 = precise::min(_67.x, precise::min(_67.y, _67.z));
-            float _82;
-            if (_74 < 0.07999999821186065673828125)
+            float _89 = precise::min(_82.x, precise::min(_82.y, _82.z));
+            float _97;
+            if (_89 < 0.07999999821186065673828125)
             {
-                _82 = _74 - ((6.25 * _74) * _74);
+                _97 = _89 - ((6.25 * _89) * _89);
             }
             else
             {
-                _82 = 0.039999999105930328369140625;
+                _97 = 0.039999999105930328369140625;
             }
-            float3 _84 = _67 - float3(_82);
-            float _89 = precise::max(_84.x, precise::max(_84.y, _84.z));
-            if (_89 < 0.7599999904632568359375)
+            float3 _99 = _82 - float3(_97);
+            float _104 = precise::max(_99.x, precise::max(_99.y, _99.z));
+            if (_104 < 0.7599999904632568359375)
             {
-                _106 = _84;
+                _121 = _99;
                 break;
             }
-            float _95 = 1.0 - (0.0576000027358531951904296875 / (_89 + (-0.519999980926513671875)));
-            _106 = mix(_84 * (_95 / _89), float3(_95), float3(1.0 - (1.0 / ((0.1500000059604644775390625 * (_89 - _95)) + 1.0))));
+            float _110 = 1.0 - (0.0576000027358531951904296875 / (_104 + (-0.519999980926513671875)));
+            _121 = mix(_99 * (_110 / _104), float3(_110), float3(1.0 - (1.0 / ((0.1500000059604644775390625 * (_104 - _110)) + 1.0))));
             break;
         } while(false);
-        _107 = _106;
+        _122 = _121;
     }
-    float3 _108 = fast::clamp(_107, float3(0.0), float3(1.0));
-    out.out_var_SV_Target0 = float4(mix((powr(_108, float3(0.4166666567325592041015625)) * 1.05499994754791259765625) - float3(0.054999999701976776123046875), _108 * 12.9200000762939453125, step(_108, float3(0.003130800090730190277099609375))), 1.0);
+    bool _188;
+    do
+    {
+        if (ToneMapping.outline.x < 0.5)
+        {
+            _188 = false;
+            break;
+        }
+        uint _131 = uint(ToneMapping.outline.x + 0.5);
+        int2 _136 = int2(in.in_var_TEXCOORD0 * ToneMapping.outline.zw);
+        if (ids.read(uint2(int3(_136, 0).xy), 0).x == _131)
+        {
+            _188 = false;
+            break;
+        }
+        int _149 = int(ToneMapping.outline.y);
+        int _150 = -_149;
+        bool _153;
+        bool _158;
+        bool _185;
+        bool _186;
+        bool _152 = false;
+        int _155 = _150;
+        bool _157;
+        for (;;)
+        {
+            if (_155 <= _149)
+            {
+                int _163 = _150;
+                for (;;)
+                {
+                    if (_163 <= _149)
+                    {
+                        if (ids.read(uint2(int3(clamp(_136 + int2(_163, _155), int2(0), int2(ToneMapping.outline.zw) - int2(1)), 0).xy), 0).x == _131)
+                        {
+                            _158 = true;
+                            _153 = true;
+                            break;
+                        }
+                        _163++;
+                        continue;
+                    }
+                    else
+                    {
+                        _158 = _157;
+                        _153 = _152;
+                        break;
+                    }
+                }
+                if (_153)
+                {
+                    _185 = _158;
+                    _186 = _153;
+                    break;
+                }
+                _152 = _153;
+                _155++;
+                _157 = _158;
+                continue;
+            }
+            else
+            {
+                _185 = _157;
+                _186 = _152;
+                break;
+            }
+        }
+        if (_186)
+        {
+            _188 = _185;
+            break;
+        }
+        _188 = false;
+        break;
+    } while(false);
+    float3 _198;
+    if (_188)
+    {
+        _198 = mix(_122, ToneMapping.outline_color.xyz, float3(ToneMapping.outline_color.w));
+    }
+    else
+    {
+        _198 = _122;
+    }
+    float3 _199 = fast::clamp(_198, float3(0.0), float3(1.0));
+    out.out_var_SV_Target0 = float4(mix((powr(_199, float3(0.4166666567325592041015625)) * 1.05499994754791259765625) - float3(0.054999999701976776123046875), _199 * 12.9200000762939453125, step(_199, float3(0.003130800090730190277099609375))), 1.0);
     return out;
 }
 

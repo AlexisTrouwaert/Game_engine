@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "moteur/assets.hpp"
 #include "moteur/audio.hpp"
@@ -41,6 +42,13 @@ struct ApplicationConfig {
     int pixel_width = 0;
     int pixel_height = 0;
     ///@}
+    /// The screen the window opens on, as an index into the connected screens (0: the first);
+    /// negative: the system's choice. A missing screen falls back to the system's choice (logged).
+    /// The environment variable MOTEUR_WINDOW_DISPLAY, when set to an index, replaces it: the
+    /// checks and tools set it to open their windows on a screen of their own (the verification
+    /// scripts use the second screen when there is one). The player's display settings
+    /// (display_settings), applied afterwards, still choose their screen.
+    int window_display = -1;
     int tick_rate = 60;            ///< logic ticks per second (see moteur::tick_rate()): 1 to 1000
     double max_frame_time = 0.25;  ///< seconds; caps catch-up after a stall
     /// Waits for the screen's refresh to show each frame (RendererConfig::vsync). With
@@ -70,8 +78,17 @@ struct ApplicationConfig {
     std::string debug_ui_font;  ///< TrueType file; empty for ImGui's built-in font (ASCII only)
     float debug_ui_font_size = 16.0f;  ///< of debug_ui_font, in pixels
     /// Hot reload of the assets (development): the assets/ folder of the source tree, whose changes
-    /// are copied next to the executable and reloaded (see Assets). Empty: no hot reload.
+    /// are copied next to the executable and reloaded (see Assets). Empty: no hot reload. Also where
+    /// the `.meta` files of new assets are written (see AssetRegistry::scan()).
     std::string assets_source_directory;
+    /// Other folders of assets, read in place without being copied (development; ignored in the
+    /// shipping configuration, whose archives hold what was prepared from them): another game's
+    /// assets that this program uses, as the slice uses the ARPG's (milestone 9, part 4). Mounted
+    /// with mount_asset_folder(), identified with the others, hot reloaded in place.
+    std::vector<std::string> asset_folders;
+    /// The name of the frozen asset registry the preparation writes (see AssetRegistry), read from
+    /// the archives in the shipped game.
+    static constexpr const char* kRegistryFile = "asset_registry.mreg";
     /// The player's files (key bindings, settings, log, crash reports) go into
     /// SDL_GetPrefPath(organization, application) (see Application::preferences_directory()): on
     /// Windows `%APPDATA%/organization/application/`. Set both before shipping: they name the
@@ -116,6 +133,10 @@ struct ApplicationConfig {
     /// A missing folder, or empty: none.
     std::string archives_directory = "archives";
 };
+
+/// The import cache of a program in development: `.imported/` next to its assets source folder
+/// (`game/assets` -> `game/.imported/`), shared by its builds. See Assets::set_import_cache().
+std::string import_cache_folder(const std::string& assets_source_directory);
 
 /// Implemented by the program driving the engine: Application::run() calls it, on the main thread,
 /// every frame (on_event(), then update() for each tick due, then render()). A StateStack is a Game
@@ -182,12 +203,19 @@ public:
     Application(const Application&) = delete;
     Application& operator=(const Application&) = delete;
 
-    /// Runs the main loop until quit() is called, the window is closed, or the GPU device is lost
-    /// (then reported, see ended_on_error()). Each frame: hot reload, events, the ticks due (see
+    /// Runs the main loop until quit() is called, the window is closed, or a fatal error ends it
+    /// (see ended_on_error()). Each frame: hot reload, events, the ticks due (see
     /// Game::update()), then Game::render() and the frame's submission, then the audio. The
     /// startup commands run first; the input recording is written, and the reports, when the loop
-    /// ends. Exceptions thrown by the game go through (std::runtime_error too for a replay that
-    /// cannot be read).
+    /// ends.
+    ///
+    /// Error policy (milestone 9, part 2; GUIDE.md, chapter 0): exceptions belong to loading. Before
+    /// the loop, run() may throw (std::runtime_error for a replay that cannot be read); inside it,
+    /// no exception crosses a frame. One escaping the game (on_event(), update(), waiting(),
+    /// render()) or a service between two frames is a bug: it is a controlled crash, reported like
+    /// one (report_fatal_error(), with ApplicationConfig::crash_message), and the loop ends with
+    /// ended_on_error(). A GPU failure inside a frame skips what it concerns for that frame only
+    /// (Renderer::end_frame()); a lost device ends the loop the same way.
     ///
     /// The CPU time of each frame is measured, excluding the time spent waiting for the display
     /// (vsync). The window title shows the FPS and the latest averages once per second. With
@@ -196,8 +224,8 @@ public:
     void run(Game& game);
     /// Ends run() after the current frame. Also the console's `quit` command.
     void quit() { running_ = false; }
-    /// True when run() ended on a fatal error (the GPU device lost, reported): the game's main
-    /// returns a failure code.
+    /// True when run() ended on a fatal error (the GPU device lost, or an exception escaping the
+    /// game inside a frame; reported): the game's main returns a failure code.
     bool ended_on_error() const { return ended_on_error_; }
     /// The time spent until the end of the current updates does not count: after a long load in
     /// update(), the next frames do not run the ticks they would owe to catch up.
@@ -271,6 +299,12 @@ private:
     void load_audio_settings();
     void add_console_commands();
     std::string variables_path() const;
+    void build_asset_registry();
+    /// Runs `body`; an exception escaping it is a fatal error of the frame (see run()): reported,
+    /// the loop ends. Returns false then.
+    template <typename Body>
+    bool guarded(const char* phase, Body&& body);
+    void fail(const std::string& what);
 
     ApplicationConfig config_;
     SDL_Window* window_ = nullptr;

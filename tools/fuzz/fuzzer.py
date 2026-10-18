@@ -33,6 +33,10 @@ SEEDS = {
     "bindings": ["assets/input/*.json"],
     "image": ["assets/particles/*.png"],
     "archive": ["build/fuzz_seeds/*.pak"],
+    "model": [".imported/models/*.mmdl", ".imported/models/characters/kaykit_skeletons/Skeleton_Minion.glb.mmdl"],
+    "registry": ["build/fuzz_seeds/*.mreg", "assets/models/*.meta"],
+    "document": ["build/fuzz_seeds/*.json", "assets/effects/*.json"],
+    "prefab": ["../ARPG/assets/models/props/*.prefab.json"],
 }
 
 
@@ -52,6 +56,12 @@ def seed_files():
                        capture_output=True)
         for pak in glob.glob(os.path.join(out, "archives", "*.pak")):
             shutil.copy(pak, folder)
+        # The frozen registry and the documents in their shipped form (CBOR).
+        for name in ["asset_registry.mreg"] + [os.path.relpath(p, os.path.join(out, "assets"))
+                                               for p in glob.glob(os.path.join(out, "assets", "**", "*.json"), recursive=True)]:
+            source = os.path.join(out, "assets", name)
+            if os.path.exists(source):
+                shutil.copy(source, os.path.join(folder, os.path.basename(name)))
 
 
 def main():

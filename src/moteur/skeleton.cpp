@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <utility>
 
@@ -10,6 +12,8 @@
 #include "ozz/animation/offline/raw_skeleton.h"
 #include "ozz/animation/offline/skeleton_builder.h"
 #include "ozz/animation/runtime/animation.h"
+#include "ozz/base/io/archive.h"
+#include "ozz/base/io/stream.h"
 #include "ozz/animation/runtime/blending_job.h"
 #include "ozz/animation/runtime/local_to_model_job.h"
 #include "ozz/animation/runtime/sampling_job.h"
@@ -224,6 +228,118 @@ ClipLibrary ClipLibrary::create(const SkeletonData& skeleton, const std::vector<
         }
         if (!library.clips_.emplace(data.name, std::move(clip)).second) {
             throw fail("two clips have this name");
+        }
+    }
+    return library;
+}
+
+namespace {
+
+// A read-only ozz stream over bytes in memory (ozz's MemoryStream would copy them).
+class SpanStream final : public ozz::io::Stream {
+public:
+    SpanStream(const std::uint8_t* data, std::size_t size) : data_(data), size_(size) {}
+    bool opened() const override { return true; }
+    size_t Read(void* buffer, size_t size) override {
+        const std::size_t n = std::min(size, size_ - at_);
+        std::memcpy(buffer, data_ + at_, n);
+        at_ += n;
+        return n;
+    }
+    size_t Write(const void*, size_t) override { return 0; }
+    int Seek(int offset, Origin origin) override {
+        const long long base = origin == kSet ? 0 : origin == kCurrent ? static_cast<long long>(at_) : static_cast<long long>(size_);
+        const long long to = base + offset;
+        if (to < 0 || to > static_cast<long long>(size_)) {
+            return -1;
+        }
+        at_ = static_cast<std::size_t>(to);
+        return 0;
+    }
+    int Tell() const override { return static_cast<int>(at_); }
+    size_t Size() const override { return size_; }
+
+private:
+    const std::uint8_t* data_;
+    std::size_t size_;
+    std::size_t at_ = 0;
+};
+
+constexpr std::uint32_t kClipsMagic = 0x53504C43;  // "CLPS"
+
+std::uint64_t checksum(const std::uint8_t* data, std::size_t size) {
+    std::uint64_t hash = 14695981039346656037ull;
+    for (std::size_t i = 0; i < size; ++i) {
+        hash = (hash ^ data[i]) * 1099511628211ull;
+    }
+    return hash;
+}
+
+}  // namespace
+
+std::vector<std::uint8_t> ClipLibrary::save() const {
+    ozz::io::MemoryStream stream;
+    {
+        ozz::io::OArchive archive(&stream);
+        archive << static_cast<std::uint32_t>(clips_.size());
+        for (const auto& [name, clip] : clips_) {
+            archive << *clip.impl_->animation;
+        }
+    }
+    const std::size_t size = stream.Size();
+    std::vector<std::uint8_t> body(size);
+    stream.Seek(0, ozz::io::Stream::kSet);
+    stream.Read(body.data(), size);
+    std::vector<std::uint8_t> bytes(16);
+    const std::uint64_t sum = checksum(body.data(), body.size());
+    std::memcpy(bytes.data(), &kClipsMagic, 4);
+    const auto length = static_cast<std::uint32_t>(body.size());
+    std::memcpy(bytes.data() + 4, &length, 4);
+    std::memcpy(bytes.data() + 8, &sum, 8);
+    bytes.insert(bytes.end(), body.begin(), body.end());
+    return bytes;
+}
+
+ClipLibrary ClipLibrary::load(const SkeletonData& skeleton, const std::vector<std::uint8_t>& bytes, const std::string& source) {
+    const auto fail = [&source](const std::string& why) { return std::runtime_error("Clips '" + source + "': " + why); };
+    std::uint32_t magic = 0;
+    std::uint32_t length = 0;
+    std::uint64_t sum = 0;
+    if (bytes.size() < 16) {
+        throw fail("prepared clips truncated");
+    }
+    std::memcpy(&magic, bytes.data(), 4);
+    std::memcpy(&length, bytes.data() + 4, 4);
+    std::memcpy(&sum, bytes.data() + 8, 8);
+    if (magic != kClipsMagic || length != bytes.size() - 16 || checksum(bytes.data() + 16, length) != sum) {
+        throw fail("prepared clips damaged");
+    }
+    SpanStream stream(bytes.data() + 16, length);
+    ozz::io::IArchive archive(&stream);
+    ClipLibrary library;
+    library.source_ = source;
+    library.skeleton_ = skeleton;
+    std::uint32_t count = 0;
+    archive >> count;
+    if (count > 100000) {
+        throw fail("prepared clips damaged");
+    }
+    for (std::uint32_t i = 0; i < count; ++i) {
+        if (!archive.TestTag<ozz::animation::Animation>()) {
+            throw fail("prepared clips damaged (not an ozz animation)");
+        }
+        auto animation = ozz::make_unique<ozz::animation::Animation>();
+        archive >> *animation;
+        if (animation->num_tracks() != static_cast<int>(skeleton.joints.size())) {
+            throw fail("clip '" + std::string(animation->name()) + "' does not fit the skeleton");
+        }
+        SkeletalClip clip;
+        clip.impl_ = std::make_unique<SkeletalClip::Impl>();
+        clip.impl_->name = animation->name();
+        clip.impl_->animation = std::move(animation);
+        const std::string name = clip.impl_->name;
+        if (!library.clips_.emplace(name, std::move(clip)).second) {
+            throw fail("two clips are named '" + name + "'");
         }
     }
     return library;

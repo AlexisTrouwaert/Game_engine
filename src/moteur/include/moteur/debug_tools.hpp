@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "moteur/profiler.hpp"
+#include "moteur/reflection.hpp"
 
 namespace moteur {
 
@@ -40,6 +41,20 @@ class World;
 /// listed, by its C++ name, without its content.
 class ComponentInspectors {
 public:
+    /// A described component (reflection.hpp), shown as `name` and drawn from its description
+    /// (inspect_reflected()). The same as what an unregistered component of component_types() gets,
+    /// with a name of one's choice.
+    template <typename T>
+    void add_reflected(std::string name) {
+        const TypeInfo* type = &type_info<T>();
+        if constexpr (std::is_empty_v<T>) {
+            static_cast<void>(type);
+            add_tag<T>(std::move(name));
+        } else {
+            add<T>(std::move(name), [type](T& value) { return inspect_reflected(&value, *type); });
+        }
+    }
+
     /// The function that draws the widgets of a component of type `T` and returns true when it
     /// changed the component.
     template <typename T>
@@ -72,10 +87,12 @@ public:
         entries_[entt::type_id<T>().hash()] = std::move(entry);
     }
 
-    /// The name shown for a component type (its C++ name when not registered).
+    /// The name shown for a component type: as registered; else its name in component_types();
+    /// else its C++ name.
     std::string name(const entt::type_info& type) const;
-    /// Whether `type` was registered (add() or add_tag()).
-    bool registered(const entt::type_info& type) const { return entries_.contains(type.hash()); }
+    /// Whether `type` can be shown: registered (add(), add_tag(), add_reflected()), or a described
+    /// component of component_types() (drawn from its description).
+    bool registered(const entt::type_info& type) const;
 
     /// Runs the registered function of `type` on the entity's component (it draws its widgets, so
     /// inside an ImGui window). True if the component was changed, and then replaced in `registry`.
@@ -92,6 +109,13 @@ private:
     };
     std::unordered_map<entt::id_type, Entry> entries_;
 };
+
+/// Draws the widgets of `object`, an object of the described `type` (reflection.hpp), field by field
+/// (ImGui, inside a window): numbers dragged within their bounds (unit in the label, documentation in
+/// the tooltip), check boxes, text, vectors, colours (kFieldColor), quaternions as angles in degrees,
+/// enumerations as a list, nested structs and arrays as trees; read-only fields (kFieldReadOnly)
+/// greyed; DataRef, entities and assets shown. True when a field changed. Development builds only.
+bool inspect_reflected(void* object, const TypeInfo& type);
 
 /// Whether an entity of the inspector's list passes its filter: an empty filter keeps everything;
 /// otherwise the filter must appear in the name (letters compared without case, ASCII only) or be the

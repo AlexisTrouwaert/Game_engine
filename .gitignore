@@ -1,5 +1,7 @@
 # Build output
 build/
+# The import cache of the assets (milestone 9, part 4): prepared models, made again from the sources
+.imported/
 out/
 cmake-build-*/
 vcpkg_installed/
@@ -17,16 +19,29 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# The downloaded test assets below are kept out of Git, but not their .meta files (milestone 9, part 4):
+# an asset's identity must survive a new download, the data refer to it.
+#
 # Test models downloaded by tools/models/fetch_test_models.py (CC0, about 11 MB), kept
 # out of Git until Git LFS is decided
-assets/models/polyhaven/
+assets/models/polyhaven/**
+!assets/models/polyhaven/**/
+!assets/models/polyhaven/**/*.meta
 # Test environment (HDRI) downloaded by the same script (CC0, about 1.6 MB)
-assets/environments/
+assets/environments/**
+!assets/environments/**/
+!assets/environments/**/*.meta
 # Test sounds and musics downloaded by tools/audio/fetch_test_sounds.py (CC0, about 11 MB)
-assets/audio/
+assets/audio/**
+!assets/audio/**/
+!assets/audio/**/*.meta
 # Animated test characters downloaded by tools/models/fetch_test_characters.py (CC0 and CC-BY 4.0,
 # about 14 MB)
-assets/models/characters/
+assets/models/characters/**
+!assets/models/characters/**/
+!assets/models/characters/**/*.meta
 # The ARPG's first assets, copied from the game's folder by tools/models/fetch_arpg_models.py
 # (the game's own files; about 60 MB with their KTX2 textures)
-assets/models/arpg/
+assets/models/arpg/**
+!assets/models/arpg/**/
+!assets/models/arpg/**/*.meta

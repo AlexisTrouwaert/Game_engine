@@ -1,3 +1,4 @@
+#include "moteur/assert.hpp"
 #include "moteur/renderer.hpp"
 
 #include <algorithm>
@@ -177,6 +178,15 @@ Renderer::~Renderer() {
     flush_uploads();
     SDL_WaitForGPUIdle(device_);
     release_upload_pages();
+    for (PickSlot& slot : pick_slots_) {
+        if (slot.fence != nullptr) {
+            SDL_ReleaseGPUFence(device_, slot.fence);
+            slot.fence = nullptr;
+        }
+        slot.buffer.reset();
+    }
+    id_texture_.reset();
+    id_depth_.reset();
     // Every GPU resource must be released before the device.
 #if !defined(MOTEUR_SHIPPING)
     debug_ui_.reset();
@@ -281,6 +291,49 @@ void Renderer::set_anti_aliasing(AntiAliasing mode) {
 
 void Renderer::set_exposure(float exposure) {
     exposure_ = std::max(exposure, 0.001f);
+}
+
+void Renderer::ensure_id_targets() {
+    if (id_texture_ && id_width_ == scene_width_ && id_height_ == scene_height_) {
+        return;
+    }
+    const auto create = [&](SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage, const char* name) {
+        SDL_GPUTextureCreateInfo info = {};
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = format;
+        info.usage = usage;
+        info.width = scene_width_;
+        info.height = scene_height_;
+        info.layer_count_or_depth = 1;
+        info.num_levels = 1;
+        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        const NameProperty name_property(SDL_PROP_GPU_TEXTURE_CREATE_NAME_STRING, name);
+        info.props = name_property.id();
+        SDL_GPUTexture* raw = SDL_CreateGPUTexture(device_, &info);
+        if (raw == nullptr) {
+            throw std::runtime_error(std::string("SDL_CreateGPUTexture (") + name + ") failed: " + SDL_GetError());
+        }
+        return GpuTexture(device_, raw, texture_memory_bytes(info), texture_memory_kind(info));
+    };
+    id_texture_ = create(kIdFormat, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER, "scene ids");
+    id_depth_ = create(depth_format_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, "scene ids depth");
+    id_width_ = scene_width_;
+    id_height_ = scene_height_;
+}
+
+void Renderer::collect_picks() {
+    for (PickSlot& slot : pick_slots_) {
+        if (slot.fence == nullptr || !SDL_QueryGPUFence(device_, slot.fence)) {
+            continue;
+        }
+        SDL_ReleaseGPUFence(device_, slot.fence);
+        slot.fence = nullptr;
+        if (void* mapped = SDL_MapGPUTransferBuffer(device_, slot.buffer.get(), false)) {
+            std::memcpy(&picked_id_, mapped, sizeof(picked_id_));
+            picked_pixel_ = slot.pixel;
+            SDL_UnmapGPUTransferBuffer(device_, slot.buffer.get());
+        }
+    }
 }
 
 void Renderer::ensure_scene_targets() {
@@ -748,7 +801,28 @@ void Renderer::lose_device(const std::string& reason) {
     }
 }
 
+template <typename Prepare>
+bool Renderer::prepare_guarded(const char* what, Prepare&& prepare) {
+    try {
+        prepare();
+        return true;
+    } catch (const std::exception& e) {
+        ++frame_failures_;
+        ++stats_.failed_preparations;
+        // Logged in full the first times, then once in a while: a failure every frame must not
+        // flood the log.
+        if (frame_failures_ <= 10 || frame_failures_ % 1000 == 0) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Renderer: %s skipped this frame (%s; %llu failure(s) so far)", what,
+                         e.what(), static_cast<unsigned long long>(frame_failures_));
+        }
+        return false;
+    }
+}
+
 bool Renderer::begin_frame() {
+    collect_picks();
+    MOTEUR_ASSERT_MAIN_THREAD("Renderer");
+    MOTEUR_ASSERT(command_buffer_ == nullptr, "Renderer::begin_frame() called again before end_frame()");
     stats_ = {};
     if (device_lost()) {
         return false;
@@ -784,6 +858,8 @@ bool Renderer::begin_frame() {
 }
 
 void Renderer::end_frame() {
+    MOTEUR_ASSERT_MAIN_THREAD("Renderer");
+    MOTEUR_ASSERT(command_buffer_ != nullptr, "Renderer::end_frame() without a begin_frame() that returned true");
     stats_.gpu_timed = gpu_timing_;
     flush_uploads();  // resources created while the frame was recorded: their data first
     // Each part of the frame is recorded into the frame's command buffer. With GPU timing on, it
@@ -810,9 +886,25 @@ void Renderer::end_frame() {
                                                   static_cast<double>(SDL_GetPerformanceFrequency()));
     };
 
-    // Phase 1: copies. They must happen before any render pass opens.
-    part(kGpuUpload, [this](SDL_GPUCommandBuffer* commands) {
-        meshes_->prepare(commands, stats_);  // culling and batching of every 3D pass, too
+    // Phase 1: copies. They must happen before any render pass opens. A renderer whose preparation
+    // fails is skipped for this frame (its render() is not called): it opened no copy pass, so the
+    // command buffer stays valid (milestone 9, part 2).
+    bool meshes_ok = true;
+    bool billboards_ok = true;
+    bool lines_ok = true;
+    bool sprites_ok = true;
+    bool screen_ok = true;
+    part(kGpuUpload, [&](SDL_GPUCommandBuffer* commands) {
+        meshes_ok = prepare_guarded("meshes", [&] {
+            if (simulate_frame_failure_) {
+                simulate_frame_failure_ = false;
+                throw std::runtime_error("SDL_MapGPUTransferBuffer (mesh instances) failed: provoked on purpose");
+            }
+            meshes_->prepare(commands, stats_);  // culling and batching of every 3D pass, too
+        });
+        if (!meshes_ok) {
+            meshes_->clear();
+        }
         // Debug lines use the meshes' camera when the game gave none, and the meshes add their own.
         if (meshes_->has_work()) {
             if (!debug_lines_->has_camera_) {
@@ -820,10 +912,16 @@ void Renderer::end_frame() {
             }
             meshes_->add_debug_lines(debug_lines_->lines());
         }
-        billboards_->prepare(commands, stats_);
-        debug_lines_->prepare(commands, stats_);
-        sprites_->prepare(commands, stats_);
-        screen_sprites_->prepare(commands, stats_);
+        billboards_ok = prepare_guarded("billboards", [&] { billboards_->prepare(commands, stats_); });
+        lines_ok = prepare_guarded("debug lines", [&] { debug_lines_->prepare(commands, stats_); });
+        sprites_ok = prepare_guarded("sprites", [&] { sprites_->prepare(commands, stats_); });
+        screen_ok = prepare_guarded("screen sprites", [&] { screen_sprites_->prepare(commands, stats_); });
+        if (!billboards_ok) {
+            billboards_->clear();
+        }
+        if (!lines_ok) {
+            debug_lines_->clear();
+        }
 #if !defined(MOTEUR_SHIPPING)
         if (debug_ui_) {
             debug_ui_->prepare(commands);
@@ -833,7 +931,7 @@ void Renderer::end_frame() {
 
     // Phase 2: the render passes. The debug groups name them in RenderDoc and Xcode captures.
     const bool has_scene = meshes_->has_work() || billboards_->has_work() || debug_lines_->has_work();
-    if (has_scene && meshes_->wants_shadows()) {
+    if (has_scene && meshes_ok && meshes_->wants_shadows()) {
         part(kGpuShadow, [this](SDL_GPUCommandBuffer* commands) {
             SDL_GPUDepthStencilTargetInfo shadow = {};
             shadow.texture = meshes_->shadow_map();
@@ -853,7 +951,7 @@ void Renderer::end_frame() {
             SDL_PopGPUDebugGroup(commands);
         });
     }
-    if (has_scene && meshes_->wants_point_shadows()) {
+    if (has_scene && meshes_ok && meshes_->wants_point_shadows()) {
         part(kGpuPointShadows, [this](SDL_GPUCommandBuffer* commands) {
             // Only the tiles of the lights whose shadow changed are drawn: the others are kept (LOAD).
             SDL_GPUDepthStencilTargetInfo atlas = {};
@@ -875,7 +973,7 @@ void Renderer::end_frame() {
         });
     }
     if (has_scene) {
-        part(kGpuScene, [this](SDL_GPUCommandBuffer* commands) {
+        part(kGpuScene, [&](SDL_GPUCommandBuffer* commands) {
             // The 3D world, in linear light. The clear color is given in screen (sRGB) terms like the
             // 2D one, so it is converted to linear first.
             const glm::vec3 clear = srgb_to_linear(glm::vec3(clear_color_.r, clear_color_.g, clear_color_.b));
@@ -919,7 +1017,9 @@ void Renderer::end_frame() {
             SDL_PushGPUDebugGroup(commands, "scene");
             SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, targets, 2, &depth);
             if (pass != nullptr) {
-                meshes_->render(commands, pass, stats_);
+                if (meshes_ok) {
+                    meshes_->render(commands, pass, stats_);
+                }
                 SDL_EndGPURenderPass(pass);
             } else {
                 SDL_Log("SDL_BeginGPURenderPass (scene) failed: %s", SDL_GetError());
@@ -938,14 +1038,43 @@ void Renderer::end_frame() {
                 depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
                 pass = SDL_BeginGPURenderPass(commands, &over, 1, &depth);
                 if (pass != nullptr) {
-                    billboards_->render(commands, pass, stats_);   // after the opaque meshes, blended
-                    debug_lines_->render(commands, pass, stats_);  // last: some are drawn over everything
+                    if (billboards_ok) {
+                        billboards_->render(commands, pass, stats_);  // after the opaque meshes, blended
+                    }
+                    if (lines_ok) {
+                        debug_lines_->render(commands, pass, stats_);  // last: some are drawn over everything
+                    }
                     SDL_EndGPURenderPass(pass);
                 } else {
                     SDL_Log("SDL_BeginGPURenderPass (scene, blended) failed: %s", SDL_GetError());
                 }
             }
             SDL_PopGPUDebugGroup(commands);
+            if (meshes_ok && meshes_->ids()) {
+                // The id pass (milestone 9, part 7): the meshes again, their pick ids, their own depth.
+                ensure_id_targets();
+                SDL_GPUColorTargetInfo ids = {};
+                ids.texture = id_texture_.get();
+                ids.clear_color = {0.0f, 0.0f, 0.0f, 0.0f};
+                ids.load_op = SDL_GPU_LOADOP_CLEAR;
+                ids.store_op = SDL_GPU_STOREOP_STORE;
+                SDL_GPUDepthStencilTargetInfo id_depth = {};
+                id_depth.texture = id_depth_.get();
+                id_depth.clear_depth = 1.0f;
+                id_depth.load_op = SDL_GPU_LOADOP_CLEAR;
+                id_depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
+                id_depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+                id_depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+                SDL_PushGPUDebugGroup(commands, "ids");
+                SDL_GPURenderPass* id_pass = SDL_BeginGPURenderPass(commands, &ids, 1, &id_depth);
+                if (id_pass != nullptr) {
+                    meshes_->render_ids(commands, id_pass, stats_);
+                    SDL_EndGPURenderPass(id_pass);
+                } else {
+                    SDL_Log("SDL_BeginGPURenderPass (ids) failed: %s", SDL_GetError());
+                }
+                SDL_PopGPUDebugGroup(commands);
+            }
         });
     }
 
@@ -963,6 +1092,9 @@ void Renderer::end_frame() {
             SDL_PushGPUDebugGroup(commands, "tonemap");
             SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, &ldr, 1, nullptr);
             if (pass != nullptr) {
+                tone_mapper_->set_outline(meshes_->ids() && id_texture_ ? id_texture_.get() : nullptr, outline_id_,
+                                          {static_cast<int>(id_width_), static_cast<int>(id_height_)}, outline_color_,
+                                          outline_thickness_);
                 tone_mapper_->render(commands, pass, scene_texture_.get(), exposure_, raw_view);
                 SDL_EndGPURenderPass(pass);
             } else {
@@ -984,11 +1116,18 @@ void Renderer::end_frame() {
         if (fxaa) {
             fxaa_->render(command_buffer_, pass, ldr_texture_.get(), scene_width_, scene_height_);
         } else if (has_scene) {
+            tone_mapper_->set_outline(meshes_->ids() && id_texture_ ? id_texture_.get() : nullptr, outline_id_,
+                                      {static_cast<int>(id_width_), static_cast<int>(id_height_)}, outline_color_,
+                                      outline_thickness_);
             tone_mapper_->render(command_buffer_, pass, scene_texture_.get(), exposure_, raw_view);
         }
         render_debug_texture(pass);
-        sprites_->render(command_buffer_, pass, width_, height_, stats_);
-        screen_sprites_->render(command_buffer_, pass, width_, height_, stats_);
+        if (sprites_ok) {
+            sprites_->render(command_buffer_, pass, width_, height_, stats_);
+        }
+        if (screen_ok) {
+            screen_sprites_->render(command_buffer_, pass, width_, height_, stats_);
+        }
 #if !defined(MOTEUR_SHIPPING)
         if (debug_ui_) {
             debug_ui_->render(command_buffer_, pass);  // on top of everything
@@ -1035,7 +1174,51 @@ void Renderer::end_frame() {
         }
     }
 
-    if (gpu_timing_) {
+    // The pixel under the pointer, from the id pass, read back once this frame is done.
+    PickSlot* pick_slot = nullptr;
+    if (pick_requested_ && meshes_->ids() && id_texture_ && width_ > 0 && height_ > 0) {
+        PickSlot& slot = pick_slots_[next_pick_slot_];
+        if (slot.fence == nullptr) {
+            if (!slot.buffer) {
+                SDL_GPUTransferBufferCreateInfo info = {};
+                info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+                info.size = 4;
+                if (SDL_GPUTransferBuffer* raw = SDL_CreateGPUTransferBuffer(device_, &info)) {
+                    slot.buffer = GpuTransferBuffer(device_, raw);
+                }
+            }
+            if (slot.buffer) {
+                const auto x = static_cast<std::uint32_t>(std::clamp(pick_pixel_.x * static_cast<float>(id_width_) / static_cast<float>(width_),
+                                                                     0.0f, static_cast<float>(id_width_ - 1)));
+                const auto y = static_cast<std::uint32_t>(std::clamp(pick_pixel_.y * static_cast<float>(id_height_) / static_cast<float>(height_),
+                                                                     0.0f, static_cast<float>(id_height_ - 1)));
+                SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(command_buffer_);
+                SDL_GPUTextureRegion region = {};
+                region.texture = id_texture_.get();
+                region.x = x;
+                region.y = y;
+                region.w = 1;
+                region.h = 1;
+                region.d = 1;
+                SDL_GPUTextureTransferInfo destination = {};
+                destination.transfer_buffer = slot.buffer.get();
+                SDL_DownloadFromGPUTexture(copy_pass, &region, &destination);
+                SDL_EndGPUCopyPass(copy_pass);
+                slot.pixel = pick_pixel_;
+                pick_slot = &slot;
+                next_pick_slot_ = (next_pick_slot_ + 1) % 3;
+            }
+        }
+    }
+    pick_requested_ = false;
+
+    if (pick_slot != nullptr && !gpu_timing_) {
+        // Its fence tells when the id can be read (collect_picks(), at a next frame).
+        pick_slot->fence = SDL_SubmitGPUCommandBufferAndAcquireFence(command_buffer_);
+        if (pick_slot->fence == nullptr) {
+            lose_device(std::string("SDL_SubmitGPUCommandBufferAndAcquireFence failed: ") + SDL_GetError());
+        }
+    } else if (gpu_timing_) {
         // The compose pass (and the capture read-back, if any) is what is left in this buffer.
         const std::uint64_t start = SDL_GetPerformanceCounter();
         SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(command_buffer_);
@@ -1043,7 +1226,11 @@ void Renderer::end_frame() {
             lose_device(std::string("SDL_SubmitGPUCommandBufferAndAcquireFence failed: ") + SDL_GetError());
         } else {
             SDL_WaitForGPUFences(device_, true, &fence, 1);
-            SDL_ReleaseGPUFence(device_, fence);
+            if (pick_slot != nullptr) {
+                pick_slot->fence = fence;  // signalled: read at the next collect_picks()
+            } else {
+                SDL_ReleaseGPUFence(device_, fence);
+            }
             stats_.gpu_ms[kGpuCompose] += static_cast<float>(static_cast<double>(SDL_GetPerformanceCounter() - start) *
                                                              1000.0 / static_cast<double>(SDL_GetPerformanceFrequency()));
         }

@@ -96,6 +96,11 @@ public:
     std::uint64_t revision() const { return revision_; }
     /// True once a load or a reload has given the table its rows; false if every load failed.
     bool loaded() const { return loaded_; }
+    /// The JSON Schema of a row (milestone 9, part 3): given by add_reflected_table() from the row's
+    /// description; null for a table read by hand.
+    const nlohmann::json& schema() const { return schema_; }
+    /// Gives the table its schema (see schema()).
+    void set_schema(nlohmann::json schema) { schema_ = std::move(schema); }
 
     /// Reads the JSON files of `directory` under `root` (the assets directory, ending with a
     /// separator), not its subdirectories, in the order of their names. Problems go to `issues`
@@ -145,6 +150,7 @@ protected:
     std::uint64_t source_hash_ = 0;                       ///< see source_hash()
     std::uint64_t revision_ = 0;                          ///< see revision()
     bool loaded_ = false;                                 ///< see loaded()
+    nlohmann::json schema_;                               ///< see schema()
 };
 
 /// Resolves the references of one row (given to the game's link function, DataTable::Link). Valid
@@ -364,6 +370,12 @@ public:
     /// problems appended to `issues`, if that load has an error or a file cannot be written; the
     /// load's warnings are appended too.
     bool compile(const std::string& root, const std::string& directory, DataIssues& issues);
+
+    /// Writes the schema of every table that has one (DataTableBase::schema()) into `directory`
+    /// (ending with a separator; created if needed) as `<name>.schema.json`, for a text editor that
+    /// checks the files of a table as they are typed (VS Code: `json.schemas`). False, with a
+    /// message in `error`, if a file cannot be written. Returns how many were written in `count`.
+    bool write_schemas(const std::string& directory, std::size_t& count, std::string& error) const;
 
 private:
     friend class DataLinker;

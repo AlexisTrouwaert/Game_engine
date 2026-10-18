@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 
 #include <cstddef>
+#include <memory>
 
 #include "moteur/billboard_batcher.hpp"
 #include "moteur/gpu_resource.hpp"
@@ -60,6 +61,14 @@ public:
     /// work until the frame ends).
     void draw(const Texture& texture, glm::vec3 center, glm::vec2 size, const BillboardOptions& options = {});
 
+    /// A soft round glow (white, radial falloff, premultiplied, mipmapped), made once by the
+    /// renderer: the texture of the halos of lights (LightHalo), free for the game's glows too.
+    const Texture& glow_texture() const { return *glow_; }
+    /// Whether set_camera() was called this frame.
+    bool has_camera() const { return has_camera_; }
+    /// The position of this frame's camera (set_camera()).
+    glm::vec3 eye() const { return view_.eye; }
+
     /// Number of billboards recorded so far in the current frame.
     std::size_t queued() const { return batcher_.count(); }
     /// True if this frame has something to draw: a camera and at least one billboard.
@@ -94,6 +103,7 @@ private:
     BillboardView view_;
     glm::mat4 view_projection_{1.0f};
     bool has_camera_ = false;
+    std::unique_ptr<Texture> glow_;  ///< see glow_texture()
 };
 
 }  // namespace moteur

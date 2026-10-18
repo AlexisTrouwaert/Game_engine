@@ -19,6 +19,7 @@
 #include "moteur/mesh.hpp"
 #include "moteur/mesh_renderer.hpp"
 #include "moteur/model.hpp"
+#include "moteur/reflection.hpp"
 #include "moteur/renderer.hpp"
 
 namespace moteur {
@@ -46,6 +47,10 @@ struct Transform {
     /// Exact comparison of the three members (no tolerance).
     bool operator==(const Transform&) const = default;
 };
+MOTEUR_REFLECT(Transform,
+    MOTEUR_FIELD(position, {.unit = "m", .flags = kFieldDefault | kFieldLogic, .aliases = {"p"}}),
+    MOTEUR_FIELD(rotation, {.doc = "quaternion w, x, y, z", .flags = kFieldDefault | kFieldLogic, .aliases = {"r"}}),
+    MOTEUR_FIELD(scale, {.flags = kFieldDefault | kFieldLogic, .aliases = {"s"}}));
 
 /// Between two ticks: position and scale linearly, rotation by slerp. Exactly `current` when
 /// nothing changed, whatever t (see moteur::interpolate), so a still entity never shifts.
@@ -65,6 +70,7 @@ struct PreviousTransform {
 struct Parent {
     entt::entity entity = entt::null;  ///< the parent entity (of the same registry)
 };
+MOTEUR_REFLECT(Parent, MOTEUR_FIELD(entity, {.flags = kFieldDefault | kFieldLogic}));
 
 /// With a Parent that is animated (an Animator), hangs the entity on a joint of the parent's pose
 /// (milestone 5, part 8): a sword in a hand, a torch, an effect on the head. `point` is an attach
@@ -76,14 +82,18 @@ struct Parent {
 struct BoneAttachment {
     std::string point;  ///< an attach point of the parent's AnimationSet, or a joint name
 };
+MOTEUR_REFLECT(BoneAttachment, MOTEUR_FIELD(point, {.doc = "an attach point of the parent's AnimationSet, or a joint",
+                                                    .flags = kFieldDefault | kFieldPresentation}));
 
 /// A name for debugging (the inspector, messages). Optional.
 struct Name {
     std::string value;  ///< any text; not required to be unique
 };
+MOTEUR_REFLECT(Name, MOTEUR_FIELD(value));
 
 /// Not drawn (meshes, models, billboards) and gives no light, but otherwise untouched.
 struct Hidden {};
+MOTEUR_REFLECT(Hidden);
 
 /// A mesh drawn at the entity's place.
 struct MeshComponent {
@@ -105,6 +115,11 @@ struct ModelComponent {
     /// Whether the part at index `part` of Model::parts is in #hidden_parts (a binary search).
     bool hidden(std::size_t part) const;
 };
+// Prefabs and levels give it its model by path; saves leave it out (the game rebuilds it).
+MOTEUR_REFLECT(ModelComponent,
+    MOTEUR_FIELD(model, {.doc = "the glTF model", .flags = kFieldEdit | kFieldData | kFieldPresentation}),
+    MOTEUR_FIELD(hidden_parts, {.doc = "indices in Model::parts, sorted",
+                                .flags = kFieldEdit | kFieldData | kFieldPresentation}));
 
 /// A point light at the entity's position (see PointLight).
 struct LightSource {
@@ -114,6 +129,31 @@ struct LightSource {
     bool casts_shadows = false;  ///< may cast shadows (see PointLight::casts_shadows)
     float shadow_near = 0.0f;    ///< metres; nearer casters cast no shadow (see PointLight::shadow_near)
 };
+MOTEUR_REFLECT(LightSource,
+    MOTEUR_FIELD(color, {.min = 0.0, .doc = "linear", .flags = kFieldDefault | kFieldPresentation | kFieldColor}),
+    MOTEUR_FIELD(intensity, {.min = 0.0, .doc = "radiance at 1 m", .flags = kFieldDefault | kFieldPresentation}),
+    MOTEUR_FIELD(range, {.min = 0.0, .unit = "m", .flags = kFieldDefault | kFieldPresentation}),
+    MOTEUR_FIELD(casts_shadows, {.flags = kFieldDefault | kFieldPresentation}),
+    MOTEUR_FIELD(shadow_near, {.min = 0.0, .unit = "m", .doc = "nearer casters cast no shadow",
+                               .flags = kFieldDefault | kFieldPresentation}));
+
+/// A glow drawn around a light (milestone 9, part 3): an additive sprite at the entity's position,
+/// pulled toward the camera by a share of its size so that the lamp holding the light does not hide
+/// it (seen from above, a lantern's roof hides its lit glass and leaves a dark block at night
+/// otherwise). Drawn by World::submit() with the renderer's glow texture
+/// (BillboardRenderer::glow_texture()); usually on the entity of a LightSource, in a prefab.
+struct LightHalo {
+    glm::vec3 color{1.0f};  ///< linear, may exceed 1 (it glows once tone mapped)
+    float size = 1.0f;      ///< metres, its width and height
+    float pull = 0.5f;      ///< share of its size it is moved toward the camera
+    float soft = 0.25f;     ///< metres: fades where it nears a surface (BillboardOptions::soft)
+};
+MOTEUR_REFLECT(LightHalo,
+    MOTEUR_FIELD(color, {.min = 0.0, .doc = "linear, may exceed 1", .flags = kFieldDefault | kFieldPresentation | kFieldColor}),
+    MOTEUR_FIELD(size, {.min = 0.0, .max = 100.0, .unit = "m", .flags = kFieldDefault | kFieldPresentation}),
+    MOTEUR_FIELD(pull, {.min = 0.0, .max = 2.0, .doc = "share of its size moved toward the camera",
+                        .flags = kFieldDefault | kFieldPresentation}),
+    MOTEUR_FIELD(soft, {.min = 0.0, .unit = "m", .flags = kFieldDefault | kFieldPresentation}));
 
 /// A camera-facing sprite at the entity's position (see BillboardRenderer).
 struct Billboard {
@@ -147,6 +187,9 @@ public:
     virtual void light(const PointLight& light) = 0;
     /// A billboard: `center` in the world, `size` in metres (see BillboardRenderer::draw()).
     virtual void billboard(const Texture& texture, glm::vec3 center, glm::vec2 size, const BillboardOptions& options) = 0;
+    /// The pick id of the meshes that follow (World::pick_id_of(); 0: none), when
+    /// CollectOptions::pick_ids asks for them. By default, ignored.
+    virtual void pick(std::uint32_t id) { static_cast<void>(id); }
 };
 
 /// What the last collect() spent on animation (milestone 5, part 10): poses sampled and blended,
@@ -170,6 +213,13 @@ struct CollectOptions {
     Frustum view;
     /// Tools: animated models in their bind pose (PoseSampler::bind) rather than their clips.
     bool bind_pose = false;
+    /// The glows of LightHalo: their texture (World::submit() gives the renderer's), and the camera's
+    /// position they are pulled toward. Without a texture, no halo is given.
+    const Texture* glow = nullptr;
+    glm::vec3 eye{0.0f};  ///< the drawn camera's position (see #glow)
+    /// The pick ids of what is drawn (WorldSink::pick()), for the id pass: World::submit() asks for
+    /// them when the renderer's id pass is on (MeshRenderer::set_ids()).
+    bool pick_ids = false;
 };
 
 /// The registry of one scene, and the engine's systems over it. One World per scene: closing the
@@ -223,6 +273,15 @@ public:
     /// Its world position (the translation of world_matrix()), in metres.
     glm::vec3 world_position(entt::entity entity, float alpha) const;
 
+    /// The pick id the id pass writes for what `entity` draws (milestone 9, part 7): that of the
+    /// nearest entity up its Parent chain, itself first, having a Selectable (its sword and its body
+    /// select the monster); 0 when there is none. The id is the entity's index + 1 (its version
+    /// left out: exact as a float below 2^24 entities).
+    std::uint32_t pick_id_of(entt::entity entity) const;
+    /// The living entity whose pick id is `id` (Renderer::picked_id()), or null (0, or an entity
+    /// destroyed since).
+    entt::entity entity_of_pick(std::uint32_t id) const;
+
     /// Destroys an entity and, first, every entity attached to it (Parent), recursively. Nothing
     /// happens for an invalid entity. O(entities with a Parent) per level.
     void destroy(entt::entity entity);
@@ -237,7 +296,8 @@ public:
     void collect(WorldSink& sink, float alpha, const CollectOptions& options = {});
     /// The same, into the renderer's meshes and billboards (Renderer::meshes(), Renderer::billboards()),
     /// for the frame being recorded: once per frame, between Renderer::begin_frame() and
-    /// Renderer::end_frame().
+    /// Renderer::end_frame(). The halos (LightHalo) use the renderer's glow texture and the camera
+    /// given to BillboardRenderer::set_camera() (set it first), unless `options` gives its own.
     void submit(Renderer& renderer, float alpha, const CollectOptions& options = {});
 
     /// Living entities (of every kind, the game's included).
@@ -268,6 +328,17 @@ private:
     /// The pose of an animated entity for this collection: sampled the first time it is asked for
     /// (by its model, or by an entity on one of its joints).
     const AnimationPose& sample_pose(entt::entity entity, const Animator& animator, float alpha);
+    /// The poses of the animated models in view (animated_), in parallel.
+    void sample_poses(float alpha);
+    /// An animated model as collect() finds it, before drawing it.
+    struct AnimatedPlace {
+        entt::entity entity = entt::null;
+        glm::mat4 world{1.0f};
+        bool visible = false;  ///< placed, and its reach in view
+    };
+    std::vector<AnimatedPlace> animated_;  ///< reused, in the order of the models
+    std::vector<entt::entity> to_sample_;  ///< reused
+    std::vector<PoseRequest> pose_requests_;  ///< reused: one per pose sampled at once
 };
 
 /// Where `point` is on `owner` (see BoneAttachment), in its model space, without the joint's scale:

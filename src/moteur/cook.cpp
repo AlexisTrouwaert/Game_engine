@@ -8,19 +8,29 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <functional>
 #include <map>
+#include <memory>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <system_error>
 
 #include "moteur/animation_set.hpp"
+#include "moteur/application.hpp"
 #include "moteur/archive.hpp"
+#include "moteur/asset_registry.hpp"
+#include "moteur/document.hpp"
 #include "moteur/file_io.hpp"
 #include "moteur/image.hpp"
 #include "moteur/ktx_texture.hpp"
+#include "moteur/level.hpp"
+#include "moteur/level_bake.hpp"
 #include "moteur/map_data.hpp"
 #include "moteur/model.hpp"
+#include "moteur/model_import.hpp"
 #include "moteur/particles.hpp"
+#include "moteur/prefab.hpp"
 #include "moteur/sound.hpp"
 
 namespace moteur {
@@ -30,7 +40,7 @@ namespace {
 namespace fs = std::filesystem;
 
 // Raise when a change of this tool changes what it writes: everything is prepared again.
-constexpr int kCookVersion = 1;
+constexpr int kCookVersion = 2;  // 2: models shipped in their prepared form (milestone 9, part 4)
 
 fs::path utf8_path(const std::string& text) {
     return fs::path(std::u8string(text.begin(), text.end()));
@@ -70,7 +80,12 @@ std::uint64_t fnv1a(const std::vector<std::uint8_t>& bytes, std::uint64_t hash =
 }
 
 // What a shipped file becomes.
-enum class Kind { Copy, Texture };
+enum class Kind { Copy, Texture, Model };
+
+// Where a model's prepared form goes: the key the engine looks for (Assets: the import cache).
+std::string prepared_model_key(const std::string& key) {
+    return ".imported/" + key + ".mmdl";
+}
 
 struct Source {
     std::string absolute;  // where it is read
@@ -158,6 +173,268 @@ T manifest_value(const nlohmann::json& object, const char* key, const char* old_
     return fallback;
 }
 
+namespace {
+
+// The asset keys a prefab (or any JSON of the assets) refers to: its "base" and nested "prefab"
+// paths, every asset reference ({"id": ..., "path": ...}) of its components, by identifier first,
+// and every string that is the key of an identified asset (an asset field written as its path).
+// An identifier the registry does not know, without a path, is an error.
+std::vector<std::string> asset_references(const nlohmann::json& json, const AssetRegistry& registry, const std::string& from,
+                                          CookReport& report) {
+    std::vector<std::string> found;
+    const auto visit = [&](const auto& self, const nlohmann::json& value, const std::string& name) -> void {
+        if (value.is_object()) {
+            const auto id = value.find("id");
+            const auto path = value.find("path");
+            if (id != value.end() && id->is_string()) {
+                if (const std::optional<AssetId> parsed = AssetId::parse(id->get<std::string>())) {
+                    if (const AssetRecord* record = registry.find(*parsed)) {
+                        found.push_back(record->key);
+                        if (path != value.end() && path->is_string() && path->get<std::string>() != record->key) {
+                            report.warnings.push_back(from + ": the asset " + parsed->text() + " is now '" + record->key +
+                                                      "' (written '" + path->get<std::string>() + "': save the file again)");
+                        }
+                    } else if (path != value.end() && path->is_string()) {
+                        report.warnings.push_back(from + ": unknown identifier " + parsed->text() + ", '" +
+                                                  path->get<std::string>() + "' used by its path");
+                        found.push_back(normal_key(path->get<std::string>()));
+                    } else {
+                        report.errors.push_back(from + ": unknown asset identifier " + parsed->text());
+                    }
+                }
+            } else if (path != value.end() && path->is_string()) {
+                found.push_back(normal_key(path->get<std::string>()));
+            }
+            for (const auto& [key, child] : value.items()) {
+                self(self, child, key);
+            }
+        } else if (value.is_array()) {
+            for (const nlohmann::json& child : value) {
+                self(self, child, name);
+            }
+        } else if (value.is_string() && (name == "base" || name == "prefab")) {
+            found.push_back(normal_key(value.get<std::string>()));
+        } else if (value.is_string() && !value.get<std::string>().empty() && registry.find(normal_key(value.get<std::string>())) != nullptr) {
+            found.push_back(normal_key(value.get<std::string>()));  // an asset field written as its path alone
+        }
+    };
+    visit(visit, json, std::string());
+    return found;
+}
+
+// A model's prepared form (milestone 9, part 4): imported as the engine imports it (its `.meta`'s
+// settings), its embedded KTX2 images transcoded to BC7 / BC5 once and for all, written under the
+// key the engine looks for. The model's own files (glTF, buffers) do not ship. Its stamp covers the
+// source's bytes and files, the settings and the tools' versions.
+void prepare_model(const std::string& key, const std::vector<std::uint8_t>& bytes, const std::map<std::string, Source>& sources,
+                   const AssetRegistry& registry, const fs::path& out_assets, const nlohmann::json& stamps,
+                   nlohmann::json& new_stamps, CookReport& report) {
+    std::vector<std::string> warnings;
+    const AssetRecord* record = registry.find(key);
+    const ModelImportSettings settings =
+        ModelImportSettings::from_json(record != nullptr ? record->import : nlohmann::json::object(), warnings);
+    for (const std::string& warning : warnings) {
+        report.warnings.push_back(std::string(key).append(".meta: ").append(warning));
+    }
+    std::uint64_t hash = fnv1a(bytes, (static_cast<std::uint64_t>(kCookVersion) * 1099511628211ull) ^ settings.hash() ^
+                                          (static_cast<std::uint64_t>(kPreparedModelVersion) << 40));
+    const std::string output_key = prepared_model_key(key);
+    const fs::path target = out_assets / utf8_path(output_key);
+    std::error_code error;
+    try {
+        GltfOptions gltf;
+        gltf.decode_external_images = false;
+        ModelData data = load_gltf(sources.at(key).absolute, gltf);
+        for (const std::string& file : data.files) {  // its buffers: part of what it is made from
+            const auto found = sources.find(normal_key(directory_of(key) + file));
+            if (found == sources.end()) {
+                report.errors.push_back(std::string(key).append(": file '").append(file).append("' not found"));
+                return;
+            }
+            hash = fnv1a(*read_file_bytes(found->second.absolute), hash);
+        }
+        const std::string stamp = std::to_string(hash);
+        ++report.shipped;
+        if (stamps.contains(output_key) && stamps[output_key] == stamp && fs::is_regular_file(target, error)) {
+            new_stamps[output_key] = stamp;
+            report.bytes_out += static_cast<std::size_t>(fs::file_size(target, error));
+            return;
+        }
+        import_model(data, settings, key);
+        for (ModelImage& image : data.images) {
+            if (!image.ktx2.empty()) {
+                std::vector<std::uint8_t> transcoded = transcode_ktx2_for_shipping(image.ktx2.data(), image.ktx2.size(), key);
+                if (!transcoded.empty()) {
+                    image.ktx2 = std::move(transcoded);
+                    ++report.transcoded;
+                }
+            }
+        }
+        const std::vector<std::uint8_t> written = encode_prepared_model(data, hash);
+        fs::create_directories(target.parent_path(), error);
+        std::string write_error;
+        if (!write_file_atomic(utf8_string(target), written.data(), written.size(), write_error)) {
+            report.errors.push_back(write_error);
+            return;
+        }
+        new_stamps[output_key] = stamp;
+        report.bytes_out += written.size();
+        ++report.prepared;
+    } catch (const std::exception& e) {
+        report.errors.push_back(e.what());
+    }
+}
+
+// A level of the sources baked as the shipped game loads it (milestone 9, part 8): its header and its
+// chunks written next to it in the output (prepared_level_key(), prepared_chunk_key()), each read
+// back. Its prefabs come from the output (already prepared), its models' collision from their
+// prepared forms.
+void bake_level_for_shipping(const std::string& key, const std::string& source_path, const fs::path& out_assets,
+                             const AssetRegistry& registry, nlohmann::json& new_stamps, CookReport& report) {
+    const auto resolve = [&registry](const nlohmann::json& value) -> std::string {
+        if (value.is_string()) {
+            return normal_key(value.get<std::string>());
+        }
+        if (value.is_object()) {
+            const auto id = AssetId::parse(value.value("id", std::string()));
+            if (const AssetRecord* record = id ? registry.find(*id) : nullptr) {
+                return record->key;
+            }
+            if (value.contains("path")) {
+                return normal_key(value.at("path").get<std::string>());
+            }
+        }
+        throw std::runtime_error("not an asset reference: " + value.dump());
+    };
+    const auto source = read_file_bytes(source_path);
+    if (!source) {
+        throw std::runtime_error("cannot read the level");
+    }
+    DataIssues issues;
+    const LevelDocument level = LevelDocument::parse(
+        std::string_view(reinterpret_cast<const char*>(source->data()), source->size()), key, resolve, issues);
+    for (const DataIssue& issue : issues.all()) {
+        report.warnings.push_back(issue.where + ": " + issue.message);
+    }
+
+    std::map<std::string, std::shared_ptr<const Prefab>> prefabs;
+    std::map<std::string, CollisionMeshData> models;
+    std::vector<std::string> loading;
+    std::function<std::shared_ptr<const Prefab>(const std::string&)> load_prefab;
+    Prefab::Context context;
+    context.prefab = [&](const std::string& path) { return load_prefab(path); };
+    context.asset = [](const TypeInfo&, const nlohmann::json&, void*, std::string&) { return true; };  // keys are read from the JSON
+    load_prefab = [&](const std::string& path) -> std::shared_ptr<const Prefab> {
+        const std::string normal = normal_key(path);
+        if (const auto found = prefabs.find(normal); found != prefabs.end()) {
+            return found->second;
+        }
+        if (std::find(loading.begin(), loading.end(), normal) != loading.end()) {
+            throw std::runtime_error("Prefab cycle at " + normal);
+        }
+        const auto bytes = read_file_bytes(utf8_string(out_assets / utf8_path(normal)));
+        if (!bytes) {
+            throw std::runtime_error("prefab '" + normal + "' not in the output");
+        }
+        loading.push_back(normal);
+        DataIssues prefab_issues;
+        auto prefab = std::make_shared<const Prefab>(
+            Prefab::parse(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()), normal, context, prefab_issues));
+        loading.pop_back();
+        return prefabs[normal] = prefab;
+    };
+    LevelSources sources;
+    sources.prefab = load_prefab;
+    sources.resolve = resolve;
+    sources.model_collision = [&](const std::string& model) -> const CollisionMeshData* {
+        auto [found, fresh] = models.try_emplace(model);
+        if (fresh) {
+            if (const auto bytes = read_file_bytes(utf8_string(out_assets / utf8_path(prepared_model_key(model))))) {
+                found->second = decode_prepared_model(bytes->data(), bytes->size(), model).collision;
+            }
+        }
+        return found->second.empty() ? nullptr : &found->second;
+    };
+    LevelBakeStats stats;
+    const BakedLevel baked = bake_level(level, sources, &stats);
+    const auto write = [&](const std::string& output_key, const std::vector<std::uint8_t>& bytes) {
+        const fs::path target = out_assets / utf8_path(output_key);
+        std::error_code error;
+        fs::create_directories(target.parent_path(), error);
+        std::string write_error;
+        if (!write_file_atomic(utf8_string(target), bytes.data(), bytes.size(), write_error)) {
+            report.errors.push_back(write_error);
+            return;
+        }
+        new_stamps[output_key] = "level";
+        report.bytes_out += bytes.size();
+    };
+    const std::vector<std::uint8_t> header = encode_level_header(baked.header);
+    (void)decode_level_header(header, prepared_level_key(key));  // read back
+    write(prepared_level_key(key), header);
+    for (const LevelChunk& chunk : baked.chunks) {
+        const std::vector<std::uint8_t> bytes = encode_level_chunk(chunk);
+        (void)decode_level_chunk(bytes, prepared_chunk_key(key, chunk.coord));
+        write(prepared_chunk_key(key, chunk.coord), bytes);
+    }
+    SDL_Log("Cook: level '%s' baked: %d instances, %d chunks, %d navigation tiles in %.0f ms", key.c_str(), stats.instances,
+            stats.chunks, stats.nav_tiles, stats.milliseconds);
+}
+
+// A prepared prefab read back as the shipped game reads it: its bases and nested prefabs from the
+// output, its assets checked to be there (not loaded: no GPU here).
+void read_back_prefab(const std::string& key, const fs::path& out_assets, const AssetRegistry& registry, CookReport& report) {
+    std::map<std::string, std::shared_ptr<const Prefab>> loaded;
+    std::vector<std::string> loading;
+    std::function<std::shared_ptr<const Prefab>(const std::string&)> load;
+    Prefab::Context context;
+    context.prefab = [&](const std::string& path) { return load(path); };
+    context.asset = [&](const TypeInfo&, const nlohmann::json& value, void*, std::string& problem) {
+        if (value.is_null() || (value.is_string() && value.get<std::string>().empty())) {
+            return true;
+        }
+        std::string target;
+        if (value.is_string()) {
+            target = normal_key(value.get<std::string>());
+        } else if (value.is_object()) {
+            const auto id = AssetId::parse(value.value("id", std::string()));
+            const AssetRecord* record = id ? registry.find(*id) : nullptr;
+            target = record != nullptr ? record->key : normal_key(value.value("path", std::string()));
+        }
+        if (target.empty() || (!fs::is_regular_file(out_assets / utf8_path(target)) &&
+                               !fs::is_regular_file(out_assets / utf8_path(prepared_model_key(target))))) {
+            problem = "asset '" + (target.empty() ? value.dump() : target) + "' not in the output";
+            return false;
+        }
+        return true;
+    };
+    load = [&](const std::string& path) -> std::shared_ptr<const Prefab> {
+        const std::string normal = normal_key(path);
+        if (const auto found = loaded.find(normal); found != loaded.end()) {
+            return found->second;
+        }
+        if (std::find(loading.begin(), loading.end(), normal) != loading.end()) {
+            throw std::runtime_error("Prefab cycle at " + normal);
+        }
+        const auto bytes = read_file_bytes(utf8_string(out_assets / utf8_path(normal)));
+        if (!bytes) {
+            throw std::runtime_error("prefab '" + normal + "' not in the output");
+        }
+        loading.push_back(normal);
+        DataIssues issues;
+        auto prefab = std::make_shared<const Prefab>(
+            Prefab::parse(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()), normal, context, issues));
+        loading.pop_back();
+        for (const DataIssue& issue : issues.all()) {
+            report.warnings.push_back(issue.where + ": " + issue.message);
+        }
+        return loaded[normal] = prefab;
+    };
+    (void)load(key);
+}
+
+}  // namespace
+
 CookReport cook(const CookOptions& options) {
     CookReport report;
 
@@ -210,16 +487,43 @@ CookReport cook(const CookOptions& options) {
             }
         }
     }
+    // The identities of the assets (milestone 9, part 4): their .meta files, the first source folder
+    // given the last word as for the files (a later folder replaces an earlier one's file). Nothing is
+    // written: an asset without .meta is a warning below, if it ships.
+    AssetRegistry registry;
+    std::set<std::string> without_meta;
+    {
+        std::vector<std::string> roots;
+        for (auto it = options.sources.rbegin(); it != options.sources.rend(); ++it) {
+            std::string root = *it;
+            if (!root.empty() && root.back() != '/' && root.back() != '\\') {
+                root += '/';
+            }
+            roots.push_back(root);
+        }
+        const AssetScanReport scan = registry.scan(roots, false);
+        for (const std::string& problem : scan.problems) {
+            report.errors.push_back(problem);
+        }
+        for (const std::string& copy : scan.reassigned) {
+            report.errors.push_back("two assets with the same identifier (a copy with its .meta): " + copy +
+                                    "; run the program in development to give the copy its own");
+        }
+        without_meta.insert(scan.created.begin(), scan.created.end());
+    }
 
     // The selection: the manifest's globs, without the tables' JSON nor the manifest.
     std::map<std::string, Kind> shipped;
     const auto excluded = [&](const std::string& key) {
-        if (key == manifest_name || (!data_folder.empty() && key.starts_with(data_folder))) {
+        if (key == manifest_name || (!data_folder.empty() && key.starts_with(data_folder)) || key.ends_with(".meta")) {
             return true;
         }
         return std::any_of(excludes.begin(), excludes.end(), [&key](const std::string& glob) { return glob_match(glob, key); });
     };
-    const auto kind_of = [](const std::string& key) { return extension_of(key) == ".ktx2" ? Kind::Texture : Kind::Copy; };
+    const auto kind_of = [](const std::string& key) {
+        const std::string extension = extension_of(key);
+        return extension == ".ktx2" ? Kind::Texture : (extension == ".gltf" || extension == ".glb") ? Kind::Model : Kind::Copy;
+    };
     for (const std::string& glob : includes) {
         bool any = false;
         for (const auto& [key, source] : sources) {
@@ -261,9 +565,7 @@ CookReport cook(const CookOptions& options) {
                 gltf.decode_external_images = false;  // the shipped game reads them through its texture cache
                 gltf.prefer_ktx2 = true;               // and prefers the KTX2: their plain images stay behind
                 const ModelData data = load_gltf(path, gltf);
-                for (const std::string& file : data.files) {
-                    require(key, normal_key(directory_of(key) + file));
-                }
+                // Its buffers go into its prepared form; its image files are textures of their own.
                 for (const ModelImage& image : data.images) {
                     if (!image.file.empty()) {
                         require(key, normal_key(directory_of(key) + image.file));
@@ -275,6 +577,14 @@ CookReport cook(const CookOptions& options) {
                     std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()), key);
                 for (const EmitterDesc& emitter : effect.emitters()) {
                     require(key, normal_key(emitter.texture));
+                }
+            } else if (key.ends_with(".prefab.json") || key.ends_with(".level.json")) {
+                // Its bases, nested prefabs and the assets of its components, by identifier (a
+                // level: its placed prefabs and ground tiles, milestone 9 part 8).
+                const auto bytes = read_file_bytes(path);
+                for (const std::string& reference : asset_references(nlohmann::json::parse(bytes->begin(), bytes->end()),
+                                                                     registry, key, report)) {
+                    require(key, reference);
                 }
             }
         } catch (const std::exception& e) {
@@ -323,6 +633,10 @@ CookReport cook(const CookOptions& options) {
             continue;
         }
         report.bytes_in += bytes->size();
+        if (kind == Kind::Model) {
+            prepare_model(key, *bytes, sources, registry, out_assets, stamps, new_stamps, report);
+            continue;
+        }
         const std::string stamp = std::to_string(fnv1a(*bytes, static_cast<std::uint64_t>(kCookVersion) * 1099511628211ull));
         const fs::path target = out_assets / utf8_path(key);
         ++report.shipped;
@@ -341,6 +655,12 @@ CookReport cook(const CookOptions& options) {
         std::vector<std::uint8_t> written = *bytes;
         bool transcoded_now = false;
         try {
+            // A JSON asset ships in CBOR (milestone 9, part 4: the shipped game reads no JSON), under
+            // its name; its readers take both (parse_document()).
+            if (extension_of(key) == ".json") {
+                written = shipped_document(parse_document(
+                    std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size())));
+            }
             if (kind == Kind::Texture) {
                 std::vector<std::uint8_t> transcoded = transcode_ktx2_for_shipping(bytes->data(), bytes->size(), key);
                 if (!transcoded.empty()) {
@@ -399,6 +719,54 @@ CookReport cook(const CookOptions& options) {
         }
     }
 
+    // The frozen asset registry: the identities of what ships (none if nothing has one).
+    {
+        AssetRegistry frozen;
+        std::vector<std::string> unidentified;
+        for (const auto& [key, kind] : shipped) {
+            if (!is_identified_asset(key)) {
+                continue;
+            }
+            const AssetRecord* record = registry.find(key);
+            if (record == nullptr || without_meta.contains(key)) {
+                unidentified.push_back(key);
+                continue;
+            }
+            AssetRecord copy = *record;
+            copy.root.clear();
+            frozen.add(std::move(copy));
+        }
+        if (!unidentified.empty()) {
+            report.warnings.push_back(std::to_string(unidentified.size()) + " shipped asset(s) without .meta ship without an "
+                                      "identity (run the program in development once to give them one), first: " +
+                                      unidentified.front());
+        }
+        if (frozen.size() > 0) {
+            const std::vector<std::uint8_t> bytes = frozen.encode();
+            std::string write_error;
+            if (write_file_atomic(utf8_string(out_assets / ApplicationConfig::kRegistryFile), bytes.data(), bytes.size(),
+                                  write_error)) {
+                new_stamps[ApplicationConfig::kRegistryFile] = "registry";
+                report.bytes_out += bytes.size();
+            } else {
+                report.errors.push_back(write_error);
+            }
+        }
+    }
+
+    // The levels (milestone 9, part 8): baked into a header and one file per chunk, from the prefabs
+    // and the prepared models already in the output.
+    for (const auto& [key, kind] : shipped) {
+        if (!key.ends_with(".level.json")) {
+            continue;
+        }
+        try {
+            bake_level_for_shipping(key, sources.at(key).absolute, out_assets, registry, new_stamps, report);
+        } catch (const std::exception& e) {
+            report.errors.push_back(key + ": " + e.what());
+        }
+    }
+
     // The shaders.
     if (!options.shaders.empty()) {
         const fs::path from = utf8_path(options.shaders);
@@ -435,9 +803,12 @@ CookReport cook(const CookOptions& options) {
         const std::string extension = extension_of(key);
         try {
             if (extension == ".gltf" || extension == ".glb") {
-                GltfOptions gltf;
-                gltf.decode_external_images = false;
-                (void)load_gltf(path, gltf);
+                const auto prepared = read_file_bytes(utf8_string(out_assets / utf8_path(prepared_model_key(key))));
+                if (!prepared) {
+                    report.errors.push_back("'" + key + "': its prepared form is missing from the output");
+                    continue;
+                }
+                (void)decode_prepared_model(prepared->data(), prepared->size(), key);
                 continue;
             }
             const auto bytes = read_file_bytes(path);
@@ -458,8 +829,13 @@ CookReport cook(const CookOptions& options) {
                 (void)ParticleEffect::parse(text, key);
             } else if (extension == ".json" && key.starts_with(animations_folder)) {
                 (void)AnimationSet::parse(text, key);
+            } else if (key.ends_with(".prefab.json")) {
+                read_back_prefab(key, out_assets, registry, report);
             } else if (extension == ".json") {
-                (void)nlohmann::json::parse(text);
+                if (!is_cbor_document(text)) {
+                    report.errors.push_back("read-back: '" + key + "' is still JSON");
+                }
+                (void)parse_document(text);
             }
         } catch (const std::exception& e) {
             report.errors.push_back("read-back: " + std::string(e.what()));
@@ -475,7 +851,7 @@ CookReport cook(const CookOptions& options) {
         }
         try {
             const auto bytes = read_file_bytes(sources.at(credits).absolute);
-            const nlohmann::json doc = nlohmann::json::parse(bytes->begin(), bytes->end());
+            const nlohmann::json doc = parse_document(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
             for (const auto& [section, entries] : doc.items()) {
                 if (!entries.is_array()) {
                     continue;
@@ -512,7 +888,8 @@ CookReport cook(const CookOptions& options) {
 
     // Orphans: sources nothing ships (the tables' JSON excepted: they ship compiled).
     for (const auto& [key, source] : sources) {
-        if (!shipped.contains(key) && key != manifest_name && (data_folder.empty() || !key.starts_with(data_folder))) {
+        if (!shipped.contains(key) && key != manifest_name && !key.ends_with(".meta") &&
+            (data_folder.empty() || !key.starts_with(data_folder))) {
             report.orphans.push_back(key);
         }
     }
@@ -541,10 +918,16 @@ CookReport cook(const CookOptions& options) {
                     report.errors.push_back("cannot read '" + key + "' for the archive");
                     continue;
                 }
+                // A prepared model goes with its source's group (".imported/models/a.glb.mmdl" as "models/a.glb").
+                std::string source_key = key;
+                if (source_key.starts_with(".imported/") && source_key.ends_with(".mmdl")) {
+                    source_key = source_key.substr(10, source_key.size() - 15);
+                }
                 for (Group& group : groups) {
                     const bool match = shaders ? group.name == "common"
-                                               : std::any_of(group.globs.begin(), group.globs.end(),
-                                                             [&key](const std::string& glob) { return glob_match(glob, key); });
+                                               : std::any_of(group.globs.begin(), group.globs.end(), [&source_key](const std::string& glob) {
+                                                     return glob_match(glob, source_key);
+                                                 });
                     if (match) {
                         group.inputs.push_back({prefix + key, std::move(*bytes), archive_should_compress(key)});
                         break;

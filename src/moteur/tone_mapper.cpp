@@ -12,7 +12,7 @@ ToneMapper::ToneMapper(Renderer& renderer, SDL_GPUTextureFormat target_format) {
     vertex_info.stage = SDL_GPU_SHADERSTAGE_VERTEX;
     ShaderInfo fragment_info;
     fragment_info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
-    fragment_info.samplers = 1;         // the scene
+    fragment_info.samplers = 2;         // the scene, the ids (the outline)
     fragment_info.uniform_buffers = 1;  // exposure
 
     const GpuShader vertex_shader = renderer.load_shader("tonemap.vert", vertex_info);
@@ -41,15 +41,37 @@ ToneMapper::ToneMapper(Renderer& renderer, SDL_GPUTextureFormat target_format) {
 
     // Linear, clamped to the edges: scales a reduced render size up smoothly, without wrapping.
     sampler_ = renderer.create_sampler(SDL_GPU_FILTER_LINEAR, "tonemap.sampler");
+    id_sampler_ = renderer.create_sampler(SDL_GPU_FILTER_NEAREST, "tonemap.ids sampler");
+    // Bound when there is no id pass: never read (no outlined id), its content does not matter.
+    SDL_GPUTextureCreateInfo ids = {};
+    ids.type = SDL_GPU_TEXTURETYPE_2D;
+    ids.format = Renderer::kIdFormat;
+    ids.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    ids.width = 1;
+    ids.height = 1;
+    ids.layer_count_or_depth = 1;
+    ids.num_levels = 1;
+    SDL_GPUTexture* raw = SDL_CreateGPUTexture(renderer.device(), &ids);
+    if (raw == nullptr) {
+        throw std::runtime_error(std::string("SDL_CreateGPUTexture (no ids) failed: ") + SDL_GetError());
+    }
+    no_ids_ = GpuTexture(renderer.device(), raw, texture_memory_bytes(ids), texture_memory_kind(ids));
 }
 
 void ToneMapper::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass, SDL_GPUTexture* scene,
                         float exposure, bool raw) {
     SDL_BindGPUGraphicsPipeline(pass, pipeline_.get());
-    const SDL_GPUTextureSamplerBinding binding = {scene, sampler_.get()};
-    SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
-    const float settings[4] = {raw ? 1.0f : exposure, raw ? 1.0f : 0.0f, 0.0f, 0.0f};
-    SDL_PushGPUFragmentUniformData(commands, 0, settings, sizeof(settings));
+    const bool outlined = ids_ != nullptr && outline_id_ != 0;
+    const SDL_GPUTextureSamplerBinding bindings[2] = {{scene, sampler_.get()},
+                                                      {outlined ? ids_ : no_ids_.get(), id_sampler_.get()}};
+    SDL_BindGPUFragmentSamplers(pass, 0, bindings, 2);
+    const glm::vec4 uniforms[3] = {
+        glm::vec4(raw ? 1.0f : exposure, raw ? 1.0f : 0.0f, 0.0f, 0.0f),
+        outline_color_,
+        glm::vec4(outlined ? static_cast<float>(outline_id_) : 0.0f, thickness_, static_cast<float>(ids_size_.x),
+                  static_cast<float>(ids_size_.y)),
+    };
+    SDL_PushGPUFragmentUniformData(commands, 0, uniforms, sizeof(uniforms));
     SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
 }
 

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "moteur/nav_grid.hpp"
+#include "moteur/reflection.hpp"
 
 namespace moteur {
 
@@ -66,6 +67,7 @@ enum class PathStatus {
               ///< cell nearest to it
     None,     ///< the start itself is not usable (no cell within 2 cells of it fits the circle)
 };
+MOTEUR_REFLECT_ENUM(PathStatus, "found", "partial", "none");
 
 /// The circle a find_path() search is for, and its limits.
 struct PathOptions {

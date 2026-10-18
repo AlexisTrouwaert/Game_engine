@@ -1,5 +1,7 @@
 #include "moteur/map_data.hpp"
 
+#include "moteur/document.hpp"
+
 #include <SDL3/SDL.h>
 
 #include <nlohmann/json.hpp>
@@ -24,9 +26,9 @@ std::string quoted(char c) {
 MapData MapData::parse(std::string_view json_text, const std::string& source) {
     nlohmann::json json;
     try {
-        json = nlohmann::json::parse(json_text);
-    } catch (const nlohmann::json::exception& e) {
-        fail(source, std::string("invalid JSON: ") + e.what());
+        json = parse_document(json_text);
+    } catch (const std::runtime_error& e) {
+        fail(source, e.what());
     }
     MapData map;
     map.source_ = source;

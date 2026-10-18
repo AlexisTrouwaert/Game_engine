@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "moteur/assert.hpp"
 #include "moteur/tilemap.hpp"
 
 namespace moteur {
@@ -162,9 +163,11 @@ public:
     /// The legend, what an editor starts from (with cell_symbol()), in the order of its characters
     /// (the JSON keys, sorted).
     const std::vector<MapSymbol>& symbols() const { return symbols_; }
-    /// The symbol of a cell: its index in symbols(). `cell` must be inside the map (not checked).
+    /// The symbol of a cell: its index in symbols(). `cell` must be inside the map (asserted in the
+    /// development builds).
     std::uint8_t cell_symbol(glm::ivec2 cell) const {
-        // `cell` is inside the map: non-negative coordinates.
+        MOTEUR_ASSERT(cell.x >= 0 && cell.y >= 0 && cell.x < tiles_.width() && cell.y < tiles_.height(),
+                      "MapData::cell_symbol: cell outside the map");
         return cell_symbols_[static_cast<std::size_t>(cell.y) * static_cast<std::size_t>(tiles_.width()) +
                              static_cast<std::size_t>(cell.x)];
     }

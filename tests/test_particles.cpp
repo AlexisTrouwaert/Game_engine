@@ -107,6 +107,9 @@ TEST_CASE("A looping emitter emits at its rate until stopped; the budget refuses
 TEST_CASE("Every effect of assets/effects reads") {
     int effects = 0;
     for (const auto& entry : std::filesystem::directory_iterator(MOTEUR_SOURCE_ASSETS "effects")) {
+        if (entry.path().extension() != ".json") {
+            continue;  // their .meta files (milestone 9, part 4)
+        }
         CAPTURE(entry.path().filename().string());
         const moteur::ParticleEffect e = moteur::ParticleEffect::parse(read_text(entry.path()), entry.path().filename().string());
         for (const moteur::EmitterDesc& d : e.emitters()) {

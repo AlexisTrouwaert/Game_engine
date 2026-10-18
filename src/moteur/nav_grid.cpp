@@ -1,8 +1,15 @@
 #include "moteur/nav_grid.hpp"
 
+#include <algorithm>
+
 #include <stdexcept>
 
 namespace moteur {
+
+NavGrid::NavGrid(int width, int height)
+    : width_(std::max(width, 0)),
+      height_(std::max(height, 0)),
+      cells_(static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_), kOpaque) {}
 
 NavGrid::NavGrid(const TileMap& map, const Tileset& tileset)
     : width_(map.width()),

@@ -6,10 +6,12 @@
 namespace moteur {
 
 class ClearanceMap;
+class CollisionScene;
 class DebugLineBuffer;
 class FieldOfView;
 class FlowField;
 class NavGrid;
+class NavMesh;
 class Variable;
 class Variables;
 class World;
@@ -26,6 +28,10 @@ struct WorldDebugFlags {
     Variable* paths = nullptr;      ///< `debug.paths`: the points left on each path (movers in MoveMode::ToPoint)
     Variable* field = nullptr;      ///< `debug.flowfield`: arrows of the flow field
     Variable* view = nullptr;       ///< `debug.view`: cells in the field of view
+    /// `debug.collision`: the level's collision triangles near the centre (green: walkable, red: wall,
+    /// orange: obstacle, purple: void), and the colliders as capsules
+    Variable* collision = nullptr;
+    Variable* navmesh = nullptr;  ///< `debug.navmesh`: the navigation mesh's triangles near the centre
 
     /// Declares the variables in `variables` (once; again, as each scene does when it starts, gives
     /// the same ones back) and returns pointers to them.
@@ -42,6 +48,8 @@ struct WorldDebugSources {
     const ClearanceMap* clearance = nullptr;   ///< for the clearance overlay (needs #grid too)
     const FlowField* field = nullptr;          ///< for the flow field overlay (skipped while not valid)
     const FieldOfView* view = nullptr;         ///< for the field of view overlay
+    const CollisionScene* scene = nullptr;     ///< for the collision overlay (a 3D level)
+    const NavMesh* navmesh = nullptr;          ///< for the navigation mesh overlay
     entt::entity highlight = entt::null;  ///< drawn white (the hero)
 };
 

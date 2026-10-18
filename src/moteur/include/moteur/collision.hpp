@@ -7,7 +7,10 @@
 #include <optional>
 #include <vector>
 
+#include "moteur/character_controller.hpp"
+#include "moteur/collision_scene.hpp"
 #include "moteur/nav_grid.hpp"
+#include "moteur/reflection.hpp"
 #include "moteur/spatial_hash.hpp"
 
 namespace moteur {
@@ -34,7 +37,18 @@ struct Collider {
     int push_weight = 1;
     /// false: walls do not stop it (a ghost); other colliders still do, as their masks say.
     bool blocked_by_walls = true;
+    /// In a 3D level: the capsule's height from the feet, metres; two colliders push each other only
+    /// where their heights overlap (one on a bridge, one under it do not). Unused on a NavGrid.
+    float height = 1.8f;
 };
+MOTEUR_REFLECT(Collider,
+    MOTEUR_FIELD(radius, {.min = 0.0, .max = 100.0, .unit = "m", .flags = kFieldDefault | kFieldLogic}),
+    MOTEUR_FIELD(layer, {.doc = "what it is (bits)", .flags = kFieldDefault | kFieldLogic}),
+    MOTEUR_FIELD(mask, {.doc = "what it collides with (bits)", .flags = kFieldDefault | kFieldLogic}),
+    MOTEUR_FIELD(push_weight, {.min = 0.0, .doc = "who gives way: 0 never moves", .flags = kFieldDefault | kFieldLogic}),
+    MOTEUR_FIELD(blocked_by_walls, {.flags = kFieldDefault | kFieldLogic}),
+    MOTEUR_FIELD(height, {.min = 0.0, .max = 100.0, .unit = "m", .doc = "3D: the capsule's height",
+                          .flags = kFieldDefault | kFieldLogic}));
 
 /// True if the circle touches no blocked cell (nor the outside of the grid). Positions and radii of
 /// these functions are in metres on the ground plane, one NavGrid cell per metre; exactly touching a
@@ -86,6 +100,13 @@ struct CollisionStats {
 /// list of the colliders. Returns its statistics.
 CollisionStats separate_colliders(entt::registry& registry, const NavGrid& grid, SpatialHash& hash,
                                   const SeparationSettings& settings = {});
+
+/// The collision system of a tick in a 3D level: as the NavGrid version, but colliders push each other
+/// only where their heights overlap (from the Transform's y, Collider::height up), and are pushed out
+/// of the level's walls on the plane (push_out_of_level()). Fills `hash` with every collider (its
+/// height span with it, for the queries). Same rules of order and threads.
+CollisionStats separate_colliders(entt::registry& registry, const CollisionScene& scene, SpatialHash& hash,
+                                  const SeparationSettings& settings = {}, const ControllerSettings& controller = {});
 
 /// The plane position of an entity's Transform: its (x, z), in metres. The entity must have a
 /// Transform (undefined behaviour otherwise, as for entt's `registry.get`).

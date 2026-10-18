@@ -1,6 +1,8 @@
 #include "moteur/billboard_renderer.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cstddef>
 #include <cstring>
 #include <stdexcept>
@@ -8,6 +10,7 @@
 #include <vector>
 
 #include "moteur/camera3d.hpp"
+#include "moteur/image.hpp"
 #include "moteur/mesh_renderer.hpp"
 
 namespace moteur {
@@ -75,6 +78,29 @@ BillboardRenderer::BillboardRenderer(Renderer& renderer, SDL_GPUTextureFormat co
     ensure_capacity(kInitialCapacity);
 
     create_pipeline(SDL_GPU_SAMPLECOUNT_1);
+
+    // The glow of the halos (LightHalo): a bright core falling off like a lens glow, zero at the edge.
+    constexpr int kGlow = 128;
+    Image image;
+    image.width = kGlow;
+    image.height = kGlow;
+    image.pixels.resize(static_cast<std::size_t>(kGlow) * kGlow * 4);
+    for (int y = 0; y < kGlow; ++y) {
+        for (int x = 0; x < kGlow; ++x) {
+            const float dx = (static_cast<float>(x) + 0.5f) / kGlow * 2.0f - 1.0f;
+            const float dy = (static_cast<float>(y) + 0.5f) / kGlow * 2.0f - 1.0f;
+            const float r = std::min(1.0f, std::sqrt(dx * dx + dy * dy));
+            const float falloff = (1.0f - r) * (1.0f - r);
+            const float value = std::clamp(0.35f * falloff + 0.65f * falloff * falloff * falloff, 0.0f, 1.0f);
+            std::uint8_t* p = &image.pixels[(static_cast<std::size_t>(y) * kGlow + static_cast<std::size_t>(x)) * 4];
+            p[0] = p[1] = p[2] = 255;
+            p[3] = static_cast<std::uint8_t>(std::lround(value * 255.0f));
+        }
+    }
+    TextureSettings settings;
+    settings.srgb = true;
+    settings.mipmaps = true;
+    glow_ = std::make_unique<Texture>(renderer.create_texture(image, settings, "billboard.glow"));
 }
 
 void BillboardRenderer::create_pipeline(SDL_GPUSampleCount samples) {

@@ -47,7 +47,7 @@ TEST_CASE("A world's persistent entities round-trip, references included") {
     moteur::Mover mover;
     mover.speed = 3.25f;
     mover.go_to({9.5f, 4.5f});
-    mover.path = {{2.0f, 3.0f}, {9.5f, 4.5f}};
+    mover.path = {{2.0f, 0.0f, 3.0f}, {9.5f, 0.0f, 4.5f}};
     mover.needs_path = false;
     mover.next_point = 1;
     mover.facing = {0.6f, 0.8f};
@@ -169,7 +169,7 @@ TEST_CASE("Enumerations are saved by name; numbers from older saves are still re
     const nlohmann::json& written = saved[0]["c"]["mover"];
     CHECK(written["mode"] == "to_point");
     CHECK(written["state"] == "blocked");
-    CHECK(written["status"] == "partial");
+    CHECK(written["path_status"] == "partial");  // "status" until milestone 9 (still read)
 
     const auto load = [&s](const nlohmann::json& records, std::vector<std::string>& problems) {
         entt::registry target;
@@ -187,7 +187,7 @@ TEST_CASE("Enumerations are saved by name; numbers from older saves are still re
     // A save of milestone 7 wrote numbers.
     saved[0]["c"]["mover"]["mode"] = 1;
     saved[0]["c"]["mover"]["state"] = 4;
-    saved[0]["c"]["mover"]["status"] = 1;
+    saved[0]["c"]["mover"]["path_status"] = 1;
     const moteur::Mover by_number = load(saved, problems);
     CHECK(problems.empty());
     CHECK(by_number.mode == moteur::MoveMode::ToPoint);

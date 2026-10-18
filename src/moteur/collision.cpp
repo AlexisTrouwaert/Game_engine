@@ -218,25 +218,28 @@ glm::vec2 plane_position(const entt::registry& registry, entt::entity entity) {
     return {p.x, p.z};
 }
 
-CollisionStats separate_colliders(entt::registry& registry, const NavGrid& grid, SpatialHash& hash,
-                                  const SeparationSettings& settings) {
-    MOTEUR_PROFILE("collisions");
-    struct Item {
-        entt::entity entity;
-        glm::vec2 position;
-        glm::vec2 start;
-        Collider collider;
-    };
-    std::vector<Item> items;
+namespace {
+
+struct Item {
+    entt::entity entity;
+    glm::vec3 position;
+    glm::vec3 start;
+    Collider collider;
+};
+
+// The colliders sorted by identifier, entered in `hash` (with their heights when `heights`), then
+// pushed apart in pairs whose heights overlap (when `heights`).
+CollisionStats push_apart(entt::registry& registry, SpatialHash& hash, const SeparationSettings& settings, bool heights,
+                          std::vector<Item>& items) {
     for (const auto& [entity, transform, collider] : registry.view<Transform, Collider>().each()) {
-        const glm::vec2 p(transform.position.x, transform.position.z);
-        items.push_back({entity, p, p, collider});
+        items.push_back({entity, transform.position, transform.position, collider});
     }
     std::sort(items.begin(), items.end(),
               [](const Item& a, const Item& b) { return entt::to_integral(a.entity) < entt::to_integral(b.entity); });
     hash.clear();
     for (const Item& item : items) {
-        hash.insert(item.entity, item.position, item.collider.radius, item.collider.layer);
+        hash.insert(item.entity, {item.position.x, item.position.z}, item.collider.radius, item.collider.layer,
+                    heights ? HeightSpan{item.position.y, item.position.y + item.collider.height} : HeightSpan{});
     }
 
     CollisionStats stats;
@@ -246,7 +249,8 @@ CollisionStats separate_colliders(entt::registry& registry, const NavGrid& grid,
         for (std::size_t i = 0; i < items.size(); ++i) {
             Item& a = items[i];
             const float reach_box = a.collider.radius + 0.25f;
-            hash.candidates(a.start - glm::vec2(reach_box), a.start + glm::vec2(reach_box), near);
+            const glm::vec2 a_start(a.start.x, a.start.z);
+            hash.candidates(a_start - glm::vec2(reach_box), a_start + glm::vec2(reach_box), near);
             std::sort(near.begin(), near.end());
             for (const std::uint32_t j : near) {
                 if (j <= i) {
@@ -256,13 +260,17 @@ CollisionStats separate_colliders(entt::registry& registry, const NavGrid& grid,
                 if ((a.collider.layer & b.collider.mask) == 0 || (b.collider.layer & a.collider.mask) == 0) {
                     continue;
                 }
+                if (heights && (a.position.y > b.position.y + b.collider.height ||
+                                b.position.y > a.position.y + a.collider.height)) {
+                    continue;  // one above the other (a bridge and what is under it)
+                }
                 const int wa = a.collider.push_weight;
                 const int wb = b.collider.push_weight;
                 if (wa <= 0 && wb <= 0) {
                     continue;
                 }
                 ++stats.pairs_tested;
-                glm::vec2 d = b.position - a.position;
+                glm::vec2 d(b.position.x - a.position.x, b.position.z - a.position.z);
                 const float reach = a.collider.radius + b.collider.radius;
                 const float distance2 = glm::dot(d, d);
                 if (distance2 >= reach * reach) {
@@ -286,23 +294,57 @@ CollisionStats separate_colliders(entt::registry& registry, const NavGrid& grid,
                     share_a = static_cast<float>(wb) / static_cast<float>(wa + wb);
                     share_b = 1.0f - share_a;
                 }
-                a.position -= d * (overlap * share_a);
-                b.position += d * (overlap * share_b);
+                a.position.x -= d.x * (overlap * share_a);
+                a.position.z -= d.y * (overlap * share_a);
+                b.position.x += d.x * (overlap * share_b);
+                b.position.z += d.y * (overlap * share_b);
             }
         }
     }
+    return stats;
+}
 
-    for (Item& item : items) {
-        if (item.collider.blocked_by_walls) {
-            item.position = push_out_of_walls(grid, item.position, item.collider.radius);
-        }
+void write_moved(entt::registry& registry, const std::vector<Item>& items) {
+    for (const Item& item : items) {
         if (item.position != item.start) {
             registry.patch<Transform>(item.entity, [&item](Transform& t) {
                 t.position.x = item.position.x;
-                t.position.z = item.position.y;
+                t.position.z = item.position.z;
             });
         }
     }
+}
+
+}  // namespace
+
+CollisionStats separate_colliders(entt::registry& registry, const NavGrid& grid, SpatialHash& hash,
+                                  const SeparationSettings& settings) {
+    MOTEUR_PROFILE("collisions");
+    std::vector<Item> items;
+    const CollisionStats stats = push_apart(registry, hash, settings, false, items);
+    for (Item& item : items) {
+        if (item.collider.blocked_by_walls) {
+            const glm::vec2 out = push_out_of_walls(grid, {item.position.x, item.position.z}, item.collider.radius);
+            item.position.x = out.x;
+            item.position.z = out.y;
+        }
+    }
+    write_moved(registry, items);
+    return stats;
+}
+
+CollisionStats separate_colliders(entt::registry& registry, const CollisionScene& scene, SpatialHash& hash,
+                                  const SeparationSettings& settings, const ControllerSettings& controller) {
+    MOTEUR_PROFILE("collisions");
+    std::vector<Item> items;
+    const CollisionStats stats = push_apart(registry, hash, settings, true, items);
+    for (Item& item : items) {
+        if (item.collider.blocked_by_walls && item.position != item.start) {
+            const CharacterShape shape{item.collider.radius, std::max(item.collider.height, item.collider.radius * 2.0f)};
+            item.position = push_out_of_level(scene, item.position, shape, controller);
+        }
+    }
+    write_moved(registry, items);
     return stats;
 }
 

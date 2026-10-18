@@ -1,0 +1,20 @@
+{
+  "_": "How bac_a_sable --migrate-map turns maps/tranche.json into levels/tranche_migree.level.json (milestone 9, part 8)",
+  "ground_tile": "sol",
+  "ground_prefab": "prefabs/blockout/floor.prefab.json",
+  "tiles": {
+    "mur": "prefabs/blockout/wall.prefab.json",
+    "brasero": "prefabs/blockout/pillar.prefab.json",
+    "lampadaire": "prefabs/blockout/pillar.prefab.json"
+  },
+  "objects": {
+    "rocher": "prefabs/blockout/crate.prefab.json",
+    "caisse": "prefabs/blockout/crate.prefab.json",
+    "tonneau": "prefabs/blockout/crate.prefab.json",
+    "arbre": "prefabs/blockout/pillar.prefab.json"
+  },
+  "chunk_size": 32,
+  "object_points": [
+    "monstre"
+  ]
+}

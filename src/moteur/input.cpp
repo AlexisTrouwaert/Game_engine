@@ -1,5 +1,7 @@
 #include "moteur/input.hpp"
 
+#include "moteur/document.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -277,9 +279,9 @@ bool Input::is_axis(ActionId action) const {
 void Input::parse_profiles(std::string_view json_text, const std::string& source_name, bool user) {
     nlohmann::json doc;
     try {
-        doc = nlohmann::json::parse(json_text);
-    } catch (const nlohmann::json::exception& e) {
-        throw std::runtime_error("Bindings '" + source_name + "': invalid JSON: " + e.what());
+        doc = parse_document(json_text);
+    } catch (const std::runtime_error& e) {
+        throw std::runtime_error("Bindings '" + source_name + "': " + e.what());
     }
     try {
         if (doc.at("version").get<int>() != 1) {

@@ -8,10 +8,21 @@ add_library(tranche_commun STATIC sandbox_data.cpp map_objects.cpp demo3d.cpp st
 target_link_libraries(tranche_commun PUBLIC moteur nlohmann_json::nlohmann_json)
 target_include_directories(tranche_commun PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 moteur_enable_warnings(tranche_commun)
+# The ARPG's assets (milestone 9, part 4): its cobblestones and its street lamp's prefab, the same
+# files as the game's, read in place in development (ApplicationConfig::asset_folders) and cooked
+# into the slice's package. Optional: without the game's folder next to the engine's, the slice has
+# its checkered floor and plain posts.
+get_filename_component(MOTEUR_ARPG_ASSETS "${PROJECT_SOURCE_DIR}/../ARPG/assets" ABSOLUTE)
+if(NOT EXISTS "${MOTEUR_ARPG_ASSETS}")
+    set(MOTEUR_ARPG_ASSETS "")
+endif()
 if(NOT MOTEUR_SHIPPING)
     # Hot reload of the assets while developing (see Assets::enable_hot_reload; --no-hot-reload), and
     # where the editor writes the maps.
     target_compile_definitions(tranche_commun PUBLIC MOTEUR_ASSETS_SOURCE_DIR="${PROJECT_SOURCE_DIR}/assets")
+    if(MOTEUR_ARPG_ASSETS)
+        target_compile_definitions(tranche_commun PUBLIC MOTEUR_ARPG_ASSETS_DIR="${MOTEUR_ARPG_ASSETS}/")
+    endif()
 endif()
 
 if(NOT MOTEUR_BUILD_SLICE)
@@ -33,4 +44,4 @@ moteur_enable_warnings(tranche_cook)
 # The players' packages (shipping configuration, preset windows-shipping / macos-shipping):
 # cmake --build build/windows-shipping --target tranche_package (cmake/Package.cmake).
 moteur_package(tranche MANIFEST "${PROJECT_SOURCE_DIR}/assets/livraison_tranche.json" COOK_TOOL tranche_cook
-               IDENTIFIER org.moteur.tranche)
+               IDENTIFIER org.moteur.tranche ASSET_FOLDERS ${MOTEUR_ARPG_ASSETS})

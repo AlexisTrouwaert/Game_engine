@@ -21,6 +21,10 @@
 #include <vector>
 
 #include "moteur/application.hpp"
+#include "moteur/file_io.hpp"
+#include "moteur/map_data.hpp"
+#include "moteur/level.hpp"
+#include "moteur/assets.hpp"
 #include "camera2d.hpp"
 #include "iso.hpp"
 #include "sprite_animation.hpp"
@@ -49,7 +53,10 @@
 #include "states_demo.hpp"
 #include "animation_test.hpp"
 #include "sandbox_data.hpp"
+#include "level3d_test.hpp"
+#include "level_stream_test.hpp"
 #include "world_test.hpp"
+#include "level_editor.hpp"
 #include "map_editor.hpp"
 #include "audio_test.hpp"
 
@@ -1696,6 +1703,17 @@ public:
              "redo, checks (unreachable cells...), saving into the sources, and F5 to test "
              "the map in the 'World' scene. Also a program of its own: editeur.",
              TestKind::Editor, {}, {}},
+            {"Level 3D",
+             "The logic in 3D (milestone 9, part 5) on a blocked-out level: stairs up to a platform, a "
+             "bridge over a passage, ramps, a ledge, a low ceiling. Click: go to the pointed point; keys: "
+             "walk (slides on the walls, climbs steps, falls from ledges). Walkers on the bridge and under it. "
+             "The overlay debug.collision shows the triangles by kind and the capsules.",
+             TestKind::Level3D, {}, {}},
+            {"Level editor",
+             "The levels of version 3 (milestone 9, part 10): the asset library with thumbnails, placing "
+             "prefabs with handles and snapping, painting the ground, the lights' fields, the level's lighting "
+             "(day and night), the navigation built again live; F5 tries the level. Also: editeur --level.",
+             TestKind::LevelEditor, {}, {}},
         };
         if (launch_test >= 0 && launch_test < static_cast<int>(tests_.size())) {
             request(Action::Launch, launch_test);
@@ -1763,7 +1781,8 @@ public:
 private:
     enum class Screen { Home, Tests, Running };
     enum class Action { None, ShowHome, ShowTests, Launch };
-    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare, States, Audio, Animation, World, Editor };
+    enum class TestKind { Sprites, Iso, Atlas, Text, Demo, Render3D, Demo3D, BlenderCompare, States, Audio, Animation, World, Editor, Level3D,
+                          LevelEditor };
 
     struct TestEntry {
         const char* name;
@@ -1811,10 +1830,14 @@ private:
                         WorldTest::Options world;
                         world.map = world_map_;
                         next = std::make_unique<WorldTest>(app_, world, false);
+                    } else if (test.kind == TestKind::Level3D) {
+                        next = std::make_unique<Level3DTest>(app_, Level3DTest::Options{}, false);
                     } else if (test.kind == TestKind::Editor) {
                         MapEditor::Options editor;
                         editor.map = world_map_;
                         next = std::make_unique<MapEditor>(app_, editor, false);
+                    } else if (test.kind == TestKind::LevelEditor) {
+                        next = std::make_unique<LevelEditor>(app_, LevelEditor::Options{}, false);
                     } else if (test.kind == TestKind::Animation) {
                         next = std::make_unique<AnimationTest>(app_, AnimationTest::Options{}, false);
                     } else if (test.kind == TestKind::States) {
@@ -2167,8 +2190,15 @@ int main(int argc, char** argv) {
     std::vector<std::string> startup_commands;  // --exec FILE, +set NAME VALUE: console lines at the start
     bool check_data = false;          // --check-data: load and check every table, print, exit
     std::string compile_data;         // --compile-data DIR: write the tables' binary form into DIR
+    std::string write_schemas;        // --write-schemas DIR: write the JSON schema of each described table into DIR
+    bool import_assets = false;       // --import-assets: import every model whose prepared form is out of date, exit
+    std::vector<std::string> migrate_map;  // --migrate-map MAP OUTPUT RULES: a map of version 1 or 2 into a level, exit
     std::string compiled_data;        // --compiled-data DIR: read the tables from their binary form
     bool world_standalone = false;  // --world-auto or --world-crowd N: the "Monde" test without the menu
+    bool level3d_standalone = false;  // --level3d-auto: the "Level 3D" test without the menu
+    int level3d_crowd = 0;            // --level3d-crowd N
+    bool level_stream = false;        // --level-stream: the "Level streaming" test without the menu
+    std::string level_stream_key;     // --level KEY
     bool editor_standalone = false;  // --editeur [map]: the map editor without the menu
     bool editor_top = false;
     WorldTest::Options world_options;
@@ -2303,6 +2333,10 @@ int main(int argc, char** argv) {
         } else if (arg == "--slice") {  // the 3D demo as the playable slice, without the menus around it
             demo3d = true;
             demo3d_options.hero = true;
+        } else if (arg == "--slice-map") {  // the slice on the map of milestones 6 and 7, not its level
+            demo3d = true;
+            demo3d_options.hero = true;
+            demo3d_options.slice_map = true;
         } else if (arg == "--mesure" && has_one) {  // a measurement scene of the slice (milestone 8, part 4)
             demo3d = true;
             demo3d_options.hero = true;
@@ -2389,6 +2423,13 @@ int main(int argc, char** argv) {
             check_data = true;
         } else if (arg == "--compile-data" && has_one) {
             compile_data = argv[++i];
+        } else if (arg == "--write-schemas" && has_one) {
+            write_schemas = argv[++i];
+        } else if (arg == "--import-assets") {
+            import_assets = true;
+        } else if (arg == "--migrate-map" && i + 3 < argc) {
+            migrate_map = {argv[i + 1], argv[i + 2], argv[i + 3]};
+            i += 3;
         } else if (arg == "--compiled-data" && has_one) {
             compiled_data = argv[++i];
         } else if (arg == "--report") {
@@ -2404,6 +2445,19 @@ int main(int argc, char** argv) {
         } else if (arg == "--animation") {  // the "Animation" test (milestone 5): --menu-test 10
             menu = true;
             menu_test = 10;
+        } else if (arg == "--level3d") {  // the "Level 3D" test (milestone 9, part 5): --menu-test 13
+            menu = true;
+            menu_test = 13;
+        } else if (arg == "--level3d-auto") {  // the same alone, the hero on its tour (for captures)
+            level3d_standalone = true;
+        } else if (arg == "--level-stream") {  // the "Level streaming" test (milestone 9, part 8), alone
+            level_stream = true;
+        } else if (arg == "--level" && has_one) {  // with --level-stream: a level of the assets instead of the generated one
+            level_stream = true;
+            level_stream_key = argv[++i];
+        } else if (arg == "--level3d-crowd" && has_one) {  // alone, N monsters chasing the hero (part 6's load test)
+            level3d_standalone = true;
+            level3d_crowd = std::atoi(argv[++i]);
         } else if (arg == "--world") {  // the "Monde" test (milestone 6): --menu-test 11 [map]
             menu = true;
             menu_test = 11;
@@ -2444,6 +2498,98 @@ int main(int argc, char** argv) {
 
     try {
         // The data tables, checked or compiled without opening a window (milestone 7, part 2).
+        if (!migrate_map.empty()) {
+            // A map of milestones 6 and 7 into a level of version 3 (milestone 9, part 8), without a
+            // window: MAP and RULES are asset keys, OUTPUT a file; references written by identifier.
+            std::vector<std::string> roots;
+#ifdef MOTEUR_ASSETS_SOURCE_DIR
+            roots.emplace_back(MOTEUR_ASSETS_SOURCE_DIR "/");
+#else
+            roots.push_back(moteur::asset_path(""));
+#endif
+#if defined(MOTEUR_ARPG_ASSETS_DIR)
+            moteur::mount_asset_folder(MOTEUR_ARPG_ASSETS_DIR);
+            roots.emplace_back(MOTEUR_ARPG_ASSETS_DIR);
+#endif
+            moteur::AssetRegistry registry;
+            (void)registry.scan(roots, true);
+            try {
+                const moteur::MapData map = moteur::MapData::parse(moteur::read_text_file(moteur::asset_path(migrate_map[0])), migrate_map[0]);
+                const nlohmann::json rules_json = nlohmann::json::parse(moteur::read_text_file(moteur::asset_path(migrate_map[2])));
+                moteur::MapMigration rules;
+                rules.ground_tile = rules_json.value("ground_tile", std::string());
+                rules.ground_prefab = rules_json.value("ground_prefab", std::string());
+                rules.tiles = rules_json.value("tiles", std::map<std::string, std::string>{});
+                rules.objects = rules_json.value("objects", std::map<std::string, std::string>{});
+                rules.object_points = rules_json.value("object_points", std::vector<std::string>{});
+                rules.chunk_size = rules_json.value("chunk_size", 32.0f);
+                moteur::DataIssues issues;
+                const moteur::LevelDocument level = moteur::migrate_map(map, rules, issues);
+                for (const moteur::DataIssue& issue : issues.all()) {
+                    std::cout << issue.where << ": " << issue.message << '\n';
+                }
+                const nlohmann::json json = level.to_json([&registry](const std::string& key) -> nlohmann::json {
+                    if (const moteur::AssetRecord* record = registry.find(key)) {
+                        return {{"id", record->id.text()}, {"path", key}};
+                    }
+                    return key;
+                });
+                std::string error;
+                if (!moteur::write_file_atomic(migrate_map[1], json.dump(2) + "\n", error)) {
+                    std::cerr << error << '\n';
+                    return 1;
+                }
+                std::cout << migrate_map[0] << " -> " << migrate_map[1] << ": " << level.instances.size() << " instances, "
+                          << level.points.size() << " points, " << level.volumes.size() << " volumes\n";
+                return 0;
+            } catch (const std::exception& e) {
+                std::cerr << e.what() << '\n';
+                return 1;
+            }
+        }
+        if (import_assets) {
+            // The import of the assets (milestone 9, part 4) without a window: the registry of the
+            // folders the programs read (their sources, the engine's, the ARPG's mounted), then
+            // every model whose prepared form is out of date, in parallel.
+            std::vector<std::string> roots;
+#ifdef MOTEUR_ASSETS_SOURCE_DIR
+            roots.emplace_back(MOTEUR_ASSETS_SOURCE_DIR "/");
+#else
+            roots.push_back(moteur::asset_path(""));
+#endif
+#if defined(MOTEUR_ARPG_ASSETS_DIR)
+            moteur::mount_asset_folder(MOTEUR_ARPG_ASSETS_DIR);
+            roots.emplace_back(MOTEUR_ARPG_ASSETS_DIR);
+#endif
+            moteur::AssetRegistry registry;
+            (void)registry.scan(roots, true);
+            std::size_t failures = 0;
+#ifdef MOTEUR_ASSETS_SOURCE_DIR
+            const std::string cache = moteur::import_cache_folder(MOTEUR_ASSETS_SOURCE_DIR);
+#else
+            const std::string cache = moteur::asset_path(".imported/");
+#endif
+            for (const std::string& line : moteur::Assets::import_all(moteur::asset_path(""), cache, registry, failures)) {
+                std::cout << line << '\n';
+            }
+            std::cout << (failures == 0 ? "assets imported" : "import failed") << '\n';
+            return failures == 0 ? 0 : 1;
+        }
+        if (!write_schemas.empty()) {
+            moteur::DataTables tables;
+            register_sandbox_tables(tables);
+            if (write_schemas.back() != '/' && write_schemas.back() != '\\') {
+                write_schemas += '/';
+            }
+            std::size_t count = 0;
+            std::string error;
+            if (!tables.write_schemas(write_schemas, count, error)) {
+                std::cerr << "cannot write the schemas: " << error << '\n';
+                return 1;
+            }
+            std::cout << count << " schema(s) written into " << write_schemas << '\n';
+            return 0;
+        }
         if (check_data || !compile_data.empty()) {
             moteur::DataTables tables;
             register_sandbox_tables(tables);
@@ -2479,6 +2625,9 @@ int main(int argc, char** argv) {
         config.pixel_height = pixel_size.y;
         config.startup_commands = startup_commands;
         config.replay_start = replay_start;
+#if defined(MOTEUR_ARPG_ASSETS_DIR)
+        config.asset_folders.push_back(MOTEUR_ARPG_ASSETS_DIR);  // the slice's ARPG assets (see apps/tranche)
+#endif
 #ifdef MOTEUR_ASSETS_SOURCE_DIR
         // Development: the assets edited in the source tree are reloaded while the program runs.
         if (hot_reload && std::filesystem::is_directory(std::filesystem::path(u8"" MOTEUR_ASSETS_SOURCE_DIR))) {
@@ -2553,6 +2702,27 @@ int main(int argc, char** argv) {
             editor_options.top_view = editor_top;
             MapEditor editor(app, editor_options, true);
             app.run(editor);
+            return 0;
+        }
+        if (level_stream) {
+            LevelStreamTest::Options stream_options;
+            stream_options.run_seconds = options.run_seconds;
+            stream_options.level = level_stream_key;
+            stream_options.capture_path = options.capture_path;
+            stream_options.freeze_after_ticks = options.freeze_after_ticks;
+            LevelStreamTest stream(app, stream_options, true);
+            app.run(stream);
+            return 0;
+        }
+        if (level3d_standalone) {
+            Level3DTest::Options level_options;
+            level_options.autopilot = level3d_crowd == 0;
+            level_options.crowd = level3d_crowd;
+            level_options.run_seconds = options.run_seconds;
+            level_options.capture_path = options.capture_path;
+            level_options.freeze_after_ticks = options.freeze_after_ticks;
+            Level3DTest level(app, level_options, true);
+            app.run(level);
             return 0;
         }
         if (world_standalone) {

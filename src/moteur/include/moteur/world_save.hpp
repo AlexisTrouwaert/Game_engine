@@ -7,11 +7,14 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include "moteur/component_types.hpp"
 
 namespace moteur {
 
@@ -107,6 +110,24 @@ public:
         entries_.push_back(std::move(entry));
         known_.insert(entt::type_id<T>().hash());
     }
+    /// A described component registered in component_types() (milestone 9, part 3), saved by its
+    /// description: the fields flagged kFieldSave, entities by persistent identifier (an
+    /// identifier missing from the save is a problem), its older forms read through
+    /// ComponentType::upgrade. Under the type's name. Adding a type already added replaces it.
+    void add_reflected(const ComponentType& type);
+    /// The same for `T`, registered in component_types() under `name` if it is not yet.
+    template <typename T>
+    void add_reflected(std::string name) {
+        add_reflected(component_types().add<T>(std::move(name)));
+    }
+    /// The data tables the DataRef fields of described components are bound to when a save is read
+    /// (a row missing from the table is a problem of that component). Null (the default): such
+    /// fields are read as identifiers only. Must outlive the serializers' use.
+    void set_tables(const DataTables* tables) { *tables_ = tables; }
+
+    /// Every type of component_types() not added nor ignored yet that has something to save (a field
+    /// flagged kFieldSave, or a tag), by its description.
+    void add_registered();
     /// A component the game rebuilds and never saves (a model, a mesh, a cached pose): no longer
     /// reported by unknown_components().
     template <typename T>
@@ -114,12 +135,12 @@ public:
         known_.insert(entt::type_id<T>().hash());
     }
 
-    /// The engine's components, under these keys: Transform (`transform`), Name (`name`), Hidden
-    /// (`hidden`), Parent (`parent`, by persistent identifier: a parent missing from the save is a
-    /// problem), BoneAttachment (`bone_attachment`), LightSource (`light`), Collider (`collider`),
-    /// Mover (`mover`, its enumerations by name; the numbers of older development saves still
-    /// read) and Animator (`animator`, Animator::save_state(): the Spawn function must create the
-    /// Animator, whose state is then loaded into it). PersistentId and PreviousTransform are handled
+    /// The engine's components: those of ComponentTypes::add_engine_components() by their
+    /// description (add_reflected(): Transform `transform`, Name `name`, Hidden `hidden`, Parent
+    /// `parent` by persistent identifier, BoneAttachment `bone_attachment`, LightSource `light`,
+    /// Collider `collider`, Mover `mover`, enumerations by name; the forms written before milestone
+    /// 9 still read), and Animator (`animator`, Animator::save_state(): the Spawn function must
+    /// create the Animator, whose state is then loaded into it). PersistentId and PreviousTransform are handled
     /// by save() and load() themselves; MeshComponent, ModelComponent, Billboard and AnimationPose are
     /// ignored (rebuilt). Call once.
     void add_engine_components();
@@ -152,6 +173,8 @@ private:
     };
     std::vector<Entry> entries_;
     std::unordered_set<entt::id_type> known_;
+    /// Shared with the readers made by add_reflected(), so that copies of the serializers keep it.
+    std::shared_ptr<const DataTables*> tables_ = std::make_shared<const DataTables*>(nullptr);
 };
 
 /// Helpers for serializers: GLM values as JSON arrays of numbers (floats written exactly, so a

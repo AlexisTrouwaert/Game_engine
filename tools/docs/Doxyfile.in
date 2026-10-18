@@ -63,7 +63,9 @@ GENERATE_XML           = NO
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
-PREDEFINED             = MOTEUR_DOXYGEN
+PREDEFINED             = MOTEUR_DOXYGEN                          "MOTEUR_REFLECT(...)="                          "MOTEUR_REFLECT_NAMED(...)="                          "MOTEUR_REFLECT_ENUM(...)="
+# The reflection's implementation details (reflection.hpp) are not part of the reference.
+EXCLUDE_SYMBOLS        = moteur::reflection_detail moteur::reflection_detail::* moteur::component_detail
 SEARCH_INCLUDES        = NO
 HAVE_DOT               = NO
 CLASS_GRAPH            = YES

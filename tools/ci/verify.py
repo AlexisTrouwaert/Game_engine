@@ -1,7 +1,7 @@
 """The engine's verification, the same steps a hosted CI will run (milestone 8, part 2), in one command:
 
     python tools/ci/verify.py [--quick] [--configs debug,release] [--no-references] [--no-msl]
-                              [--no-example] [--no-analysis] [--no-asan] [--no-docs] [--no-package]
+                              [--no-example] [--no-analysis] [--no-asan] [--no-tsan] [--no-docs] [--no-package]
                               [--keep-going]
 
 For each configuration (default: debug and release; --quick: release only), on this OS:
@@ -18,10 +18,13 @@ then, once:
 6. Windows: export the MSL shaders and fail if they differ from the committed ones (a shader changed
    without exporting its MSL breaks the Mac build; skipped by --no-msl);
 7. the reference captures, the exactness test of the saves and the editor's self-test
-   (tools/tests/check_references.py on the release build; skipped by --no-references);
+   (tools/tests/check_references.py on the release build), then the error policy of the main loop
+   (tools/tests/check_error_policy.py: a GPU failure inside a frame, an exception in the game's
+   update); skipped by --no-references;
 8. the static analysis of the project's code (tools/ci/static_analysis.py, clang-tidy with
    .clang-tidy, on the release build): any warning fails (skipped by --no-analysis);
-9. the unit tests built with AddressSanitizer (preset <os>-asan) and run (skipped by --no-asan);
+9. the unit tests built with AddressSanitizer (preset <os>-asan) and run (skipped by --no-asan); on
+   macOS, also with ThreadSanitizer (preset macos-tsan: the frame's jobs; skipped by --no-tsan);
 10. the API reference: Doxygen on the public headers, any warning fails (tools/docs/check_docs.py;
     skipped by --no-docs);
 11. the shipping configuration (preset <os>-shipping) built with the slice's package (installer and
@@ -139,6 +142,9 @@ def prepare_environment():
         if folder:
             environment[key] = folder + os.pathsep + environment.get(key, "")
     environment["VCPKG_ROOT"] = vcpkg_root()
+    # The programs the checks run open their windows on the second screen (the first one stays the
+    # developer's); a machine with one screen falls back to it (ApplicationConfig::window_display).
+    environment.setdefault("MOTEUR_WINDOW_DISPLAY", "1")
     return environment
 
 
@@ -285,6 +291,19 @@ def asan_steps(steps, environment):
         ["ctest", "--test-dir", build, "--output-on-failure"], environment))
 
 
+def tsan_steps(steps, environment):
+    """The unit tests under ThreadSanitizer (milestone 9, part 9: the frame's work over the cores).
+    Clang only: macOS (MSVC has no ThreadSanitizer)."""
+    preset = "macos-tsan"
+    build = os.path.join(ROOT, "build", preset)
+    steps.run(f"{preset}: configure", lambda: command(
+        ["cmake", "--preset", preset, "-DMOTEUR_WARNINGS_AS_ERRORS=ON"], environment))
+    steps.run(f"{preset}: build the tests", lambda: command(
+        ["cmake", "--build", build, "--target", "moteur_tests"], environment))
+    steps.run(f"{preset}: unit tests", lambda: command(
+        ["ctest", "--test-dir", build, "--output-on-failure"], environment))
+
+
 def package_steps(steps, environment):
     """The shipping configuration and the slice's package, checked as a player gets it."""
     preset = f"{os_name()}-shipping"
@@ -340,11 +359,17 @@ def main():
             script = os.path.join(ROOT, "tools", "tests", "check_references.py")
             args = [sys.executable, script, reference_build] + (["--quick"] if quick else [])
             steps.run("reference captures, exactness, editor", lambda: command(args, environment))
+        if reference_build and "--no-references" not in arguments:
+            script = os.path.join(ROOT, "tools", "tests", "check_error_policy.py")
+            steps.run("error policy (frame failure, exception in update)",
+                      lambda: command([sys.executable, script, reference_build], environment))
         if reference_build and "--no-analysis" not in arguments:
             script = os.path.join(ROOT, "tools", "ci", "static_analysis.py")
             steps.run("static analysis (clang-tidy)", lambda: command([sys.executable, script, reference_build], environment))
         if "--no-asan" not in arguments:
             asan_steps(steps, environment)
+        if not WINDOWS and "--no-tsan" not in arguments:
+            tsan_steps(steps, environment)
         if "--no-docs" not in arguments:
             script = os.path.join(ROOT, "tools", "docs", "check_docs.py")
             steps.run("API reference (Doxygen)", lambda: command([sys.executable, script], environment))

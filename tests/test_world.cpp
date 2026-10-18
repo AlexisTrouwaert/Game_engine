@@ -58,7 +58,7 @@ TEST_CASE("Transform: matrix is translate * rotate * scale") {
     transform.position = {1.0f, 2.0f, 3.0f};
     transform.rotation = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
     transform.scale = {2.0f, 1.0f, 1.0f};
-    const glm::vec3 p = transform.matrix() * glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec3 p(transform.matrix() * glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
     // x scaled to 2, turned a quarter around Y (x -> -z), then moved.
     CHECK(p.x == doctest::Approx(1.0f));
     CHECK(p.y == doctest::Approx(2.0f));

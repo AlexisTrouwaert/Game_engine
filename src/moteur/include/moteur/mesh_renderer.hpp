@@ -7,6 +7,7 @@
 
 #include "moteur/environment.hpp"
 #include "moteur/gpu_resource.hpp"
+#include "moteur/jobs.hpp"
 #include "moteur/material.hpp"
 #include "moteur/mesh_batcher.hpp"
 #include "moteur/renderer.hpp"
@@ -72,6 +73,11 @@ struct Cutout {
     bool enabled = false;   ///< off: nothing fades
     glm::vec3 focus{0.0f};  ///< world, the middle of the hero's body
     float radius = 1.6f;    ///< metres around the line of sight
+    /// In a level of several floors (milestone 9, part 7): what fades (Material::fades) higher than
+    /// `ceiling` metres above the focus, within `ceiling_radius` metres of it on the plane, is cut
+    /// away (the floors and roofs above the hero), with a dithered edge. 0: off.
+    float ceiling = 0.0f;
+    float ceiling_radius = 12.0f;  ///< metres, see #ceiling
 };
 
 /// How shadows are drawn: the sun's, and the point lights' (PointLight::casts_shadows). Changing
@@ -147,6 +153,12 @@ public:
     /// Frustum culling, on by default. Off, every draw goes to both passes: for comparisons and
     /// debugging only (the image must not change, only the cost).
     void set_culling(bool on) { culling_ = on; }
+    /// Levels of detail (milestone 9, part 4): each mesh with several (Mesh::lods) is drawn, in every
+    /// pass, at the coarsest level whose error, seen from this frame's camera, is at most `pixels`
+    /// on the screen. 1 by default; 0 always draws the full meshes (to compare). Kept.
+    void set_lod_threshold(float pixels) { lod_threshold_ = pixels; }
+    /// See set_lod_threshold().
+    float lod_threshold() const { return lod_threshold_; }
     /// Whether frustum culling is on (set_culling()).
     bool culling() const { return culling_; }
 
@@ -184,6 +196,17 @@ public:
     void set_cutout(const Cutout& cutout) { cutout_ = cutout; }
     /// The cutout given to set_cutout().
     const Cutout& cutout() const { return cutout_; }
+
+    /// The id pass (milestone 9, part 7): after the scene, the visible pixel of every selectable
+    /// thing is written with its pick id into a texture of its own (Renderer::request_pick() reads
+    /// one pixel of it back, a frame later; the outline of Renderer::set_outline() follows it). Off
+    /// by default: it draws the scene's meshes a second time (depth and id only). Kept.
+    void set_ids(bool enabled) { ids_ = enabled; }
+    /// Whether the id pass is on (set_ids()).
+    bool ids() const { return ids_; }
+    /// The pick id of the draws that follow, until the next call (World::submit() gives each
+    /// entity's); cleared every frame. See MeshDraw::pick_id.
+    void set_pick_id(std::uint32_t id) { pick_id_ = id; }
     /// For the billboards: the fog texture (a stand-in when there is none) and its two uniform rows.
     /// The texture and the sampler stay owned by the MeshRenderer: valid until the next
     /// set_fog_cells() of a new size.
@@ -259,6 +282,7 @@ public:
 
 private:
     friend class Renderer;  ///< drives render() and clear() at the right moments, reads the atlas layout
+    friend class ThumbnailRenderer;  ///< drives a MeshRenderer of its own, off screen
 
     /// Before any render pass: culls and groups the draws of both passes (fitting the shadow map
     /// first), and uploads the instances.
@@ -269,14 +293,24 @@ private:
     bool wants_shadows() const { return has_work() && shadow_options_.enabled && sun_intensity_ > 0.0f; }
     SDL_GPUTexture* shadow_map() const { return shadow_map_.get(); }
     void render_shadows(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass, RenderStats& stats);
+    /// The id pass (see set_ids()): the scene's batches again, into a R32_UINT target and a depth of
+    /// its own (single-sampled). Pipelines made at the first call.
+    void render_ids(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass, RenderStats& stats);
     void prepare_shadows();
+    void select_lods();  ///< MeshDraw::lod of every draw, from the camera (see set_lod_threshold())
     /// The "point shadows" pass, after the sun's: only when a light's shadow must be drawn again.
     /// The atlas keeps the other tiles (loaded, not cleared), unless it was just created.
     bool wants_point_shadows() const { return has_work() && !point_jobs_.empty() && point_renders_ > 0; }
     SDL_GPUTexture* point_shadow_atlas() const { return point_atlas_.get(); }
     bool point_shadow_atlas_is_new() const { return point_atlas_new_; }
     void render_point_shadows(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass, RenderStats& stats);
-    void prepare_point_shadows(RenderStats& stats);
+    /// The point lights whose shadows are drawn this frame (indices in lights_), their atlas made:
+    /// the main thread's part of the point shadows.
+    std::vector<int> select_point_shadow_lights();
+    /// What the shadow of the k-th of them depends on (its casters into point_casters_[k]): a task.
+    std::uint64_t point_shadow_signature(int light_index, std::size_t k);
+    /// Their atlas rows and the faces to draw again (their batches built in parallel).
+    void finish_point_shadows(const std::vector<int>& lights, const std::vector<std::uint64_t>& signatures);
     /// After prepare(): the lines asked for by debug().
     void add_debug_lines(DebugLineBuffer& lines) const;
     void ensure_instance_capacity(std::size_t instances);
@@ -285,11 +319,12 @@ private:
     /// the palettes for a skinned one, and its indices; then draws it.
     void draw_batch(SDL_GPURenderPass* pass, const MeshBatch& batch, std::size_t first_instance);
     /// The base color texture of an alpha-tested material, for its shadow (fragment sampler 0).
-    void bind_cutout_texture(SDL_GPURenderPass* pass, const Material& material);
+    void bind_cutout_texture(SDL_GPURenderPass* pass, const DrawMaterial& material);
     /// The pipelines of the "scene" pass, for `samples` per pixel (MSAA): made again by the Renderer
     /// when the anti-aliasing changes.
     void create_scene_pipelines(SDL_GPUSampleCount samples);
     void clear() {
+        pick_id_ = 0;
         draws_.clear();
         lights_.clear();
         point_jobs_.clear();
@@ -329,6 +364,10 @@ private:
     GpuShader vertex_shader_;
     GpuShader skinned_vertex_shader_;
     GpuShader fragment_shader_;
+    bool ids_ = false;
+    TaskGraph frame_tasks_;  ///< the preparation's tasks (milestone 9, part 9), kept from frame to frame
+    std::uint32_t pick_id_ = 0;
+    GpuGraphicsPipeline id_pipelines_[2][2];  ///< [skinned][double sided]
     SDL_GPUTextureFormat shadow_format_ = SDL_GPU_TEXTUREFORMAT_D16_UNORM;
     GpuTexture shadow_map_;
     int shadow_map_size_ = 0;
@@ -398,6 +437,7 @@ private:
     glm::vec3 eye_{0.0f};
     bool has_camera_ = false;
     bool culling_ = true;
+    float lod_threshold_ = 1.0f;  ///< see set_lod_threshold()
     glm::vec3 to_sun_{0.0f, 1.0f, 0.0f};
     glm::vec3 sun_color_{1.0f};
     float sun_intensity_ = 0.0f;

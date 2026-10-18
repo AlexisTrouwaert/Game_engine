@@ -8,6 +8,12 @@ add_executable(moteur_tests
     test_attachment.cpp
     test_animation_debug.cpp
     test_asset_cache.cpp
+    test_asset_registry.cpp
+    test_collision_scene.cpp
+    test_navigation.cpp
+    test_picking.cpp
+    test_level.cpp
+    test_level_edit.cpp
     test_anti_aliasing.cpp
     test_archive.cpp
     test_atlas_builder.cpp
@@ -21,6 +27,7 @@ add_executable(moteur_tests
     test_debug_lines.cpp
     test_debug_tools.cpp
     test_display.cpp
+    test_document.cpp
     test_environment.cpp
     test_fixed_timestep.cpp
     test_map_data.cpp
@@ -33,8 +40,11 @@ add_executable(moteur_tests
     test_jobs.cpp
     test_mesh.cpp
     test_mesh_batcher.cpp
+    test_mesh_optimize.cpp
     test_model.cpp
+    test_model_import.cpp
     test_ozz.cpp
+    test_prefab.cpp
     test_profiler.cpp
     test_particles.cpp
     test_save_file.cpp
@@ -45,6 +55,7 @@ add_executable(moteur_tests
     test_review_render.cpp
     test_review_world.cpp
     test_review_world2.cpp
+    test_reflection.cpp
     test_robustness.cpp
     test_shadow.cpp
     test_skeleton.cpp

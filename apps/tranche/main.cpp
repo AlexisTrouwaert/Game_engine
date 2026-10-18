@@ -5,7 +5,7 @@
 //
 //   tranche [--run-seconds S] [--no-vsync] [--pixel-size W H] [+set NAME VALUE]
 //           [--replay-input FILE] [--freeze-after TICKS --capture FILE.png] [--states-cycles N]
-//           [--report-json FILE] [--test-plantage acces|abort|exception|assertion|gpu]
+//           [--report-json FILE] [--test-plantage acces|abort|exception|assertion|gpu|frame|update]
 //
 // The options after the first line are for the checks of the delivery (the same reference capture
 // as the sandbox's slice, measures, the crash reports); a player never needs them.
@@ -14,6 +14,7 @@
 
 #include <cstdlib>
 #include <exception>
+#include <stdexcept>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -25,6 +26,30 @@
 
 #include "sandbox_data.hpp"
 #include "states_demo.hpp"
+
+namespace {
+
+// --test-plantage update: the game's update throws at its 30th tick, as a bug would. The error
+// policy (milestone 9, part 2) makes it a controlled crash: a report, the player's message, exit 1.
+class ThrowingUpdate : public moteur::Game {
+public:
+    explicit ThrowingUpdate(moteur::Game& game) : game_(game) {}
+    void on_event(const SDL_Event& event) override { game_.on_event(event); }
+    bool waiting() override { return game_.waiting(); }
+    void update(double dt) override {
+        if (++ticks_ == 30) {
+            throw std::runtime_error("exception provoked on purpose to check the error policy");
+        }
+        game_.update(dt);
+    }
+    void render(moteur::Renderer& renderer, double alpha) override { game_.render(renderer, alpha); }
+
+private:
+    moteur::Game& game_;
+    int ticks_ = 0;
+};
+
+}  // namespace
 
 int main(int argc, char* argv[]) {
     StatesDemo::Options options;
@@ -65,7 +90,7 @@ int main(int argc, char* argv[]) {
             capture = argv[++i];
         } else if (arg == "--states-cycles" && has_one) {
             options.cycles = std::atoi(argv[++i]);
-        } else if (arg == "--test-plantage" && has_one) {  // acces | abort | exception | assertion | gpu: checks the crash reports
+        } else if (arg == "--test-plantage" && has_one) {  // checks the crash reports and the error policy (see below)
             crash_test = argv[++i];
         } else if (arg == "--report-json" && has_one) {
             config.report_performance = true;
@@ -75,8 +100,9 @@ int main(int argc, char* argv[]) {
             return 2;
         }
     }
-    // A check (a replay compared with a reference capture) must not depend on the player's settings.
-    if (!config.replay_input_path.empty()) {
+    // A check (a replay compared with a reference capture, a crash test) must not depend on the
+    // player's settings.
+    if (!config.replay_input_path.empty() || !crash_test.empty()) {
         config.display_settings = false;
     }
     std::cout << moteur::build_description() << '\n';
@@ -84,10 +110,15 @@ int main(int argc, char* argv[]) {
 #if !defined(MOTEUR_SHIPPING) && defined(MOTEUR_ASSETS_SOURCE_DIR)
         config.assets_source_directory = MOTEUR_ASSETS_SOURCE_DIR;  // development: hot reload
 #endif
+#if !defined(MOTEUR_SHIPPING) && defined(MOTEUR_ARPG_ASSETS_DIR)
+        config.asset_folders.push_back(MOTEUR_ARPG_ASSETS_DIR);  // the ARPG's cobblestones and street lamp
+#endif
         moteur::Application app(config);
         if (crash_test == "gpu") {
             app.renderer().simulate_device_lost();  // reported at the first frame, then a clean end
-        } else if (!crash_test.empty()) {
+        } else if (crash_test == "frame") {
+            app.renderer().simulate_frame_failure();  // the first frame without its meshes: the game goes on
+        } else if (!crash_test.empty() && crash_test != "update") {
             moteur::crash_now(crash_test == "abort"       ? moteur::CrashKind::Abort
                               : crash_test == "exception" ? moteur::CrashKind::UncaughtException
                               : crash_test == "assertion" ? moteur::CrashKind::Assertion
@@ -107,7 +138,8 @@ int main(int argc, char* argv[]) {
             options.demo.capture_path = capture;
         }
         StatesDemo game(app, options, true);
-        app.run(game);
+        ThrowingUpdate throwing(game);
+        app.run(crash_test == "update" ? static_cast<moteur::Game&>(throwing) : game);
         if (app.ended_on_error()) {
             return 1;
         }

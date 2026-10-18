@@ -39,7 +39,12 @@ Les exemples à lire avec ce guide :
 - **Unités** : mètres, secondes, degrés pour les angles de caméra. **Y vers le haut**, le sol est le plan **XZ** ; une case de la grille fait 1 m (`cell_at()`, `cell_centre()` dans `nav_grid.hpp`). Les positions « sur le plan » sont des `glm::vec2` (x, z).
 - **Couleurs** : linéaires pour la 3D ; `srgb_to_linear()` convertit une couleur choisie à l'œil.
 - **Fil** : tout se fait sur le **fil principal**, sauf ce que la référence dit autrement (`read_file()`, `JobSystem`, `find_path()`).
-- **Erreurs** : exceptions au **chargement** (un fichier invalide, une fenêtre impossible) ; un asset graphique ou sonore cassé est remplacé par un repli visible ou audible et noté au journal.
+- **Erreurs** (politique écrite à la partie 2 du [jalon 9](JALON_9_NIVEAU_PRODUCTION.md)) :
+  - les **exceptions** sont réservées au **chargement** (un fichier invalide, une fenêtre impossible, un rejeu illisible) : le constructeur de l'`Application`, les étapes d'un `LoadingState`, les lectures de tables et d'assets ; un asset graphique ou sonore cassé est remplacé par un repli visible ou audible et noté au journal ;
+  - **aucune exception ne traverse une image** : une exception qui sort du jeu (`on_event`, `update`, `waiting`, `render`) ou d'un service entre deux images est un **bogue**, traité comme un plantage contrôlé (rapport dans `crash_reports/`, `crash_message` montré au joueur, `run()` se termine et `ended_on_error()` est vrai). La logique ne continue jamais sur un état à moitié mis à jour ;
+  - un **échec du GPU dans une image** (un tampon de transfert qui ne se projette pas, un tampon qui ne grandit pas) fait **sauter** ce que l'échec concerne pour cette image seulement (noté au journal, `RenderStats::failed_preparations`, `Renderer::frame_failures()`) ; la perte du périphérique termine proprement (chapitre 8.3) ;
+  - les **contrats** (préconditions des en-têtes : appel sur le fil principal, `begin_frame` / `end_frame` appariés, référence de données résolue, case dans la carte) sont vérifiés par `MOTEUR_ASSERT` dans les builds de développement (`assert.hpp`, chapitre 7.3) ; `MOTEUR_ASSERT_MAIN_THREAD` pour les services du fil principal ;
+  - vérifié par `tools/tests/check_error_policy.py` (dans le script de vérification) : `tranche --test-plantage frame` (image sans ses maillages, la partie continue) et `--test-plantage update` (exception dans `update` : rapport, code de sortie 1).
 - **Langue** : le moteur parle au développeur en **anglais** (journal, erreurs de données, rapports) ; il ne contient **aucun texte du joueur** : le jeu fournit ses libellés (options, message de plantage). Décision T1 de la [revue des jalons 1 à 7](REVUE_JALONS_1_A_7.md).
 - **Données du jeu** : les clés des formats du moteur sont en anglais ; les champs des tables, les noms d'états d'animation, les dossiers de sauvegarde du jeu sont dans la langue du jeu.
 
@@ -150,6 +155,7 @@ Les champs les plus utiles (tous ont un défaut ; détails dans la référence) 
 | Champ | Rôle |
 |---|---|
 | `title`, `width`, `height` | la fenêtre (en points ; `pixel_width` / `pixel_height` pour un nombre exact de pixels, utile aux captures) |
+| `window_display` | l'écran où la fenêtre s'ouvre (indice ; négatif : le choix du système). La variable d'environnement `MOTEUR_WINDOW_DISPLAY` le remplace : les scripts de vérification la mettent à `1` pour ouvrir leurs fenêtres sur le **second écran** |
 | `tick_rate` | ticks de logique par seconde (60 par défaut) ; voir le chapitre 2 |
 | `organization`, `application` | nomment le **dossier du joueur** pour toujours : à fixer avant la première version |
 | `display_settings` | lit et applique `display.json` (le jeu ; les outils et les vérifications le laissent éteint) |
@@ -387,6 +393,72 @@ void PartieState::render(moteur::Renderer& renderer, double alpha) {
 
 `World::collect(sink, alpha, options)` fait la même chose vers un `WorldSink` à soi (les tests enregistrent ce qui serait dessiné). `world.animation_stats()` dit ce qu'a coûté l'animation de l'image. Exemple réel : `Demo3D::update()` et `Demo3D::render()` dans [`demo3d.cpp`](../apps/tranche/demo3d.cpp).
 
+#### 3.3.1 Le travail sur plusieurs cœurs (jalon 9)
+
+Le moteur répartit lui-même son travail : `move_movers()` calcule les agents en parallèle et écrit les `Transform` dans l'ordre des identifiants, `World::collect()` échantillonne les poses en parallèle, le rendu prépare ses lots en parallèle. Le résultat est identique à un calcul l'un après l'autre (captures et rejeux inchangés).
+
+Un jeu qui veut répartir le sien :
+
+```cpp
+// Chaque index n'écrit que sa propre case : l'ordre des fils ne change rien.
+std::vector<Menace> menaces(monstres.size());
+moteur::jobs().parallel_for(monstres.size(), [&](std::size_t i) { menaces[i] = evaluer(monstres[i]); }, 32);
+// Puis, sur le fil principal, dans l'ordre : les effets sur le monde.
+for (std::size_t i = 0; i < menaces.size(); ++i) { appliquer(menaces[i]); }
+
+// Des étapes qui dépendent les unes des autres : un graphe, gardé d'une image à l'autre.
+graphe_.clear();
+const auto vision = graphe_.add("vision", [&] { calculer_vision(); });
+graphe_.add("menaces", [&] { calculer_menaces(); }, {vision});
+graphe_.add("sons", [&] { choisir_sons(); });
+graphe_.run();  // revient quand tout est fini ; relance la première exception
+```
+
+Règles : une tâche **ne modifie pas la structure de l'ECS** (pas d'`emplace`, de `destroy`, de `patch` : les signaux) et ne touche ni au GPU ni aux caches d'assets ; elle lit ce qu'elle veut tant que personne ne l'écrit pendant ce temps, et écrit seulement ses propres sorties. **Jamais de réduction de flottants dans un ordre qui dépend des fils** (une somme parallèle de dégâts) : chaque tâche écrit sa case, le fil principal additionne dans l'ordre. `submit(tâche)` est pour l'arrière-plan (chargements) ; le travail de l'image passe devant (`JobPriority::Frame`, ce que font `parallel_for()` et `TaskGraph`).
+
+### 3.4 Réflexion : décrire un type une fois
+
+Un type de données (composant, ligne de table) se **décrit une fois**, à côté de sa déclaration ; la lecture des tables, la sauvegarde, l'inspecteur, les préfabriqués et le schéma JSON en découlent (`reflection.hpp`, [jalon 9, partie 3](JALON_9_NIVEAU_PRODUCTION.md#3-réflexion-des-types-et-préfabriqués) ; décision : description `constexpr`, pas de générateur de code) :
+
+```cpp
+struct Sante {
+    int vie = 100;
+    int maximum = 100;
+    float regeneration = 0.0f;
+    Element faiblesse = Element::Aucun;
+};
+MOTEUR_REFLECT_ENUM(Element, "aucun", "feu", "froid");              // les valeurs 0, 1, 2 par leur nom
+MOTEUR_REFLECT(Sante,
+    MOTEUR_FIELD(vie, {.min = 0, .doc = "points de vie restants", .flags = moteur::kFieldDefault | moteur::kFieldLogic}),
+    MOTEUR_FIELD(maximum, {.min = 1, .max = 1000000}),
+    MOTEUR_FIELD(regeneration, {.min = 0, .unit = "points/s", .aliases = {"regen"}}),
+    MOTEUR_FIELD(faiblesse));
+
+// au démarrage, une fois : le composant a un nom stable (sauvegardes, préfabriqués, niveaux)
+moteur::component_types().add<Sante>("sante");
+```
+
+- Les macros vont **dans l'espace de noms du type**, après lui. `MOTEUR_FIELD_AS(membre, "clé", ...)` donne une clé différente du nom du membre (les données du jeu sont dans sa langue). Les options (`FieldOptions`, dans cet ordre) : `min`, `max`, `unit`, `doc`, `flags` (`kFieldEdit`, `kFieldSave`, `kFieldData`, `kFieldLogic`, `kFieldPresentation`, `kFieldColor`, `kFieldReadOnly` ; par défaut édité, sauvegardé, lu des données), `required`, `aliases` (anciens noms encore lus : un champ renommé ne casse ni fichiers ni sauvegardes).
+- Types de champs : `bool`, entiers, `float`, `double`, `std::string`, `glm` (vecteurs, quaternion), énumérations et structures décrites, `std::vector`, `std::optional`, `DataRef`, `entt::entity`, `Asset<T>`. Un membre d'un autre type n'est simplement pas décrit (un cache, une pose).
+- Ce qui en découle : **tables** `moteur::add_reflected_table<MonstreData>(app.data(), "monstres", "data/monstres", verification)` (la vérification reçoit ce que la description ne dit pas : deux champs qui doivent s'accorder) ; **sauvegardes** `serializers.add_registered()` (chapitre 6.2) ; **inspecteur** : tout composant de `component_types()` y est dessiné champ par champ ; **préfabriqués** (3.5) ; **schéma** `json_schema(type_info<T>())`, et `bac_a_sable --write-schemas DOSSIER` pour les tables de la tranche.
+- Format des valeurs : [FORMATS.md, 13](FORMATS.md#13-valeurs-décrites-par-la-réflexion). La lecture rend exactement les valeurs d'une lecture à la main (déterminisme) ; l'écriture est exacte.
+
+### 3.5 Préfabriqués
+
+Un **préfabriqué** (`*.prefab.json`, [FORMATS.md, 14](FORMATS.md#14-préfabriqués-prefabjson)) décrit en données un groupe d'entités : un lampadaire et sa flamme, une porte et son levier. Ils s'**imbriquent** (une entité est une instance d'un autre préfabriqué, avec des surcharges) et ont des **variantes** (`"base"` : un préfabriqué qui en change quelques champs, en retire ou en ajoute des entités).
+
+```cpp
+const moteur::Asset<moteur::Prefab> lampadaire = app.assets().prefab("prefabs/lampadaire.prefab.json");
+moteur::PrefabPlacement ou;
+ou.position = {12.0f, 0.0f, 4.0f};
+ou.rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+ou.overrides = {{"2", {{"light", {{"intensity", 8.0}}}}}};   // cette instance seulement
+const moteur::PrefabInstance instance = moteur::instantiate(world_, *lampadaire, ou);
+// instance.root, instance.entities (une par entité du préfabriqué, dans son ordre)
+```
+
+Le préfabriqué est lu et vérifié **une fois** (ses composants lus par leur description, ses modèles chargés) ; l'instanciation ne fait que copier. Les composants du jeu y sont utilisables dès qu'ils sont enregistrés dans `component_types()`.
+
 ---
 
 ## 4. Assets et données
@@ -398,7 +470,8 @@ void PartieState::render(moteur::Renderer& renderer, double alpha) {
 | Fonction | Asset | Si le fichier manque ou est cassé |
 |---|---|---|
 | `texture(path, settings)` | KTX2, PNG, JPEG... | damier magenta |
-| `model(path)` | glTF (`.gltf`, `.glb`) avec maillages, matériaux, textures | cube magenta |
+| `model(path)` | glTF (`.gltf`, `.glb`) avec maillages, matériaux, textures ; chargé sous sa forme **importée** (4.6) | cube magenta |
+| `prefab(path)` | préfabriqué (`.prefab.json`, 3.5) | **exception** |
 | `environment(path)` | `.hdr` équirectangulaire | ciel gris |
 | `sound(path)` / `music(path)` | son court décodé / musique en flux | bip / silence |
 | `particle_effect(path)` | effet de particules (`.json`) | effet sans émetteur |
@@ -411,6 +484,7 @@ void PartieState::render(moteur::Renderer& renderer, double alpha) {
 - `exists(path)` : un asset facultatif (la tranche s'en sert pour les modèles de test non versionnés). `file_path(path)` : le chemin complet, à passer à `read_text_file()`.
 - Un objet fait par le jeu (un maillage généré) devient une poignée par `make_asset(...)` ; un maillage simple : `Mesh::create(renderer, make_cube(...), "nom")`.
 - Statistiques : `stats()`, commande `assets`, fenêtre DEBUG > Assets.
+- **Dossiers montés** : `ApplicationConfig::asset_folders` ajoute les dossiers d'assets d'un autre jeu, lus **en place** (développement ; la version livrée les a dans ses archives) : la tranche utilise ainsi ceux de l'ARPG (`MOTEUR_ARPG_ASSETS_DIR`). Leurs fichiers ont des clés comme les autres ; le premier dossier qui a une clé gagne.
 
 ### 4.2 Rechargement à chaud (développement)
 
@@ -435,7 +509,7 @@ config.assets_source_directory = ARPG_ASSETS_SOURCE_DIR;
 
 ### 4.3 Tables de données
 
-Monstres, objets, compétences : des **tables** en JSON, vérifiées au chargement, liées entre elles par identifiant, rechargées pendant le jeu, compilées en binaire pour la version livrée ([jalon 7, partie 2](JALON_7_OUTILS_ET_DONNEES.md)). Le moteur ne connaît aucun champ : le jeu donne, par table, une fonction qui lit une ligne et, si besoin, une qui résout ses références.
+Monstres, objets, compétences : des **tables** en JSON, vérifiées au chargement, liées entre elles par identifiant, rechargées pendant le jeu, compilées en binaire pour la version livrée ([jalon 7, partie 2](JALON_7_OUTILS_ET_DONNEES.md)). Le moteur ne connaît aucun champ. Depuis le jalon 9, la façon recommandée est de **décrire la ligne** (chapitre 3.4) et de l'enregistrer par `moteur::add_reflected_table<T>()` : lecture, références, messages et schéma en découlent (la tranche le fait : `apps/tranche/sandbox_data.hpp`). La lecture à la main, ci-dessous, reste possible.
 
 Une table est un **dossier** de fichiers JSON (`assets/data/<table>/*.json`) :
 
@@ -510,8 +584,9 @@ Le **manifeste de livraison** (un JSON des assets du jeu, non livré lui-même) 
 
 Ce que fait `cook()` :
 
-- prend les fichiers du manifeste **et leurs dépendances** (tampons et images d'un glTF, avec la préférence KTX2 ; textures d'un effet) ; une dépendance absente est une erreur ;
+- prend les fichiers du manifeste **et leurs dépendances** (images d'un glTF, avec la préférence KTX2 ; textures d'un effet ; bases, imbriqués et assets d'un préfabriqué, par identifiant) ; une dépendance absente est une erreur ;
 - transcode les KTX2 UASTC en **BC7 / BC5** une fois pour toutes ;
+- livre chaque modèle sous sa **forme importée** seulement (`.mmdl`, 4.6), chaque `.json` en **CBOR** sous son nom, et le **registre figé** des identifiants : le jeu livré ne lit ni glTF ni JSON ;
 - **compile les tables** (dossier `data`) par le rappel du jeu ;
 - copie les shaders compilés ;
 - **relit** chaque fichier préparé avec le chargeur du moteur (modèle, carte, effet, description d'animation, texture) : ce qui ne charge pas est une erreur maintenant, pas chez le joueur ;
@@ -547,7 +622,29 @@ C'est `moteur_package` qui l'appelle (chapitre 8). Code de sortie : 0 prêt à l
 - **Tout ce que le moteur charge passe par `read_file()`** (`paths.hpp`) : un fichier du dossier du programme est cherché d'abord dans les archives montées (la dernière par ordre de nom d'abord : une archive de correctif masque une entrée), puis sur le disque. Le jeu fait de même pour ses propres fichiers (`read_file()`, `read_text_file()`, `file_exists()`).
 - `ApplicationConfig::archives_directory` (`archives`) est monté **avant tout chargement**. Une archive abîmée fait lever le constructeur de l'`Application` (message qui conseille de réinstaller). Dans la **version livrée**, une fois des archives présentes, rien d'autre n'est lu du dossier du programme (`set_archives_only()`) : un fichier non préparé n'existe pas. Les fichiers du joueur restent sur le disque.
 
-Pas encore là : identifiants stables des assets et formats préparés pour tout (cartes, descriptions d'animation, maillages) : jalon 9 (T7 et révision de la [revue](REVUE_JALONS_1_A_7.md)).
+### 4.6 Identité des assets et import
+
+**Identifiants** ([FORMATS.md, 15](FORMATS.md#15-identité-des-assets--meta-et-registre)) : chaque asset a un identifiant permanent (UUID) dans un fichier voisin `<asset>.meta`, donné au premier lancement en développement. Ce qui désigne un asset dans les données le fait par cet identifiant, avec le chemin à côté pour la lecture : `{"id": "...", "path": "models/props/lampadaire.glb"}`. Les champs `Asset<T>` décrits (3.4) s'écrivent ainsi d'eux-mêmes (`Assets::write_options()`, `reference_to()`) et se lisent par `resolve_reference()` ; un chemin seul reste accepté.
+
+- **Les `.meta` vont avec leurs assets**, dans le dépôt comme sur le disque : un `.meta` perdu, c'est une identité perdue (les références tombent sur leur chemin, avec un avertissement).
+- **Déplacer ou renommer** : `python tools/assets/assets.py move DOSSIER ancien nouveau` déplace le fichier et son `.meta` et réécrit les chemins écrits à côté des identifiants ; `check` signale les doublons, les `.meta` orphelins et les assets sans `.meta`. Une copie faite avec son `.meta` (deux fois le même identifiant) reçoit un nouvel identifiant au lancement suivant.
+- Le **code** qui désigne un asset par son chemin (`assets.model("models/...")`) reste juste tant que le chemin l'est ; la préparation le vérifie par la relecture.
+
+**Import des modèles** : un glTF n'est pas chargé tel quel : il est **importé** une fois, avec les réglages du `import` de son `.meta` (niveaux de détail, ordre pour le cache, textures intégrées en KTX2 ; tableau en [FORMATS.md, 15.1](FORMATS.md#151-fichier-meta)), et le résultat (`.mmdl`, [FORMATS.md, 16](FORMATS.md#16-modèles-préparés-mmdl)) est gardé dans le cache `.imported/` à côté du dossier des sources. Le chargement suivant le reprend tant que le glTF, ses fichiers et ses réglages n'ont pas changé ; sinon il importe de nouveau (sur un fil de travail) et le rechargement à chaud suit. `bac_a_sable --import-assets` importe tout d'avance (la vérification le fait avant les captures).
+
+```json
+{
+  "id": "6f1c2a4e-9b7d-4c1e-8a2f-3d5e7f901b2c",
+  "import": {"lods": 2, "lod_error": 0.01},
+  "version": 1
+}
+```
+
+**Niveaux de détail** : chaque partie d'un modèle a jusqu'à `lods` versions simplifiées (quadriques d'erreur, bords et coutures gardés) sur les mêmes sommets ; le rendu choisit, pour chaque passe, la plus grossière dont l'erreur vue de la caméra tient sous 1 pixel (`MeshRenderer::set_lod_threshold`, 0 : toujours le maillage complet). La **logique ne lit jamais** un niveau de détail (collisions, sélection : la géométrie complète ou la leur).
+
+**Matériaux** : un `Material` tient ses textures par des poignées `Asset<Texture>` (le rechargement à chaud et le ramasse-miettes ne laissent plus de pointeur pendant) ; le rendu reçoit une vue à pointeurs bruts (`DrawMaterial`, `Material::view()`), valable pour l'image.
+
+Pas encore là : sommets quantifiés sur le GPU et imposteurs pour les foules lointaines (jalon 10, rendu).
 
 ---
 
@@ -644,7 +741,7 @@ Les libellés des touches (`describe()`) sont encore en français dans le moteur
 
 ### 5.5 Monde et déplacement
 
-Le monde de la logique est aujourd'hui un **plan** (y = 0) découpé en cases de 1 m ([jalon 6](JALON_6_MONDE_ET_DEPLACEMENT.md)).
+Le monde de la logique est soit un **plan** (y = 0) découpé en cases de 1 m ([jalon 6](JALON_6_MONDE_ET_DEPLACEMENT.md)), soit, depuis le jalon 9, un **niveau en 3D** : ses triangles de collision (5.5.1).
 
 - **Carte** : `assets.map("maps/acte1.json")` donne une `MapData` (JSON dessiné en caractères : tuiles, légende, points nommés comme `start`, objets posés, connecteurs ; format en tête de `map_data.hpp`). `map->objects()` liste ce que le jeu doit créer (décor, apparitions, lumières), `map->point("start")` le point d'entrée.
 - **Grille** : `moteur::NavGrid grid(map->tiles(), map->tileset())` : praticable et opaque par case ; `set()` / `refresh()` pour une porte qui s'ouvre (la `version()` change : chemins et champs à recalculer). `ClearanceMap clearance(grid)` : la place libre autour de chaque case (`update_around()` après un changement).
@@ -655,7 +752,83 @@ Le monde de la logique est aujourd'hui un **plan** (y = 0) découpé en cases de
 
 Tout est déterministe (ordre des identifiants, pas de trigonométrie). La tranche réunit tout cela dans `Demo3D::move_characters()` et `update_sight()`.
 
-Pas encore là : la **vraie 3D pour la logique** (plusieurs niveaux, maillage de navigation, collisions et sélection contre la géométrie) : décision 6.1 de la [revue](REVUE_JALONS_1_A_7.md), jalon 9. Le code de jeu qui suppose `y = 0` devra changer : le garder derrière les fonctions du moteur.
+#### 5.5.1 Le niveau en 3D (jalon 9)
+
+- **Géométrie de collision** : chaque triangle a un genre (`SurfaceKind` : `Walkable` sol, `Wall` mur, `Obstacle` obstacle, `Void` vide où l'on tombe). Un modèle la reçoit à l'import ([FORMATS.md, 15.1](FORMATS.md#151-fichier-meta), réglage `collision`) : les nœuds nommés `COL_...` ou `UCX_...` dans Blender (jamais dessinés ; `COL_wall`, `COL_walk`, `COL_obstacle`, `COL_void` donnent le genre, sinon la pente décide), ou aussi les triangles visibles (`"collision": "visible"`). Pour une maquette ou un test : `CollisionMeshData::add_box()`, `add_stairs()`, `add_ramp()`.
+- **Scène de collision** : `CollisionScene` (un arbre de volumes englobants) : `add(maillage, matrice, corps)` puis `build()`. Les entités d'un niveau marquées `StaticCollision` (la collision de leur modèle et des boîtes) la remplissent par `gather_static_collision(world, scene)`. Requêtes, toutes déterministes : `raycast()`, `segment_clear()` (une ligne de vue), `ground_at()` (le sol sous un point, sur plusieurs étages), `sphere_contacts()`, `capsule_contacts()`, `box_triangles()`.
+- **Personnages** : `move_character(scene, pieds, deplacement, dt, mouvement, forme, reglages)` déplace une capsule debout (`CharacterShape` : rayon, hauteur) : elle glisse le long des murs, monte les marches (`ControllerSettings::step_height`), suit le sol en descendant, refuse les pentes trop raides (`min_ground_normal_y`, un cosinus : pas de trigonométrie), tombe des rebords (gravité) et se pose. Le jeu n'a d'habitude pas à l'appeler : les systèmes du tick le font.
+- **Systèmes du tick** dans un niveau 3D : les mêmes que sur la grille, avec la scène : `move_movers(registry, scene, dt, champs, stats, reglages)`, `separate_colliders(registry, scene, hash)` (deux personnages ne se poussent que si leurs hauteurs se recouvrent : l'un sur le pont, l'autre dessous, non), `finish_movers()`. `Collider::height` donne la hauteur de la capsule ; `Mover::goal` et `Mover::path` sont des points 3D, `Mover::grounded` et `vertical_speed` disent s'il tombe. Les requêtes du `SpatialHash` prennent une tranche de hauteurs (`HeightSpan`) : qui est à cet étage.
+- **Débogage** : la variable `debug.collision` dessine les triangles par genre et les capsules ; la scène « Level 3D » du bac à sable (`bac_a_sable --level3d`) montre tout cela.
+
+#### 5.5.2 Navigation dans un niveau 3D (jalon 9)
+
+```cpp
+moteur::NavMesh mesh;
+mesh.build(scene, moteur::NavAgent{.radius = 0.35f, .height = 1.8f});  // une fois par niveau (ou préparé, partie 8)
+const glm::vec3 entree = niveau.point("start");
+mesh.prune(std::span(&entree, 1));             // écarte le sol inaccessible (dans les blocs fermés)
+
+// Chaque tick :
+const moteur::NavMesh* const meshes[] = {&mesh};          // un maillage par taille de créature (Mover::agent)
+moteur::plan_paths(registry, meshes, 8, stats);           // les go_to() : chemins sur le maillage
+champ.compute(mesh, position_du_heros);                    // une foule qui va au même endroit (quand la cible bouge)
+const moteur::NavFlowField* const champs[] = {&champ};
+moteur::NavSources nav{meshes, champs, &hash};
+moteur::move_movers(registry, scene, dt, nav, stats);
+moteur::separate_colliders(registry, scene, hash);
+moteur::finish_movers(registry, dt);
+```
+
+- `Mover::avoid = true` pour les monstres d'une foule : ils s'écartent de ceux qu'ils vont heurter. Le héros n'en a pas besoin.
+- **Portes et sauts** : des `NavLink` donnés à `build()`, une porte fermée par `set_link_enabled(id, false)` ; **zones** (eau, feu) par `NavAreaVolume`, leur coût dans `NavFilter`.
+- **Le niveau change** (une caisse, un mur détruit) : `add_obstacle()` / `remove_obstacle()`, ou `rebuild(zone)` après avoir reconstruit la `CollisionScene` ; seules les tuiles touchées sont refaites (quelques millisecondes). Les champs et chemins calculés avant (`version()`) sont à refaire.
+- Requêtes : `find_path()`, `nearest_point()`, `walkable_line()`, `height_at()` ; `nav_grid_view()` donne la grille d'un étage.
+- Les **assets du niveau** ne changent pas : le maillage vient de leurs triangles de collision (5.5.1). Un mur qui laisse passer la navigation est un mur sans collision.
+
+#### 5.5.3 Vue, sélection et survol en 3D (jalon 9)
+
+- **Lignes de vue** : `line_of_sight(scene, yeux_a, yeux_b)` (symétrique). **Brouillard et champs de vision** d'un étage : `floor_sight_grid(mesh, scene, origine, largeur, hauteur, etage)`, puis `FieldOfView` et `ExploredMap` comme sur la grille du jalon 6.
+- **Ce qui se sélectionne** porte un `Selectable` (genre : personnage, objet, interactif ; capsule ou boîte). **Le clic** se décide au tick, par les rayons : `pick(registry, camera.screen_ray(pointeur), &scene, &mesh)` donne le monstre (prioritaire), sinon l'objet, sinon le point du sol (sur le maillage de navigation).
+- **Le survol** s'affiche avec le tampon d'identifiants : `renderer.meshes().set_ids(true)` une fois, puis chaque image `renderer.request_pick(pointeur)` ; `world.entity_of_pick(renderer.picked_id())` est l'entité survolée (une ou deux images de retard), `renderer.set_outline(world.pick_id_of(entite))` la détoure. Jamais pour la logique : le clic passe par `pick()`.
+- **Les étages au-dessus du héros** : `Cutout::ceiling` (et `ceiling_radius`) retire ce qui s'estompe (`Material::fades`) au-dessus de lui.
+
+#### 5.5.4 Les niveaux (jalon 9)
+
+Un niveau (`assets/levels/*.level.json`, [FORMATS.md, 19](FORMATS.md#19-niveaux-v3-leveljson)) place des préfabriqués : ses pièces de kit portent leur collision (`static_collision`, ou les nœuds `COL_` de leur modèle), d'où viennent la `CollisionScene` et la navigation. Le jeu le charge par morceaux :
+
+```cpp
+moteur::LevelStreamer niveau(app.assets(), world_);
+niveau.open_any("levels/crypte.level.json");   // forme préparée, ou préparée en mémoire (développement)
+niveau.settings().load_all = true;              // une zone fermée : tout, derrière l'écran de chargement
+niveau.set_focus(niveau.header().point("start")->position);
+niveau.finish();                                 // la dernière étape de l'écran de chargement
+
+// Chaque tick : le chargement avance autour du héros ; la logique utilise ce qui est chargé.
+niveau.set_focus(position_du_heros);
+niveau.update();
+moteur::move_movers(registry, niveau.collision(), dt, {niveau.meshes(), champs, &hash}, stats);
+```
+
+- **Monde ouvert** : `load_all = false` ; `load_radius`, `unload_radius` (une marge), `max_chunks` (le budget mémoire), `instantiate_budget_ms` (ce que le fil principal donne chaque mise à jour pour créer les entités). La logique n'agit que là où le niveau est chargé (`loaded(chunk)`, `ready()`).
+- **Rejeux et sauvegardes** : `ordered = true` fait les morceaux dans l'ordre de leurs coordonnées, quel que soit l'ordre des lectures en arrière-plan : les entités, les tuiles de navigation et les appels du crochet d'instance sont les mêmes à chaque exécution (la tranche : `load_all` et `ordered`, puis ses créatures créées par identifiant d'apparition). Un jeu qui sauvegarde garde aussi la clé du niveau et `state().to_json()`.
+- **En développement**, `open_any()` garde la forme préparée du niveau dans le cache d'import et ne le prépare de nouveau que si lui, ses préfabriqués ou ses modèles ont changé (secondes la première fois, puis rien).
+- **Ce qui change pendant la partie** (porte ouverte, coffre vidé) : `niveau.state().set(id, surcharges)` ou `remove(id)` ; `niveau.entity_of(id)` donne l'entité tant que son morceau est chargé ; `LevelInstanceId` marque la racine de chaque instance. Sauvegarder `state().to_json()` dans une section du jeu, le relire par `LevelState::from_json()`.
+- **Préparer** : la préparation (`cook`) fait de chaque `.level.json` livré un en-tête et un fichier par morceau ([FORMATS.md, 20](FORMATS.md#20-niveaux-préparés-mlvl-et-mlvc)). **Migrer** une carte du jalon 6 : `bac_a_sable --migrate-map maps/x.json SORTIE regles.json`.
+- Les pièces de maquette du moteur (`prefabs/blockout/` : sol, dalle de 8 m, mur, pilier, caisse, marche ; `tools/models/make_blockout.py`) servent à monter un niveau avant ses assets.
+- **Les données du jeu d'une instance** (`LevelInstance::properties` : le monstre d'une apparition, le butin d'un coffre) arrivent par le **crochet d'instance** : le jeu donne ses composants à chaque instance au moment où son morceau la crée.
+
+```cpp
+niveau.set_instance_hook([this](entt::entity racine, const moteur::ChunkInstance& instance) {
+    if (instance.properties.contains("personnage")) {
+        apparitions_.push_back({racine, instance.properties["personnage"].get<std::string>()});
+    }
+});
+```
+
+- **L'éclairage du niveau** (soleil, ciel, exposition, fond : `LevelLighting`, écrit par l'éditeur, dans l'en-tête préparé : `niveau.header().lighting`) se donne au rendu chaque image par `moteur::apply_lighting(renderer, niveau.header().lighting, &ciel)` : le jeu et l'éditeur l'appliquent par la même fonction. `night_lighting()` en donne la nuit (la vue de nuit de l'éditeur).
+- **Les accessoires d'un jeu** n'arrêtent rien sans `static_collision` : leur pipeline la leur donne (l'ARPG : `assets_source/commun/collisions.py`, des boîtes d'après les bornes de son catalogue, des marches pour un escalier). Une **dalle de sol** se pose au coin de sa case : son préfabriqué décale le modèle d'une demi-case s'il est centré.
+
+Exemple complet : la tranche (`apps/tranche/demo3d.cpp`, fonctions `open_level()`, `level_moves()`, `level_sight()`, `level_steer()`) sur `assets/levels/tranche.level.json`.
 
 ### 5.6 Particules
 
@@ -715,6 +888,7 @@ std::optional<moteur::SaveGame> lue = slots.read("emplacement_1", error, &migrat
 
 ### 6.2 L'état du monde : composants sérialisables et identifiants persistants
 
+- **Composants décrits** (chapitre 3.4, la façon recommandée) : `serializers.add_engine_components()` puis `serializers.add_registered()` sauvegardent tous les composants de `component_types()` par leur description (les champs `kFieldSave`) ; `serializers.set_tables(&app.data())` rattache leurs `DataRef` à leur ligne à la lecture. C'est tout ce que fait la tranche (`Demo3D::setup_serializers()`). La forme ancienne d'un composant (un tableau, une valeur seule) se lit par la fonction de mise à niveau donnée à `component_types().add<T>(nom, mise_a_niveau)` (`upgrade_from_array`, `upgrade_from_bare`).
 - Seules les entités qui ont un **`PersistentId`** sont sauvegardées. L'identifiant vient d'un **compteur du jeu**, jamais réutilisé, lui-même sauvegardé (la tranche : `next_id` dans sa section `"scene"`). Jamais l'identifiant EnTT, qui dépend de l'ordre de création.
 - `ComponentSerializers` (`world_save.hpp`), un par jeu, rempli au démarrage :
 
@@ -739,7 +913,6 @@ serializers.ignore<CacheVisuel>();     // reconstruit, jamais sauvegardé
 
 Exemple complet : `Demo3D::setup_serializers()`, `save()` et `load()` dans [`demo3d.cpp`](../apps/tranche/demo3d.cpp) ; `StatesDemo::save_game()` et `load_game()` dans [`states_demo.cpp`](../apps/tranche/states_demo.cpp) (emplacements, vignette, sauvegarde automatique en alternance `auto_1` / `auto_2`, chargement derrière l'écran de chargement). L'**exactitude** (sauvegardé au tick 120, rechargé, la suite identique) est vérifiée par `tools/tests/check_references.py`.
 
-Pas encore là : un système de **réflexion** qui tirerait sérialiseurs, inspecteur et lecteurs de tables d'une seule déclaration des champs : décision 7.1 de la [revue](REVUE_JALONS_1_A_7.md), jalon 9.
 
 ---
 
@@ -789,15 +962,18 @@ if (moteur::DebugTools* tools = app.debug_tools()) {
 #endif
 ```
 
+- Un composant **décrit** (chapitre 3.4) et enregistré dans `component_types()` est dessiné par sa description, sans rien écrire (`inspect_reflected()` : bornes, unités, couleurs, énumérations, listes, quaternions en degrés) ; `components().add_reflected<T>("Nom affiché")` lui donne un autre titre.
 - `select(entity)` montre l'entité choisie dans le jeu ; les fenêtres ouvertes sont gardées dans `imgui.ini` des préférences.
 - **Calques du monde** (`world_debug.hpp`) : `WorldDebugFlags::declare(variables)` crée `debug.grid`, `debug.clearance`, `debug.colliders`, `debug.paths`, `debug.flowfield`, `debug.view` ; `draw_world_debug(...)` les dessine dans la scène qui donne ses sources (grille, champs, vue).
 - **Animation** : squelette, axes, pose de liaison, poids (`animation_debug.hpp`, fenêtre DEBUG > Animation).
 - **Assertions** (`assert.hpp`) : `MOTEUR_ASSERT` (développement, retirée de la version livrée sans évaluer la condition), `MOTEUR_VERIFY` (toujours : ce qui protège les données du joueur), `MOTEUR_UNREACHABLE`. Un échec écrit fichier et ligne au journal, puis passe par le rapport de plantage. Jamais pour un fichier ou une entrée invalide (ceux-là sont refusés avec un message).
 
-### 7.4 Éditeur de cartes et bac à sable
+### 7.4 Éditeurs et bac à sable
 
-- **Éditeur de cartes** : le programme `editeur` (`editeur [carte | --new] [--top] [--self-test]`), et la même scène dans le bac à sable (DEBUG > Engine tests > Map editor). Tuiles, points, objets posés, morceaux et connecteurs, annuler / refaire, vérifications, essai de la carte depuis le départ (F5) ; enregistrement atomique dans `assets/maps` des sources. Le moteur en fournit le document sans GPU (`MapDocument` : édition, annulation, `validate`, écriture stable) ; l'éditeur lui-même (`apps/bac_a_sable/map_editor.cpp`) et les **types d'objets** (`apps/tranche/map_objects.cpp`, ceux de la tranche) ne sont pas dans le moteur : un jeu qui a ses propres objets s'en inspire en attendant l'éditeur de production (jalon dédié, révision de la [revue](REVUE_JALONS_1_A_7.md)). Décisions : [jalon 7, parties 7 et 8](JALON_7_OUTILS_ET_DONNEES.md).
-- **Bac à sable** (`bac_a_sable`) : sans argument, un menu de toutes les scènes de test ; avec des options (`--demo3d`, `--slice`, `--skinned N`, `--world`, `--states`...), une scène directement, pour les scripts, captures et mesures. Liste des options : [`README.md`](../README.md). Il n'est jamais livré. Le code de la tranche qu'il lance avec `--slice` ou `--states` est dans `apps/tranche/` (bibliothèque `tranche_commun`).
+- **Éditeur de niveaux** (jalon 9, partie 10 ; le socle de l'éditeur de production du jalon 11) : `editeur --level [levels/x.level.json]` (`--new-level` pour un niveau vide, `--self-test` pour son essai automatique), et DEBUG > Engine tests > Level editor dans le bac à sable. À gauche la **bibliothèque** : les préfabriqués et modèles de tous les dossiers d'assets (ceux du moteur, ceux du jeu montés), par dossier ou par famille de kit (lue dans les `.kit.json` et `catalogue.json` : la grille d'aimantation de chaque pièce), filtres (accessoires, sols, lumières, pièces de kit, modèles sans préfabriqué) et recherche, chaque asset avec sa **vignette rendue par le moteur** (`ThumbnailRenderer`, gardée sur disque dans les préférences, refaite quand le fichier change). Un clic choisit un préfabriqué pour l'outil Placer ; on peut aussi le **glisser** dans la vue ; clic droit : « Use as ground » (un sol à peindre), « Make its prefab » (un modèle sans préfabriqué en reçoit un, avec sa collision). Dans la vue : **sélection** au clic (Ctrl : ajoute, Maj : bascule), **poignées** déplacer / tourner / mettre à l'échelle (T, E, R), aimantation à la grille du kit (G) et aux surfaces, Fin pose la sélection sur ce qui est dessous, Ctrl+D duplique, Suppr efface, [ et ] tournent, Ctrl+Z / Ctrl+Y. Outils Peindre et Effacer (B, X) pour le sol, Point (P) pour les points nommés. À droite l'**inspecteur** : position, rotation, échelle, calque, les champs des composants du préfabriqué (la lumière d'un lampadaire : couleur, intensité, portée, ombres, `shadow_near`) gardés comme **surcharges** de l'instance, ses **propriétés** de jeu (JSON) ; les réglages du niveau (éclairage, calques, points, taille des morceaux, agent de navigation). Vue : **même rendu que le jeu** (`apply_lighting()`), nuit (N), maillage de navigation **reconstruit en arrière-plan** après chaque pause dans l'édition, murs et obstacles. **F5** fait jouer le niveau tel qu'il est **par la tranche** (préparé en mémoire, chargé par morceaux, le héros au point `start`, les créatures des apparitions ; F6 : sous le pointeur), Échap revient. `--focus X Z`, `--focus-height H`, `--show-collision` : la vue de départ (vérifier un endroit). Enregistrement atomique dans `assets/levels` des sources ; une copie est gardée si l'on quitte sans enregistrer. Le moteur fournit `EditableLevel` (édition, annuler / refaire, sans GPU), `Gizmo` (les poignées, en pixels et en monde) et les vignettes ; l'éditeur lui-même est `apps/bac_a_sable/level_editor.cpp`.
+
+- **Éditeur de cartes** (les cartes v1 et v2 des jalons 6 et 7, en attendant la tranche en niveau v3) : le programme `editeur` (`editeur [carte | --new] [--top] [--self-test]`), et la même scène dans le bac à sable (DEBUG > Engine tests > Map editor). Tuiles, points, objets posés, morceaux et connecteurs, annuler / refaire, vérifications, essai de la carte depuis le départ (F5) ; enregistrement atomique dans `assets/maps` des sources. Le moteur en fournit le document sans GPU (`MapDocument` : édition, annulation, `validate`, écriture stable) ; l'éditeur lui-même (`apps/bac_a_sable/map_editor.cpp`) et les **types d'objets** (`apps/tranche/map_objects.cpp`, ceux de la tranche) ne sont pas dans le moteur : un jeu qui a ses propres objets s'en inspire en attendant l'éditeur de production (jalon dédié, révision de la [revue](REVUE_JALONS_1_A_7.md)). Décisions : [jalon 7, parties 7 et 8](JALON_7_OUTILS_ET_DONNEES.md).
+- **Bac à sable** (`bac_a_sable`) : sans argument, un menu de toutes les scènes de test ; avec des options (`--demo3d`, `--slice` (la tranche sur son niveau ; `--slice-map` : sur la carte des jalons 6 et 7), `--skinned N`, `--world`, `--states`...), une scène directement, pour les scripts, captures et mesures. Liste des options : [`README.md`](../README.md). Il n'est jamais livré. Le code de la tranche qu'il lance avec `--slice` ou `--states` est dans `apps/tranche/` (bibliothèque `tranche_commun`).
 
 ---
 
@@ -859,7 +1035,7 @@ Les comptes de signature (certificat Windows, Apple Developer Program) sont **re
 - Un plantage (accès invalide, `abort`, assertion échouée, exception que personne n'attrape) écrit, sous un nom daté (`2026-10-05_20-48-03`, suivi de `_2`, `_3`... si un rapport de la même seconde existe déjà ; le `.txt` et le `.dmp` d'un même événement ont le même nom), un **rapport `.txt`** (versions du moteur et du jeu, OS, GPU et pilote, mémoire, événement, pile en module + décalage, 200 dernières lignes du journal) et, sous Windows, un **minidump réduit `.dmp`** ; puis montre au joueur `crash_message` (`{report}` = le chemin du rapport ; défaut en anglais). Sous macOS, le système écrit aussi son rapport.
 - **GPU perdu** (pilote réinitialisé, carte retirée) : rapport du même genre, message `gpu_lost_message`, fin propre, `ended_on_error()` vrai.
 - Le rapport est pour les développeurs, en anglais. Pour y lire les noms de fonctions : `python tools/crash/read_report.py REPORT.txt SYMBOLS` (`SYMBOLS` : le dossier `packages/symbols/<jeu>-<version>-<os>/`) (dbghelp sous Windows, `atos` sous macOS), avec les symboles **de la même version** : **archiver `packages/symbols/` à chaque version livrée** (des symboles d'un autre build sont inutilisables).
-- **Essayer la chaîne** : commande `crash [acces|abort|exception|assertion|gpu]`, ou une option du jeu qui appelle `moteur::crash_now(...)` / `renderer().simulate_device_lost()` comme `tranche --test-plantage`. `MOTEUR_CRASH_SILENT` (variable d'environnement) supprime le message pour les vérifications automatiques.
+- **Essayer la chaîne** : commande `crash [acces|abort|exception|assertion|gpu|frame]` (`frame` : un échec du GPU dans une image, qui ne doit **pas** terminer le jeu), ou une option du jeu qui appelle `moteur::crash_now(...)` / `renderer().simulate_device_lost()` / `renderer().simulate_frame_failure()` comme `tranche --test-plantage` (qui a aussi `update` : une exception dans la logique). `MOTEUR_CRASH_SILENT` (variable d'environnement) supprime le message pour les vérifications automatiques.
 - L'**envoi** automatique des rapports à un service est une décision du jeu (avec le consentement du joueur), avant la première version publique.
 
 ### 8.4 Le dossier du joueur
@@ -918,7 +1094,7 @@ Pour l'ARPG, le même script s'écrira sur ce modèle (le moteur, l'exemple ext�
 ### 9.4 Fuzzing, sanitizers, analyse statique
 
 - **Fuzzing** : presets `windows-fuzz` / `macos-fuzz` (libFuzzer + ASan), un programme par lecteur de fichier dans `tests/fuzz/fuzz.cpp` (`map`, `effect`, `animation`, `save`, `ktx2`, `gltf`, `table`, `bindings`, `image`, `archive`) ; `python tools/fuzz/fuzzer.py [--seconds S] [--targets map,effect] [--parallel] [build]` (build par défaut `build/<os>-fuzz` ; corpus et trouvailles dans `build/fuzz/<cible>/` ; code de sortie 1 si quelque chose est trouvé). Une trouvaille, une fois corrigée, devient un cas de `tests/test_robustness.cpp`. Un lecteur de fichier ajouté par le jeu (son format de niveau) mérite son programme de fuzzing.
-- **Sanitizers** : presets `windows-asan` / `macos-asan` (`MOTEUR_ASAN` ; UBSan en plus sous macOS).
+- **Sanitizers** : presets `windows-asan` / `macos-asan` (`MOTEUR_ASAN` ; UBSan en plus sous macOS) ; `macos-tsan` (`MOTEUR_TSAN`, ThreadSanitizer : les accès concurrents des tâches ; Clang seulement).
 - **Analyse statique** : `python tools/ci/static_analysis.py [build] [--files MOTIF] [--all]` (`clang-tidy` avec `.clang-tidy` : `bugprone`, `clang-analyzer`, `performance` ; les sources du moteur, et avec `--all` aussi `apps/`) ; tout avertissement échoue.
 - **Documentation** : `python tools/docs/check_docs.py [en-tête.hpp...] [--output DOSSIER]` : sans en-tête, tout avertissement de Doxygen sur les en-têtes publics échoue ; avec des noms d'en-têtes, seuls leurs avertissements sont montrés (`--output` : où écrire, par défaut `build/docs_check/`).
 
@@ -930,7 +1106,8 @@ Décisions : [jalon 8, partie 8](JALON_8_CONSOLIDATION.md#8-robustesse--plantage
 
 Prévu au **jalon 9 « Niveau production »** (avant le premier jalon de l'ARPG) et au **jalon 10 « Rendu et effets »** ; le détail et les raisons sont dans la [revue des jalons 1 à 7](REVUE_JALONS_1_A_7.md) :
 
-- **jalon 9** : système d'interface maison et texte SDF ; localisation (textes du joueur, `Input::describe`) ; réflexion des types ; sélection des objets à la souris ; transparence (`BLEND`) et variantes de matériaux ; *root motion* et couches additives ; monde en vraie 3D pour la logique (maillage de navigation, plusieurs niveaux) ; événements sonores en données ; identifiants stables des assets ; tout le livré préparé en binaire ; image parallèle ; MSL compilé sur Mac ;
+- **jalon 9** (en cours : règles d'erreur, réflexion, préfabriqués, identifiants d'assets et formats préparés sont faits) : monde en vraie 3D pour la logique (collisions, maillage de navigation, plusieurs niveaux) ; vision et sélection des objets à la souris en 3D ; niveaux par morceaux ; image parallèle ; éditeur de niveaux ;
+- **jalon 9 bis** : système d'interface maison et texte SDF ; localisation (textes du joueur, `Input::describe`) ; transparence (`BLEND`) et variantes de matériaux ; *root motion* et couches additives ; événements sonores en données ; MSL compilé sur Mac ;
 - **jalon 10** : post-traitement (bloom, occlusion ambiante, étalonnage, TAA), *clustered forward* au-delà de 32 lumières, profondeur inversée, particules sur le GPU, physique (Jolt, à proposer) ;
 - **jalon 8, encore ouvert** : la CI hébergée, les comptes de signature, les vérifications macOS ([TEST_MAC.md](TEST_MAC.md)).
 

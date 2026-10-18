@@ -1,7 +1,7 @@
 """The measurement scenes of the engine (milestone 8, part 4), the same on Windows and macOS:
 
     python tools/measures/measure.py [BUILD_DIR] [--size W H] [--seconds S] [--output DIR]
-                                     [--compare DIR] [--scenes fight,crowd,crossing,loading]
+                                     [--compare DIR] [--scenes fight,crowd,crossing,loading,streaming]
 
 Each scene runs the sandbox in Release, without vsync, and writes its report (--report-json,
 version 2):
@@ -28,6 +28,9 @@ import subprocess
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# The windows of the programs this script runs open on the second screen (the first stays the
+# developer's); one screen: the system's choice (ApplicationConfig::window_display).
+os.environ.setdefault("MOTEUR_WINDOW_DISPLAY", "1")
 WINDOWS = platform.system() == "Windows"
 
 # Budgets of milestone 8 (minimal machine, crowded fight).
@@ -51,6 +54,8 @@ def scenes(seconds, size):
         "crowd": (["--skinned", "800", "--run-seconds", str(seconds)] + window, False),
         "crossing": (["--mesure", "traversee", "--run-seconds", str(seconds * 2)] + window, True),
         "loading": (["--states", "--states-cycles", "10"] + window, False),
+        # Milestone 9, part 8: a level of 512 x 512 m crossed while its chunks load and unload.
+        "streaming": (["--level-stream", "--run-seconds", str(seconds)] + window, False),
     }
 
 
@@ -80,7 +85,7 @@ def summary_of(report, gpu_report):
 def verdicts(name, line):
     """The budgets this scene can tell, each (text, held)."""
     checks = []
-    if name in ("fight", "crowd", "crossing"):
+    if name in ("fight", "crowd", "crossing", "streaming"):
         checks.append((f"CPU p99 {line['cpu_p99_ms']:.2f} ms <= {BUDGET_FRAME_P99_MS:.1f}", line["cpu_p99_ms"] <= BUDGET_FRAME_P99_MS))
         main = line["logic_ms"] + line["record_ms"] + line["submit_ms"]
         checks.append((f"main thread {main:.2f} ms <= {BUDGET_MAIN_THREAD_MS:.0f}", main <= BUDGET_MAIN_THREAD_MS))
@@ -130,7 +135,7 @@ def main():
     size = [int(v) for v in option("--size", 2, ["1920", "1080"])]
     seconds = int(option("--seconds", 1, "30"))
     older = option("--compare")
-    wanted = option("--scenes", 1, "fight,crowd,crossing,loading").split(",")
+    wanted = option("--scenes", 1, "fight,crowd,crossing,loading,streaming").split(",")
     stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
     out = os.path.abspath(option("--output", 1, os.path.join(ROOT, "build", "measures", f"{stamp}_{platform.system().lower()}")))
     default = "build/windows-release" if WINDOWS else "build/macos-release"

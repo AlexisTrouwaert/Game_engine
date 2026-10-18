@@ -118,6 +118,10 @@ struct RenderStats {
     int billboard_draw_calls = 0;
     ///@}
     int debug_lines = 0;  ///< lines drawn by the DebugLineRenderer
+    /// Renderers whose preparation failed this frame (a staging buffer that cannot be mapped or
+    /// grown): their drawing is skipped for this frame only, the rest is drawn (see
+    /// Renderer::end_frame()).
+    int failed_preparations = 0;
 
     /// GPU time of each part of the frame, in milliseconds, when Renderer::set_gpu_timing() is on
     /// (gpu_timed): approximate (see there). gpu_ms is indexed by GpuTime.
@@ -214,10 +218,21 @@ public:
     const std::string& device_lost_reason() const { return device_lost_; }
     /// For the checks of that chain (console "crash gpu", the slice's --test-plantage gpu).
     void simulate_device_lost() { lose_device("provoked on purpose to check the reports"); }
+    /// For the checks of the error policy (console "crash frame", the slice's --test-plantage
+    /// frame): the next end_frame() fails to prepare the meshes, as if their staging buffer could not
+    /// be mapped. The frame must be drawn without them, and the following ones normally.
+    void simulate_frame_failure() { simulate_frame_failure_ = true; }
     /// Ends the frame begun by a begin_frame() that returned true: uploads what was recorded, runs
     /// the render passes (see the class), submits, and forgets what was recorded. Does not wait for
     /// the GPU, except with set_gpu_timing() or a request_capture().
+    ///
+    /// Never throws (error policy of milestone 9, part 2: no exception crosses a frame). A renderer
+    /// whose preparation fails (a staging buffer that cannot be mapped or grown) is logged, counted
+    /// (RenderStats::failed_preparations, frame_failures()) and skipped for this frame; a failure
+    /// of the device itself loses it (device_lost()).
     void end_frame();
+    /// Preparations that failed since the renderer was created (see end_frame()).
+    std::uint64_t frame_failures() const { return frame_failures_; }
 
     /// Reads back the swapchain image of the next end_frame() (the current frame's, if one is being
     /// recorded) and writes it to `path` as a PNG, for
@@ -230,6 +245,34 @@ public:
         capture_path_ = std::move(path);
         capture_max_width_ = max_width;
     }
+
+    /// Submits the uploads of the resources created since the last frame (they wait for the next
+    /// frame otherwise): before GPU work of one's own outside a frame that uses them (a thumbnail of
+    /// a model just loaded). Not inside begin_frame() and end_frame().
+    void submit_pending_uploads() { flush_uploads(); }
+
+    /// Hover by the id buffer (milestone 9, part 7): with MeshRenderer::set_ids() on, the pick id
+    /// under `pixel` (window pixels, as Input::pointer() gives them) is read back from this frame's
+    /// id pass, without waiting: picked_id() has it one or two frames later. For what the pointer is
+    /// over (an outline, a cursor), never for the game's logic (see pick() in picking.hpp).
+    void request_pick(glm::vec2 pixel) {
+        pick_pixel_ = pixel;
+        pick_requested_ = true;
+    }
+    /// The last pick id read back (0: nothing selectable there), and the window pixel it was asked
+    /// for. See request_pick().
+    std::uint32_t picked_id() const { return picked_id_; }
+    /// The pixel picked_id() was read at.
+    glm::vec2 picked_pixel() const { return picked_pixel_; }
+    /// Outlines the entity whose pick id is `id` (0: none) with `color` (linear rgb, a: strength),
+    /// `thickness` pixels of the scene image wide: what is hovered. Needs the id pass. Kept.
+    void set_outline(std::uint32_t id, glm::vec4 color = {1.0f, 0.85f, 0.35f, 1.0f}, float thickness = 2.0f) {
+        outline_id_ = id;
+        outline_color_ = color;
+        outline_thickness_ = thickness;
+    }
+    /// Format of the id pass's target: one 32-bit whole number per pixel.
+    static constexpr SDL_GPUTextureFormat kIdFormat = SDL_GPU_TEXTUREFORMAT_R32_UINT;
 
     /// Sprite drawing, recorded between begin_frame() and end_frame(). sprites() draws the 2D world,
     /// over the 3D scene, with the camera given to its SpriteRenderer::set_view_projection() (window
@@ -465,6 +508,29 @@ private:
     GpuTexture distance_texture_;    ///< the meshes' distances along the view (resolved with MSAA)
     GpuTexture distance_msaa_texture_;  ///< with MSAA only: what the meshes write, resolved into the one above
     GpuTexture ldr_texture_;         ///< with FXAA only: the tone-mapped scene, which FXAA reads
+    GpuTexture id_texture_;          ///< the id pass's target (MeshRenderer::set_ids()), single-sampled
+    GpuTexture id_depth_;            ///< its depth
+    std::uint32_t id_width_ = 0;
+    std::uint32_t id_height_ = 0;
+    glm::vec2 pick_pixel_{0.0f};
+    bool pick_requested_ = false;
+    std::uint32_t picked_id_ = 0;
+    glm::vec2 picked_pixel_{0.0f};
+    std::uint32_t outline_id_ = 0;
+    glm::vec4 outline_color_{1.0f};
+    float outline_thickness_ = 2.0f;
+    /// The pick read-backs in flight: a pixel's id copied into a buffer, read once its frame is done.
+    struct PickSlot {
+        GpuTransferBuffer buffer;
+        SDL_GPUFence* fence = nullptr;
+        glm::vec2 pixel{0.0f};
+    };
+    PickSlot pick_slots_[3];
+    int next_pick_slot_ = 0;
+    /// Reads the read-backs whose frame is done (picked_id()); waits for none.
+    void collect_picks();
+    /// The id targets at the scene's size.
+    void ensure_id_targets();
     std::uint32_t scene_width_ = 0;
     std::uint32_t scene_height_ = 0;
     AntiAliasing anti_aliasing_ = AntiAliasing::None;
@@ -493,6 +559,12 @@ private:
     std::string device_description_;
     std::string device_lost_;  ///< why the device was lost; empty while it works
     void lose_device(const std::string& reason);
+    bool simulate_frame_failure_ = false;
+    std::uint64_t frame_failures_ = 0;
+    /// Runs one renderer's preparation; on an exception, logs it, counts it and returns false (the
+    /// renderer is then skipped for the frame).
+    template <typename Prepare>
+    bool prepare_guarded(const char* what, Prepare&& prepare);
 };
 
 }  // namespace moteur

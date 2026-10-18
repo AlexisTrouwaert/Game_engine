@@ -10,6 +10,9 @@ struct Aabb {
     glm::vec3 min{1.0f};   ///< the lowest corner; (1, 1, 1) while empty
     glm::vec3 max{-1.0f};  ///< the highest corner, both bounds included; (-1, -1, -1) while empty
 
+    /// Exact comparison of the corners.
+    bool operator==(const Aabb&) const = default;
+
     /// True when the box holds no point: max is below min on some axis.
     bool empty() const { return max.x < min.x || max.y < min.y || max.z < min.z; }
     /// Grows the box to include `point`; on an empty box, the box becomes that single point.
