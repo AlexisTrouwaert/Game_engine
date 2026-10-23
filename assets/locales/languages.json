@@ -1,0 +1,9 @@
+{
+  "_note": "The languages of the slice and of the sandbox (milestone 9 bis, part 5): the base language is the one the others are translated from (and fall back to); each language has the engine's strings (moteur.ftl, from assets_moteur) and the resources listed here. See FORMATS.md, section 22.",
+  "base": "fr",
+  "languages": [
+    {"code": "fr", "name": "Français"},
+    {"code": "en", "name": "English"}
+  ],
+  "resources": ["tranche"]
+}

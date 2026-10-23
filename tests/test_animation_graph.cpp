@@ -107,7 +107,7 @@ TEST_CASE("Animation graph: the file is checked, each error names its place") {
         CHECK_THROWS_WITH_AS(moteur::AnimationSet::parse(set_json(graph), "x.json"), doctest::Contains(why), std::runtime_error);
     };
     const std::string layer = R"("states": { "a": { "motion": "Idle" } }, "start": "a")";
-    bad(R"({ "layers": [] })", "one or two layers");
+    bad(R"({ "layers": [] })", "one to eight layers");
     bad(R"({ "layers": [ { "states": { "a": {} }, "start": "b" } ] })", "layers[0] > start: 'b' is not a state");
     bad(R"({ "parameters": { "p": "float" }, "layers": [ { )" + layer +
             R"(, "transitions": [ { "from": "a", "to": "a", "when": { "param": "q", "op": ">", "value": 1 } } ] } ] })",

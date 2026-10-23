@@ -219,7 +219,8 @@ def main():
             command += ["--pixel-size", str(args.pixel_size[0]), str(args.pixel_size[1])]
         capture = os.path.join(target, "capture.png")
         if args.replay is not None:
-            command += ["--replay-input", os.path.abspath(args.replay), "--capture", capture]
+            # In French, the language of the reference capture, whatever the machine's.
+            command += ["--language", "fr", "--replay-input", os.path.abspath(args.replay), "--capture", capture]
         if args.freeze_after is not None:
             command += ["--freeze-after", str(args.freeze_after)]
         run = subprocess.run(command, cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")

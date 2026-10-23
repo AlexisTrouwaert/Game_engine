@@ -68,13 +68,9 @@ AnimationTest::AnimationTest(moteur::Application& app, const Options& options, b
     }
     // The slice's sounds (tools/audio/fetch_test_sounds.py; without them, the events are only listed).
     moteur::Assets& assets = app.assets();
-    if (assets.exists(Demo3D::kSteps[0])) {
-        for (const char* path : Demo3D::kSteps) {
-            steps_.push_back(assets.sound(path));
-        }
-        for (const char* path : Demo3D::kImpacts) {
-            impacts_.push_back(assets.sound(path));
-        }
+    if (assets.exists(Demo3D::kAmbience) && assets.exists(Demo3D::kBank)) {
+        sound_ = std::make_unique<moteur::AudioEvents>(app.audio(), assets);
+        sound_->load(Demo3D::kBank);
     }
 
     // A torch on the left of the row: its shadows (a point light's) follow the poses.
@@ -334,15 +330,8 @@ void AnimationTest::on_events() {
     for (const moteur::AnimatorEvent& event : events_) {
         const glm::vec3 at = registry.get<moteur::Transform>(event.entity).position;
         const bool step = event.name.rfind("step", 0) == 0;
-        const std::vector<moteur::Asset<moteur::Sound>>& sounds = step ? steps_ : impacts_;
-        if (!sounds.empty() && crowd_.empty()) {  // a crowd's hundreds of steps: listed only
-            moteur::PlaySound sound;
-            sound.position = at;
-            sound.volume = step ? 0.6f : 0.8f;
-            sound.pitch = event.name == "death_ground" ? 0.6f : 1.0f;
-            sound.pitch_variation = 0.06f;
-            sound.volume_variation = 0.15f;
-            app_.audio().play(sounds, sound);
+        if (sound_ && crowd_.empty()) {  // a crowd's hundreds of steps: listed only
+            sound_->play(step ? "personnage/pas" : "combat/impact", {.position = at});
         }
         char line[160];
         SDL_snprintf(line, sizeof line, "tick %lld: %s (%s, %s, %.0f %%)", static_cast<long long>(tick_), event.name.c_str(),
@@ -515,6 +504,9 @@ void AnimationTest::render(moteur::Renderer& renderer, double alpha) {
     renderer.set_clear_color(0.35f, 0.38f, 0.42f);
     camera_.set_viewport({static_cast<float>(renderer.width()), static_cast<float>(renderer.height())});
     app_.audio().set_listener(camera_);
+    if (sound_) {
+        sound_->update(static_cast<float>(1.0 / std::max(1, moteur::tick_rate())));
+    }
     moteur::MeshRenderer& meshes = renderer.meshes();
     meshes.set_camera(camera_.view_projection(), camera_.position());
     meshes.set_sun(glm::normalize(glm::vec3(-0.4f, 1.0f, 0.6f)), glm::vec3(1.0f, 0.95f, 0.85f), 3.0f);
@@ -777,7 +769,7 @@ void AnimationTest::draw_walker_controls() {
     ImGui::SetItemTooltip("The speed of the planted foot along the path (moving average): near 0 when the "
                           "animation's pace follows the movement; unchecking 'Move forward' drops it to "
                           "minus the speed.");
-    for (int l = 0; l < moteur::Animator::kLayers; ++l) {
+    for (int l = 0; l < animator.layer_count(); ++l) {
         const moteur::Animator::Layer& layer = animator.layer(l);
         if (layer.motions.empty()) {
             continue;
@@ -799,7 +791,7 @@ void AnimationTest::draw_walker_controls() {
         }
     }
     ImGui::TextDisabled("%s", walker.strides.c_str());
-    ImGui::TextUnformatted(steps_.empty() ? "Events (sounds missing: python tools/audio/fetch_test_sounds.py):"
+    ImGui::TextUnformatted(!sound_ ? "Events (sounds missing: python tools/audio/fetch_test_sounds.py):"
                                           : "Events (footsteps and hit sounds):");
     for (const std::string& line : event_log_) {
         ImGui::BulletText("%s", line.c_str());

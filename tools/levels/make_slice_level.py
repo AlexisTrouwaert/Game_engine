@@ -17,7 +17,7 @@ The place, from south to north (y up, metres):
 - wet cobblestones painted everywhere (A, B in patches), 8 m cells;
 - skeletons to fight (spawns: the "prefabs/tranche/apparition.prefab.json" instances, whose
   properties say who comes: the slice's characters table), the start point, the waypoints of the
-  "traversee" measure.
+  "traversee" measure, the ghost's place ("fantome").
 """
 import json
 import math
@@ -215,6 +215,9 @@ def build():
 
     # Points: the start, the measure's tour.
     level.point("start", (0.0, 0.0, 5.0))
+    # The ghost (milestone 9 bis, part 2: the transparent pass) haunts the arch's west pillar: it goes
+    # round it, in front of it and behind it as the camera sees them.
+    level.point("fantome", (-2.3, 0.35, 24.0))
     for i, (x, y, z) in enumerate([(0, 0, 5), (-2, 0, 22), (2, 0, 30), (0, 0, 46), (-14, 0, 54), (14, 0, 56),
                                    (0, 0, 57), (0, PARVIS, 64), (-8, PARVIS, 70), (8, PARVIS, 70), (0, 0, 52), (0, 0, 8)]):
         level.point(f"tour_{i + 1:02d}", (x, y, z))

@@ -1,0 +1,16 @@
+<!-- The title screen of the slice. -->
+<ui class="opaque">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 440">
+        <label class="title" text="{game-title}"/>
+        <label class="dim" text="{title-subtitle}"/>
+        <label class="dim" text="{title-help}"/>
+        <label class="error" visible="{$title.has_error}" text="{$title.error}"/>
+        <spacer class="gap"/>
+        <button id="play" action="play" text="{title-play}" autofocus="true"/>
+        <button action="continue" visible="{$title.can_continue}" text="{title-continue}"/>
+        <button action="load" text="{title-load}"/>
+        <button action="options" text="{title-options}"/>
+        <button action="quit" text="{title-quit}"/>
+    </panel>
+</ui>

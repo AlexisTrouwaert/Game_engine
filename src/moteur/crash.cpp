@@ -454,6 +454,30 @@ void report_and_end(const char* default_what) {
 
 }  // namespace
 
+namespace {
+
+// The player's message, cut around `{report}`, prepared for the handlers (no allocation there).
+void store_message(State& s, const std::string& player_message) {
+    const std::string message = player_message.empty() ? kDefaultCrashMessage : player_message;
+    const std::size_t at = message.find("{report}");
+    std::snprintf(s.message_before, sizeof(s.message_before), "%s", message.substr(0, at).c_str());
+    std::snprintf(s.message_after, sizeof(s.message_after), "%s",
+                  at == std::string::npos ? "" : message.substr(at + std::string_view("{report}").size()).c_str());
+#if defined(_WIN32)
+    MultiByteToWideChar(CP_UTF8, 0, s.message_before, -1, s.wide_before, 1024);
+    MultiByteToWideChar(CP_UTF8, 0, s.message_after, -1, s.wide_after, 1024);
+#endif
+}
+
+}  // namespace
+
+void set_crash_message(const std::string& player_message) {
+    State& s = state();
+    if (s.installed.load()) {
+        store_message(s, player_message);
+    }
+}
+
 void install_crash_reporter(const std::string& directory, const std::string& program_title,
                             const std::string& player_message) {
     State& s = state();
@@ -467,19 +491,13 @@ void install_crash_reporter(const std::string& directory, const std::string& pro
     std::error_code error;
     std::filesystem::create_directories(std::filesystem::path(std::u8string(s.directory.begin(), s.directory.end())), error);
     std::snprintf(s.title, sizeof(s.title), "%s", program_title.c_str());
-    const std::string message = player_message.empty() ? kDefaultCrashMessage : player_message;
-    const std::size_t at = message.find("{report}");
-    std::snprintf(s.message_before, sizeof(s.message_before), "%s", message.substr(0, at).c_str());
-    std::snprintf(s.message_after, sizeof(s.message_after), "%s",
-                  at == std::string::npos ? "" : message.substr(at + std::string_view("{report}").size()).c_str());
+    store_message(s, player_message);
     s.silent = SDL_getenv("MOTEUR_CRASH_SILENT") != nullptr;
     s.crashing = false;
     s.previous_terminate = std::set_terminate(on_terminate);
 #if defined(_WIN32)
     MultiByteToWideChar(CP_UTF8, 0, s.directory.c_str(), -1, s.wide_directory, MAX_PATH);
     MultiByteToWideChar(CP_UTF8, 0, s.title, -1, s.wide_title, 256);
-    MultiByteToWideChar(CP_UTF8, 0, s.message_before, -1, s.wide_before, 1024);
-    MultiByteToWideChar(CP_UTF8, 0, s.message_after, -1, s.wide_after, 1024);
     // The symbols of the program's folder, when they are there (development): names in the reports.
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
     SymInitialize(GetCurrentProcess(), nullptr, TRUE);

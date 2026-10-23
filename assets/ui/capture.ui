@@ -1,0 +1,12 @@
+<!-- Waiting for the key (or button) of an action. -->
+<!-- Modal: the page under it takes no input while a key is awaited. -->
+<ui class="shade">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 460">
+        <label class="title" text="{options-controls-title}"/>
+        <label text="{$capture.action}"/>
+        <spacer class="gap"/>
+        <label text="{$capture.press}"/>
+        <label class="dim" text="{$capture.cancel}"/>
+    </panel>
+</ui>

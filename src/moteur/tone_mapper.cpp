@@ -12,7 +12,8 @@ ToneMapper::ToneMapper(Renderer& renderer, SDL_GPUTextureFormat target_format) {
     vertex_info.stage = SDL_GPU_SHADERSTAGE_VERTEX;
     ShaderInfo fragment_info;
     fragment_info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
-    fragment_info.samplers = 2;         // the scene, the ids (the outline)
+    fragment_info.samplers = 1;         // the scene
+    fragment_info.storage_textures = 1; // the ids (the outline), read with Load
     fragment_info.uniform_buffers = 1;  // exposure
 
     const GpuShader vertex_shader = renderer.load_shader("tonemap.vert", vertex_info);
@@ -41,12 +42,11 @@ ToneMapper::ToneMapper(Renderer& renderer, SDL_GPUTextureFormat target_format) {
 
     // Linear, clamped to the edges: scales a reduced render size up smoothly, without wrapping.
     sampler_ = renderer.create_sampler(SDL_GPU_FILTER_LINEAR, "tonemap.sampler");
-    id_sampler_ = renderer.create_sampler(SDL_GPU_FILTER_NEAREST, "tonemap.ids sampler");
     // Bound when there is no id pass: never read (no outlined id), its content does not matter.
     SDL_GPUTextureCreateInfo ids = {};
     ids.type = SDL_GPU_TEXTURETYPE_2D;
     ids.format = Renderer::kIdFormat;
-    ids.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    ids.usage = SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ;
     ids.width = 1;
     ids.height = 1;
     ids.layer_count_or_depth = 1;
@@ -62,9 +62,10 @@ void ToneMapper::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass,
                         float exposure, bool raw) {
     SDL_BindGPUGraphicsPipeline(pass, pipeline_.get());
     const bool outlined = ids_ != nullptr && outline_id_ != 0;
-    const SDL_GPUTextureSamplerBinding bindings[2] = {{scene, sampler_.get()},
-                                                      {outlined ? ids_ : no_ids_.get(), id_sampler_.get()}};
-    SDL_BindGPUFragmentSamplers(pass, 0, bindings, 2);
+    const SDL_GPUTextureSamplerBinding binding = {scene, sampler_.get()};
+    SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
+    SDL_GPUTexture* ids = outlined ? ids_ : no_ids_.get();
+    SDL_BindGPUFragmentStorageTextures(pass, 0, &ids, 1);
     const glm::vec4 uniforms[3] = {
         glm::vec4(raw ? 1.0f : exposure, raw ? 1.0f : 0.0f, 0.0f, 0.0f),
         outline_color_,

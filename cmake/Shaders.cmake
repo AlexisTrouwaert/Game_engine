@@ -11,18 +11,26 @@
 #
 # Windows: compiled at build time to DXIL (Direct3D 12) with the `shadercross` tool from the
 #          vcpkg port sdl3-shadercross.
-# macOS:   the vcpkg port cannot be installed (its dependency directx-dxc does not exist on
-#          macOS), so pre-generated MSL from <folder>/generated/msl/ is copied instead.
+# macOS:   by default, pre-generated MSL from <folder>/generated/msl/ is copied (the registry's
+#          port cannot be installed: its dependency directx-dxc does not exist on macOS).
 #          Regenerate those files on Windows with the `export_msl_shaders` target (checked by
 #          tools/ci/verify.py).
+#          With MOTEUR_MAC_SHADERCROSS=ON (milestone 9 bis, part 2; NOT TRIED YET): compiled at
+#          build time to MSL by the shadercross of the overlay port sdl3-shadercross-macos (vcpkg
+#          feature mac-shaders: VCPKG_MANIFEST_FEATURES=mac-shaders), whose HLSL compiler is the
+#          LunarG Vulkan SDK's DXC. Once checked on the Mac, the pre-generated MSL and its step of
+#          the verifier go (moteur_doc/TEST_MAC.md).
 
 # The engine's own shaders: every program of the engine gets them (moteur_add_game).
 set(MOTEUR_ENGINE_SHADERS
     sprite.vert.hlsl
     sprite.frag.hlsl
+    text.vert.hlsl
+    text.frag.hlsl
     mesh.vert.hlsl
     mesh_skinned.vert.hlsl
     mesh.frag.hlsl
+    mesh_transparent.frag.hlsl
     mesh_id.vert.hlsl
     mesh_id_skinned.vert.hlsl
     mesh_id.frag.hlsl
@@ -70,6 +78,17 @@ if(WIN32)
     set(MOTEUR_SHADERCROSS_EXE "${_tool_dir}/shadercross.exe" CACHE INTERNAL "shadercross, with its DLLs")
 
     add_custom_target(export_msl_shaders COMMENT "Pre-generated MSL shaders exported")
+elseif(APPLE)
+    option(MOTEUR_MAC_SHADERCROSS "Compile the shaders on the Mac (vcpkg feature mac-shaders) instead of copying the MSL made on Windows" OFF)
+    if(MOTEUR_MAC_SHADERCROSS)
+        find_program(MOTEUR_SHADERCROSS_EXE shadercross
+            PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/sdl3-shadercross-macos"
+            NO_DEFAULT_PATH)
+        if(NOT MOTEUR_SHADERCROSS_EXE)
+            message(FATAL_ERROR "MOTEUR_MAC_SHADERCROSS: shadercross not found; configure with "
+                                "VCPKG_MANIFEST_FEATURES=mac-shaders (needs the LunarG Vulkan SDK)")
+        endif()
+    endif()
 endif()
 
 function(moteur_add_shaders target)
@@ -126,6 +145,16 @@ function(moteur_add_shaders target)
                     VERBATIM)
                 add_dependencies(export_msl_shaders ${export_target})
             endif()
+        elseif(APPLE AND MOTEUR_MAC_SHADERCROSS)
+            set(output "${out_dir}/${base}.msl")
+            add_custom_command(
+                OUTPUT "${output}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${out_dir}"
+                COMMAND "${MOTEUR_SHADERCROSS_EXE}" "${input}"
+                        -s HLSL -d MSL -t ${stage} -e main -I "${ARG_SOURCE_DIR}" -o "${output}"
+                DEPENDS ${shader_files}
+                COMMENT "Compiling ${source} -> MSL"
+                VERBATIM)
         elseif(APPLE)
             set(msl "${msl_dir}/${base}.msl")
             if(NOT EXISTS "${msl}")

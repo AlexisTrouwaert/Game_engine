@@ -564,9 +564,7 @@ ModelData parse_gltf(const void* data, std::size_t size, const std::string& name
                 // glTF's default cutoff is 0.5; a cutoff of 0 would keep everything: the smallest one that cuts.
                 material.alpha_cutoff = source.alpha_cutoff > 0.0f ? source.alpha_cutoff : 1.0f / 512.0f;
             } else if (source.alpha_mode == cgltf_alpha_mode_blend) {
-                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                            "Model '%s': material '%s' is BLEND (transparent), not supported yet: drawn opaque",
-                            name.c_str(), material.name.c_str());
+                material.blend = true;  // the transparent pass (milestone 9 bis, part 2)
             }
             model.materials.push_back(std::move(material));
         }
@@ -902,12 +900,15 @@ Model Model::create(Renderer& renderer, const ModelData& data, const std::string
         material.emissive = source.emissive;
         material.double_sided = source.double_sided;
         material.alpha_cutoff = source.alpha_cutoff;
+        material.blend = source.blend;
+        material.casts_shadow = !source.blend;  // a transparent surface casts no shadow (see Material::blend)
         material.base_color_texture = texture(source.base_color_image);
         material.metallic_roughness_texture = texture(source.metallic_roughness_image);
         material.normal_texture = texture(source.normal_image);
         material.occlusion_texture = texture(source.occlusion_image);
         material.emissive_texture = texture(source.emissive_image);
         model.materials.push_back(material);
+        model.material_names.push_back(source.name);
     }
     for (const ModelPart& source : data.parts) {
         Part part;

@@ -8,3 +8,7 @@ set(VCPKG_LIBRARY_LINKAGE static)
 set(VCPKG_CMAKE_SYSTEM_NAME Darwin)
 set(VCPKG_OSX_ARCHITECTURES arm64)
 set(VCPKG_OSX_DEPLOYMENT_TARGET 13.0)
+
+# The port sdl3-shadercross-macos (feature mac-shaders, milestone 9 bis, part 2) looks for the
+# LunarG Vulkan SDK's DXC there.
+set(VCPKG_ENV_PASSTHROUGH VULKAN_SDK HOME)

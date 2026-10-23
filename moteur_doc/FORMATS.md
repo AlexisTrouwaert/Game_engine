@@ -54,6 +54,11 @@ Ce document décrit **chaque fichier que le moteur lit ou écrit**, pour qui éc
 - [18. Maillages de navigation `.mnav`](#18-maillages-de-navigation-mnav)
 - [19. Niveaux v3 `.level.json`](#19-niveaux-v3-leveljson)
 - [20. Niveaux préparés `.mlvl` et `.mlvc`](#20-niveaux-préparés-mlvl-et-mlvc)
+- [21. Piles de polices `.font.json`](#21-piles-de-polices-fontjson)
+- [22. Textes localisés `.ftl` et `languages.json`](#22-textes-localisés-ftl-et-languagesjson)
+- [23. Écrans d'interface `.ui` et styles `.uss`](#23-écrans-dinterface-ui-et-styles-uss)
+- [24. Matériaux `.material.json`](#24-matériaux-materialjson)
+- [25. Banques de sons `.bank.json`](#25-banques-de-sons-bankjson)
 - [Annexe : sommes de contrôle](#annexe--sommes-de-contrôle)
 
 ---
@@ -382,6 +387,9 @@ Conséquence pour les données : la charge utile d'une table occupe déjà 3 niv
 | `blend_spaces` | objet | `{}` | nom → liste d'au moins **deux** noms de clips, placés sur l'axe de la vitesse par leur `ground_speed` |
 | `masks` | objet | `{}` | nom → masque d'articulations (ci-dessous) |
 | `upper_mask` | texte | `""` | le masque de la couche 1 (haut du corps) ; doit être dans `masks` |
+| `layers` | liste | corps entier, puis haut du corps (`upper_mask`) | jalon 9 bis, partie 3 : les couches de l'`Animator`, 1 à 8, dans l'ordre ; chacune `{"name", "mask" (dans masks), "additive" (booléen)}` ; la première sans masque et non additive. Une couche au-dessus **remplace** les articulations de son masque par son poids ; une couche **additive** ajoute la différence de ses clips avec leur première pose par-dessus (un coup reçu en courant) |
+| `max_motions` | entier | `4` | mouvements gardés par couche pendant les fondus (1 à 16) ; au-delà, le plus faible part |
+| `root_joint` | texte | `"root"` | l'articulation dont le déplacement horizontal est celui du personnage, pour les clips à `root_motion` |
 | `attach_points` | objet | `{}` | nom (`right_hand`) → point d'attache (ci-dessous) |
 | `graph` | objet | aucun graphe | le graphe d'animation, [3.2](#32-le-graphe-danimation) |
 
@@ -393,8 +401,9 @@ Conséquence pour les données : la charge utile d'une table occupe déjà 3 niv
 | `fade_ticks` | entier | `-1` | fondu vers ce clip, en ticks ; -1 : celui du fichier |
 | `phase` | nombre | `0` | dans `[0, 1)` : décalage du clip dans le cycle d'un espace de mélange (pieds en phase) |
 | `events` | liste | `[]` | événements, triés par temps à la lecture |
+| `root_motion` | booléen ou nombre | `false` | jalon 9 bis, partie 3 : le clip **déplace** le personnage par la courbe de `root_joint` (en millimètres entiers par tick, multipliée par le nombre donné ; `true` : 1), lue au tick (`Animator::take_root_motion()`) ; la pose reste sur place ; seulement le plan horizontal ; ≥ 0 |
 
-**Événement** (`events[i]`) : `time` (nombre, **exigé**, secondes depuis le début du clip, ≥ 0 ; au plus la durée du clip, vérifié quand il joue), `name` (texte, **exigé**, non vide : ce que reçoit le jeu), `always` (booléen, défaut `false` : se déclenche quel que soit le poids du clip, tant qu'il pèse ; sinon seulement s'il pèse la moitié ou plus).
+**Événement** (`events[i]`) : `time` (nombre, **exigé**, secondes depuis le début du clip, ≥ 0 ; au plus la durée du clip, vérifié quand il joue), `name` (texte, **exigé**, non vide : ce que reçoit le jeu), `always` (booléen, défaut `false` : se déclenche quel que soit le poids du clip, tant qu'il pèse ; sinon seulement s'il pèse la moitié ou plus), `end` (nombre, secondes, après `time` : une **fenêtre**, jalon 9 bis, partie 3 : l'événement part à son début et à sa fin (`AnimatorEvent::phase` `Begin`, `End`), et `Animator::in_window(name)` dit si un clip est dedans ; pour les clips joués seuls, pas dans un espace de mélange).
 
 **Espace de mélange** : deux clips de la liste ne peuvent pas avoir la même `ground_speed` (refus) ; un clip sans `ground_speed` est placé à 0 (un repos).
 
@@ -402,7 +411,7 @@ Conséquence pour les données : la charge utile d'une table occupe déjà 3 niv
 
 **Point d'attache** (`attach_points.<nom>`) : `joint` (texte, **exigé**), `position` (3 nombres, mètres du fichier, dans le repère de l'articulation, défaut `[0, 0, 0]`), `rotation` (3 angles en **degrés**, autour des axes fixes X, puis Y, puis Z, défaut aucun).
 
-**Refus** (`Animation set '<fichier>': ...`) : JSON invalide, version fausse, `fade_ticks` négatif (fichier) ou inférieur à -1 (clip), `ground_speed` négative, `phase` hors de `[0, 1)`, événement sans nom ou à temps négatif, `ramp` négatif, `upper_mask` absent de `masks`, `position` ou `rotation` qui n'a pas 3 nombres, espace de mélange de moins de deux clips ou à deux vitesses égales, graphe invalide, valeur du mauvais type JSON. Les clés inconnues sont ignorées.
+**Refus** (`Animation set '<fichier>': ...`) : JSON invalide, version fausse, `fade_ticks` négatif (fichier) ou inférieur à -1 (clip), `ground_speed` négative, `phase` hors de `[0, 1)`, événement sans nom ou à temps négatif, `ramp` négatif, `upper_mask` absent de `masks`, `position` ou `rotation` qui n'a pas 3 nombres, espace de mélange de moins de deux clips ou à deux vitesses égales, `layers` vide, de plus de 8, à première couche additive ou masquée ou au masque inconnu, `max_motions` hors de 1 à 16, `root_motion` négatif, fenêtre qui finit avant de commencer, graphe invalide ou de plus de couches que l'animateur, valeur du mauvais type JSON. Les clés inconnues sont ignorées.
 
 ### 3.2 Le graphe d'animation
 
@@ -411,7 +420,7 @@ Sous la clé `graph` : quel mouvement chaque couche joue, selon des paramètres 
 | Clé | Type | Défaut | Sens |
 |---|---|---|---|
 | `parameters` | objet | `{}` | nom → type : `"float"`, `"int"` (valeurs arrondies), `"bool"` (0 ou 1), `"trigger"` (un événement, levé pour une seule évaluation) |
-| `layers` | liste | — (exigé) | **une ou deux** couches : la couche 0 pilote le corps entier, la couche 1 le haut du corps (avec `upper_mask`) |
+| `layers` | liste | — (exigé) | **une à huit** couches, celles de l'animateur dans l'ordre (`layers` du fichier, ou par défaut : la couche 0 pilote le corps entier, la couche 1 le haut du corps) ; pas plus que l'animateur n'en a |
 
 **Couche** (`layers[i]`) :
 
@@ -1291,10 +1300,10 @@ Petit-boutiste. Textes : longueur u32 puis octets UTF-8 ; tableaux : nombre d'é
 | Champ | Type |
 |---|---|
 | magie | `MMDL` (4 octets ASCII) |
-| version | u32 = 3 (`kPreparedModelVersion` ; 2 : clips sous forme ozz ; 3 : géométrie de collision ; une autre est refusée : `prepared model format N (expected 3)`) |
+| version | u32 = 4 (`kPreparedModelVersion` ; 2 : clips sous forme ozz ; 3 : géométrie de collision ; 4 : matériaux BLEND ; une autre est refusée : `prepared model format N (expected 4)`) |
 | empreinte de la source | u64 (ci-dessous) |
 | parties | u32 N, puis par partie : nom, nœud, sommets, indices, poids de peau, **niveaux de détail** (`MeshLod` : premier indice, nombre d'indices, erreur), matrice 4×4, matériau i32, peau i32, articulation i32, décalage d'articulation 4×4, rayon de peau f32 |
-| matériaux | u32 N, puis : nom, couleur de base vec4, métal f32, rugosité f32, échelle de normale f32, occlusion f32, émission vec3, deux faces u8, seuil alpha f32, cinq indices d'image i32 (couleur, métal-rugosité, normale, occlusion, émission ; −1 : aucune) |
+| matériaux | u32 N, puis : nom, couleur de base vec4, métal f32, rugosité f32, échelle de normale f32, occlusion f32, émission vec3, deux faces u8, seuil alpha f32, transparent (BLEND) u8, cinq indices d'image i32 (couleur, métal-rugosité, normale, occlusion, émission ; −1 : aucune) |
 | images | u32 N, puis : nom, largeur i32, hauteur i32, pixels (blob, vide si KTX2), KTX2 (blob), sRGB u8, carte de normales u8, fichier (texte : une image dans son propre fichier, chargée comme texture à part) |
 | squelette | u32 N articulations : nom, parent i32, repos (translation vec3, rotation quat, échelle vec3) |
 | peaux | u32 N : nom, articulations (tableau i32), matrices inverses (tableau mat4) |
@@ -1438,3 +1447,231 @@ Les écarts relevés à la première écriture de ce document (courbe `size` à 
 
 - **Archives, collision de casse** (`archive.cpp`, `write_archive`) : après le tri par octets, seuls deux chemins **voisins** sont comparés sans la casse. Les majuscules passent avant les minuscules : deux chemins qui ne diffèrent que par la casse peuvent être séparés par un troisième (`Audio/a.ogg`, `Maps/b.json`, `audio/a.ogg`). La collision n'est alors pas vue, et l'archive est écrite.
 - **Préparation, empreinte d'un échec** (`cook.cpp`, `cook`) : l'empreinte d'un fichier est notée dans `cook_state.json` avant sa préparation. Si le transcodage ou l'écriture échoue et qu'une sortie plus ancienne existe, la préparation suivante trouve la même empreinte et une sortie présente : elle garde la sortie périmée, sans refaire le fichier ni redire l'erreur (`--force` la refait).
+
+## 21. Piles de polices `.font.json`
+
+Jalon 9 bis, partie 4. Ce que charge `Font::load()` / `Assets::font()` quand le chemin finit par `.font.json` (un `.ttf` ou `.otf` se charge aussi seul). Livré en CBOR comme les autres documents (section 17).
+
+| Clé | Valeur |
+|---|---|
+| `faces` | liste de fichiers de polices (TrueType, OpenType CFF, polices variables), **relatifs au dossier de la pile** ; la première est obligatoire, une suivante absente est sautée avec un avertissement (un paquet qui ne livre pas la police chinoise) |
+| `prepare` | `"latin"` (défaut) : les glyphes ASCII, Latin-1, œ Œ, tirets, guillemets, « … » et « € » faits au chargement, sur les fils du `JobSystem` ; `"none"` : rien d'avance |
+| `_note` | libre (ignorée) |
+
+Ordre : pour chaque **graphème** (lettre et accents, émoji composé), la première police qui a tous ses caractères ; la ponctuation et les espaces restent dans la police du texte qui les précède quand elle les a. Les métriques des lignes (montée, descente, interligne) sont celles de la **première** police.
+
+```json
+{ "faces": ["Inter-Regular.ttf", "noto/NotoSansArabic.ttf", "noto/NotoSansSC.ttf"], "prepare": "latin" }
+```
+
+Fichiers du moteur et du bac à sable : `assets_moteur/fonts/default.font.json` (Inter), `assets/fonts/interface.font.json` (Inter, Noto Sans Arabic, Noto Sans SC : le bac à sable), `assets/fonts/tranche.font.json` (Inter, Noto Sans Arabic : la tranche, qui ne livre pas le chinois). Les polices Noto viennent de `tools/text/fetch_text_data.py` (pas dans Git).
+
+### 21.1 Balises du texte
+
+Avec `TextStyle::markup` (`parse_text_markup()`) :
+
+| Balise | Effet |
+|---|---|
+| `<b>…</b>` | graisse 700 |
+| `<i>…</i>` | penché |
+| `<color=#rrggbb>…</color>`, `<color=#rrggbbaa>` | couleur (sinon celle du style) |
+| `<size=1.5>…</size>` | taille relative (0 à 16 fois) ; la ligne prend la hauteur de sa plus grande taille |
+| `<weight=600>…</weight>` | graisse (1 à 1000) |
+| `<icon=nom>` | une icône carrée d'un em à cet endroit (caractère U+FFFC dans le texte) |
+| `&lt;` `&gt;` `&amp;` | `<` `>` `&` |
+
+Les balises s'imbriquent ; une fermeture referme aussi les balises ouvertes après la sienne. Une balise inconnue ou mal écrite reste dans le texte (une faute se voit) ; une fermeture sans ouverture est ignorée.
+
+### 21.2 Atlas des glyphes (en mémoire)
+
+Pages RGBA8 de 1024 × 1024 (8 au plus) : RGB, le champ de distance multicanal ; A, la vraie distance signée ; 0,5 sur le bord, une plage de 12 texels pour 48 texels par em. Rien n'est écrit sur le disque : les glyphes sont refaits à chaque exécution, à la demande.
+
+## 22. Textes localisés `.ftl` et `languages.json`
+
+Jalon 9 bis, partie 5. Tout texte que lit le joueur vient de fichiers de chaînes, par identifiant stable ; le code ne construit jamais une phrase. Lus par `Localization` (`moteur/localization.hpp`), à l'image de **Fluent** (Mozilla) dont la syntaxe est reprise, avec le code du moteur.
+
+### 22.1 `locales/languages.json`
+
+| Clé | Valeur |
+|---|---|
+| `base` | la langue source (le repli d'un message absent) : `"fr"` pour la tranche |
+| `languages` | `[{"code": "fr", "name": "Français"}, ...]` : les langues offertes, leur nom dans leur propre langue (le menu les montre ainsi), dans l'ordre du menu |
+| `resources` | les fichiers du jeu, lus pour chaque langue : `locales/<code>/<ressource>.ftl` ; les chaînes du moteur (`moteur.ftl`, dans `assets_moteur/locales/`) sont lues d'abord, un fichier du jeu peut remplacer leurs messages |
+
+### 22.2 Fichiers `.ftl`
+
+| Élément | Forme |
+|---|---|
+| commentaire | une ligne commençant par `#` (`##`, `###` aussi) |
+| message | `identifiant = texte` en début de ligne ; identifiant : lettres, chiffres, `-`, `_`, commençant par une lettre |
+| suite de ligne | une ligne **indentée** continue le texte (retour à la ligne gardé ; l'indentation entière est ôtée, différence avec Fluent qui ôte l'indentation commune) ; un texte peut commencer à la ligne suivante (`message =` puis lignes indentées) ; une ligne vide entre deux lignes indentées est gardée |
+| attribut | ligne indentée `.nom = texte` après le message ; demandé par `format("message.nom")` |
+| terme | `-nom = texte` : un mot que d'autres messages reprennent (`{ -nom }`) et avec lequel ils s'accordent (`{ -nom.genre -> ... }`) ; un terme peut prendre des arguments (`{ -nom(cas: "génitif") }`, lus comme `$cas` dans le terme, qui ne voit pas les variables du message) |
+| variable | `{ $nom }` : écrite selon la langue (nombres groupés, virgule décimale du français) ; absente : `{$nom}` reste visible |
+| référence | `{ autre-message }`, `{ autre-message.attribut }` |
+| littéral | `{ "texte" }` (échappements `\"`, `\\`, `\uXXXX`, `\UXXXXXX`), `{ 42 }` ; une accolade littérale : `{ "{" }` |
+| sélecteur | `{ $n ->` puis une variante par ligne `[clé] texte`, une seule par défaut `*[clé] texte`, puis `}` sur sa ligne ; sur un nombre : d'abord la valeur exacte (`[0]`), puis la catégorie de pluriel CLDR de la langue (`[zero]`, `[one]`, `[two]`, `[few]`, `[many]`, `[other]`) ; sur un texte : la clé égale |
+| `NUMBER($x, ...)` | options `minimumFractionDigits`, `maximumFractionDigits`, `useGrouping: "false"`, `style: "percent"` (la valeur fois 100, le signe de la langue : « 45 % »), `type: "ordinal"` (pour un sélecteur : 1er, 2e ; 1st, 2nd) |
+| `DURATION($secondes)` | une durée par les messages `moteur-duration-hours`, `-minutes`, `-seconds` : « 1 h 5 min », « 3 min 20 s », « 45 s » |
+
+Dans une langue qui s'écrit de droite à gauche (arabe, hébreu, persan...), chaque valeur de variable ou de fonction est **isolée** (U+2068 … U+2069) : un nom latin garde son sens de lecture.
+
+Erreurs : une entrée qui ne se lit pas est **sautée** (jusqu'à la ligne suivante qui commence une entrée), signalée avec son fichier et sa ligne ; les autres entrées du fichier sont gardées.
+
+### 22.3 Repli, vérification, pseudo-localisation
+
+- Un message absent de la langue courante : celui de la langue de base (ses nombres et pluriels en sont aussi), puis `{identifiant}`.
+- `Localization::check()` (lancée par `--check-data` du bac à sable et par la **préparation** du paquet) : erreurs (le fichier ou la préparation échoue) : syntaxe, référence à un message ou un terme inexistant ; avertissements : message absent d'une langue, message en trop, **variables différentes** de la langue de base, texte identique à la langue de base (« Options », « Pause » : souvent voulu, listés ensemble par langue).
+- Langue `qps` (`language qps` dans la console) : la langue de base **accentuée** (« Óptíóñš »), **40 % plus longue** (points médians) et **entre crochets** : un texte écrit dans le code n'a pas de crochets, une boîte trop étroite coupe le crochet de fin.
+
+### 22.4 Préférence du joueur
+
+La langue choisie est la variable archivée `language` (`variables.cfg`) ; vide, la préférence du système (`SDL_GetPreferredLocales()`) parmi les langues offertes, sinon la langue de base. `ApplicationConfig::language` (option `--language` des programmes) l'impose sans l'écrire : les captures de référence sont faites en `fr`.
+
+## 23. Écrans d'interface `.ui` et styles `.uss`
+
+Jalon 9 bis, partie 6. Les écrans d'un jeu sont des **données** : un document `.ui` (balises, sous-ensemble de XML) décrit les éléments, une ou plusieurs feuilles `.uss` (sous-ensemble de CSS) leur apparence. Lus par `moteur::Ui` (`moteur/ui.hpp`), **rechargés à chaud** quand l'un des fichiers change. `check_ui_files()` les vérifie sans les afficher (`--check-data`, préparation du paquet).
+
+### 23.1 Documents `.ui`
+
+Un seul élément racine, `<ui>`. Les blancs entre les balises sont réduits à un espace ; commentaires `<!-- -->` ; entités `&lt; &gt; &amp; &quot; &apos; &#NN; &#xNN;` ; une ligne `<?xml ...?>` est ignorée. Une erreur de balisage arrête la lecture du document (fichier et ligne).
+
+| Élément | Rôle |
+|---|---|
+| `<ui>` | la racine, l'écran entier. `modal="false"` : ne prend pas les entrées (un HUD) ; `back-action="nom"` : l'action envoyée par « retour » (Échap, Start) ; `class`, `style` |
+| `<style src="ui/x.uss"/>` | une feuille de style (chemin depuis la racine des assets), dans l'ordre de la cascade |
+| `<panel>`, `<column>`, `<row>`, `<spacer>` | des conteneurs (`row` : en ligne, centré en hauteur ; les autres en colonne) ; n'importe quel nom d'élément est un conteneur, que les styles visent par son nom |
+| `<label text="...">` | un texte |
+| `<button action="nom">` | un bouton (focus, clic, Entrée) ; il peut contenir d'autres éléments |
+| `<checkbox bind="chemin">` | une case : oui / non du modèle |
+| `<slider bind="chemin" min max step>` | un curseur (flèches, souris, glisser) |
+| `<select bind="chemin" options="a\|b\|c">` ou `source="liste"` | un choix parmi des textes, l'**index** dans le modèle ; flèches gauche et droite, Entrée passe au suivant ; `source` : la liste du modèle `liste.count`, `liste.N.name` |
+| `<input bind="chemin" placeholder maxlength>` | un champ de saisie (texte du système, curseur, sélection au clic) |
+| `<bar value="{$chemin}">` | une barre de 0 à 1 (vie, chargement) |
+| `<image src="...">` | une image (asset, ou une texture donnée par le jeu : `Ui::set_texture(nom, texture)`) ; `image-slice` : neuf tranches |
+| `<scroll>` | une zone qui défile (molette, focus qui sort du cadre), barre de défilement |
+| `<repeat source="liste">` | ses enfants répétés pour chaque élément de `liste` (`liste.count` dans le modèle) ; `{$item.x}` y vaut `liste.N.x`, `{$item.index}` le rang |
+| `<template id="nom">` | un modèle d'élément, non dessiné ; le jeu en fait des **instances** placées dans l'écran (`UiDocument::instance(nom, clé)` : une barre de vie par monstre), dessinées sous les autres éléments du document |
+
+Attributs communs : `id`, `class` (plusieurs, séparés par des espaces), `style` (déclarations, comme dans une feuille), `text`, `visible` et `enabled` (`true`, `false` ou `{$chemin}`), `action` (rend l'élément actionnable), `focusable="true"`, `autofocus` (le focus à l'ouverture ; sinon le premier élément actionnable), `tooltip` (une infobulle, texte avec balises de la partie 4), `nav-up`, `nav-down`, `nav-left`, `nav-right` (`#id` : voisin imposé ; sinon le voisin le plus proche dans la direction, et le tour en haut et en bas).
+
+**Textes** (`text`, `options`, `tooltip`, `placeholder`, texte entre les balises) : `{identifiant}` est un message localisé (FORMATS 22), `{$chemin}` une valeur du modèle (un nombre écrit selon la langue, oui / non par `common-yes` / `common-no`), `{{` une accolade. Ils se refont quand la valeur ou la langue change.
+
+### 23.2 Feuilles `.uss`
+
+Règles `sélecteurs { propriété: valeur; ... }`, commentaires `/* */`.
+
+- **Sélecteurs** : nom d'élément, `.classe`, `#id`, `*`, composés (`button.primary:focus`) ; états `:hover`, `:focus`, `:active`, `:disabled`, `:checked`, `:first-child`, `:last-child` ; descendant (`.card label`) et enfant (`.buttons > button`) ; listes `a, b`. Spécificité et ordre de CSS ; les déclarations `style="..."` d'un élément passent après les feuilles, puis celles du jeu (`UiElement::set_style()`).
+- **Variables** : `--nom: valeur;` (héritées), `var(--nom)` ou `var(--nom, défaut)`.
+- **Unités** : les longueurs sont en **points** (`16`, `16px` et `16pt` valent pareil), multipliés par l'échelle de l'interface (densité de l'écran × choix du joueur) ; `%` de la place du parent ; `auto`. Couleurs : `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(r, g, b)`, `rgba(r, g, b, a)` (composantes de 0 à 255, alpha de 0 à 1), quelques noms (`white`, `black`, `transparent`...). Durées : `200ms`, `0.2s`.
+- Une propriété inconnue ou une valeur fausse est ignorée et signalée (fichier, élément, propriété) ; le reste s'applique.
+
+| Propriétés | Valeurs |
+|---|---|
+| `display` | `flex` (défaut), `none` |
+| `position`, `left`, `top`, `right`, `bottom` | `relative` (défaut) ou `absolute` (hors du flux, placé dans son parent) |
+| `flex-direction` | `column` (défaut), `row` |
+| `flex-wrap` | `nowrap`, `wrap` |
+| `justify-content` | `start`, `center`, `end`, `space-between`, `space-around`, `space-evenly` |
+| `align-items`, `align-self` | `stretch` (défaut), `start`, `center`, `end` |
+| `flex`, `flex-grow`, `flex-shrink`, `flex-basis` | comme CSS : `flex: 1` partage toute la place (base 0), `flex: 1 1 auto` la place libre, `flex: none` |
+| `gap` | l'écart entre les enfants |
+| `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height` | longueurs (la boîte entière, marges intérieures comprises) |
+| `margin`, `padding` (et `-top`, `-right`, `-bottom`, `-left`) | 1 à 4 valeurs comme CSS ; `margin: auto` centre |
+| `overflow` | `visible`, `hidden` (découpe), `scroll` (défile) |
+| `background`, `background-color`, `background-image` | une couleur, `url(chemin)`, ou les deux |
+| `border`, `border-width`, `border-color`, `border-radius` | `border: 1 #fff` ; coins arrondis (dessinés nets à toute taille) |
+| `image-slice`, `image-color` | les bords des neuf tranches, la teinte d'une image |
+| `fill-color` | le remplissage d'une barre, d'un curseur, d'une case cochée |
+| `opacity`, `translate`, `scale` | l'élément et ses enfants : transparence, décalage (`translate: 0 8`), échelle autour de son centre |
+| `color`, `font-family`, `font-size`, `font-weight`, `font-style` | texte (hérités) ; `font-family` : une pile `.font.json` ; `font-weight` : 100 à 900, `normal`, `bold` ; `font-style: italic` |
+| `text-align` | `start` (selon le sens du texte), `end`, `left`, `center`, `right` (hérité) |
+| `line-height` / `line-spacing` | facteur d'interligne (hérité) |
+| `text-outline`, `text-shadow` | `text-outline: 1.5 rgba(0,0,0,0.8)` ; `text-shadow: 1 2 3 #000` (décalage x, y, flou, couleur) |
+| `transition` | `propriété durée [courbe] [délai], ...` ; propriétés `opacity`, `background`, `color`, `border-color`, `translate`, `scale`, `all` ; courbes `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out` |
+
+Feuille de base du moteur (avant celles du jeu) : la racine prend tout l'écran, `row` en ligne, `scroll` défile, des tailles minimales pour les boutons, cases, curseurs, champs et listes, l'infobulle.
+
+### 23.3 Modèle et événements (le côté du jeu)
+
+Le jeu écrit les valeurs que montrent les écrans dans `Ui::model()` (`set("hero.health", 0.75)`, listes : `set_count("slots", 3)` puis `slots.0.name`...) ; un écran ne lit jamais le jeu. Les contrôles liés (`bind`) écrivent dans le modèle. Après chaque tick, `Ui::take_events()` : `Activate` (un bouton : son `action`, son `id`, son rang dans une liste), `Change` (une valeur changée), `Back` (l'action de retour du document), `Focus` (le joueur a déplacé le focus : un son). Exemple complet : `apps/tranche/states_demo.cpp` et `assets/ui/` (GUIDE, 5.1).
+
+## 24. Matériaux `.material.json`
+
+Jalon 9 bis, partie 2. Un matériau du jeu en données, référencé par sa clé (`assets.material("materials/sol.material.json")`), qui peut **remplacer** un matériau d'un modèle par son nom (`ModelComponent::materials` : `[{"material": "<nom du matériau glTF>", "with": "<clé du .material.json>"}]`, dans un préfabriqué, un niveau ou par le code). Lu par `parse_material()` (`moteur/material.hpp`), rechargé à chaud (les entités qui l'utilisent prennent les nouvelles valeurs à l'image suivante). Une clé inconnue est une **erreur** (une faute de frappe ne passe pas), comme une valeur de mauvais genre ou hors bornes ; le message nomme le fichier et la clé.
+
+| Clé | Valeur | Défaut |
+|---|---|---|
+| `version` | `1` | 1 |
+| `base_color` | `[r, g, b]` ou `[r, g, b, a]`, linéaire | `[1, 1, 1, 1]` |
+| `base_color_texture` | chemin (ou `{"id", "path"}`) d'une image sRGB, multipliée par `base_color` | aucune (blanc) |
+| `metallic`, `roughness` | 0 à 1 | 0, 0.5 |
+| `metallic_roughness_texture` | image linéaire : rugosité en vert, métal en bleu | aucune |
+| `normal_texture`, `normal_scale` | carte de normales (espace tangent, vert vers le haut), son intensité (−10 à 10) | aucune, 1 |
+| `occlusion_texture`, `occlusion_strength` | image linéaire (rouge), 0 à 1 | aucune, 1 |
+| `emissive`, `emissive_strength` | `[r, g, b]` linéaire, multiplié par la force (0 à 1000) | noir, 1 |
+| `emissive_texture` | image sRGB, multipliée par `emissive` | aucune |
+| `alpha` | `"opaque"`, `"mask"` (alpha testé, découpé dans la scène et les ombres) ou `"blend"` (transparent : passe triée, sans ombre) | `"opaque"` |
+| `alpha_cutoff` | seuil du `"mask"` (1/512 à 1) ; refusé sans `"mask"` | 0.5 |
+| `double_sided` | `true` / `false` | `false` |
+| `casts_shadow` | `true` / `false` ; toujours faux pour `"blend"` | `true` |
+| `fades` | estompé devant le héros (`Cutout`) | `false` |
+| `uv_scroll` | `[u, v]` par seconde : la texture coule (eau, lave, cercle magique) | `[0, 0]` |
+| `emissive_pulse` | battements par seconde de l'émission (entre 40 % et 100 %) ; 0 : fixe | 0 |
+
+Les textures sont créées avec mipmaps, sans prémultiplication (le shader se sert lui-même de l'alpha), en deux canaux compressés pour une carte de normales KTX2. Le temps de `uv_scroll` et `emissive_pulse` est celui du jeu (`MeshRenderer::set_time()`, ses ticks) : captures et rejeux voient les mêmes images.
+
+Les **effets par objet** ne sont pas dans le fichier : ce sont des états du jeu, le composant `material_effects` (`MaterialEffects` : `dissolve` 0 à 1, `dissolve_edge` la lueur du bord, `flash` rgb + quantité), sauvegardé avec l'entité.
+
+Exemple (`assets/materials/test/lave.material.json`) :
+
+```json
+{"version": 1, "base_color_texture": "textures/test/lave.png", "roughness": 0.7,
+ "emissive": [1, 1, 1], "emissive_strength": 4, "emissive_texture": "textures/test/lave_emission.png",
+ "uv_scroll": [0.05, 0.02], "emissive_pulse": 0.5}
+```
+
+## 25. Banques de sons `.bank.json`
+
+Jalon 9 bis, partie 7. Les **événements audio** d'un jeu en données, calqués sur les concepts de FMOD Studio : le jeu joue `"combat/impact"`, jamais un fichier. Lue par `SoundBank::parse()` (`moteur/sound_bank.hpp`), chargée par `AudioEvents::load()` (`Assets::sound_bank()`), **rechargée à chaud** (prise à l'`update()` suivant ; les instances en cours s'arrêtent). Livrée en CBOR comme tout document ; la préparation **suit ses fichiers** (les sons et musiques de ses événements partent avec elle). Une clé inconnue est une **erreur**, comme un bus, un paramètre ou un label qui n'existe pas, une plage à l'envers, une courbe dont les x ne croissent pas, une musique sans section ; le message nomme la banque et l'endroit (`events > personnage/pas: ...`).
+
+| Clé | Valeur |
+|---|---|
+| `version` | `1` |
+| `buses` | `{"effects/pas": {"volume": 0.9}}` : bus sous un bus de base (`music`, `effects`, `ambience`, `interface`, ceux du moteur, dont les curseurs du joueur sont les VCA) ou sous un bus déclaré avant lui |
+| `reverbs` | `{"crypte": {"room": 0.8, "damping": 0.4, "wet": 0.4}}` : taille (0 à 1), amortissement des aigus, part entendue |
+| `reverb_buses` | les bus de base que la réverbération de la zone colore (`["effects"]`) |
+| `snapshots` | `{"pause": {"fade": 0.3, "buses": {"music": {"volume": 0.35}, "effects": {"paused": true}}}}` : volumes multipliés et pauses, en fondu |
+| `vcas` | `{"combat": ["effects/combat"]}` : un gain sur des bus |
+| `parameters` | paramètres **globaux** : `{"min", "max", "default"}` (un nombre) ou `{"labels": ["pave", "dalle"], "default": "pave"}` (un label, rangé par son indice) |
+| `events` | les événements, par nom (voir ci-dessous) ; au moins un |
+
+Un **événement** :
+
+| Clé | Valeur | Défaut |
+|---|---|---|
+| `bus` | un bus de base ou déclaré | `"effects"` |
+| `sounds` | liste de fichiers, ou **aiguillage** `{"parameter": "<label>", "cases": {"<label>": [...]}}` (un label sans liste : silence voulu) | — |
+| `order` | `"random"`, `"shuffle"` (chacun une fois dans un ordre mêlé), `"sequence"` | `"random"` |
+| `volume`, `pitch` | un nombre ou une plage `[bas, haut]` : chaque lecture tire dedans | 1 |
+| `loop`, `stream` | boucle ; décodé pendant la lecture (ambiances longues) | `false` |
+| `fade_in`, `fade_out` | secondes (`fade_out` : à l'arrêt) | 0 |
+| `spatial` | `{"min": 2, "max": 22, "occlusion": true}` : placé dans le monde, plein volume sous `min` mètres, muet au-delà de `max`, étouffé par la géométrie | non placé |
+| `max_instances`, `steal` | limite d'instances (0 : aucune) ; au-delà : `"oldest"`, `"quietest"` (la plus lointaine) ou `"none"` (refusée) | 0, `"oldest"` |
+| `priority` | 0 (la plus haute) à 255 : ce que la limite de voix garde d'abord | 128 |
+| `parameters` | paramètres **locaux** à chaque instance (même forme que ceux de la banque) | — |
+| `automation` | `[{"parameter": "sol", "property": "volume" \| "pitch" \| "lowpass", "points": [[x, y], ...]}]` : courbe linéaire, plate au-delà des bouts ; le passe-bas en Hz | — |
+| `music` | **musique interactive** : `{"parameter": "section", "quantize": "bar" \| "beat" \| "now", "crossfade": 1.5, "sections": {"<label>": {"file", "tempo", "beats_per_bar", "layers": [{"file", "automation"}]}}}` ; les sections sont les labels du paramètre ; un changement attend la mesure (ou le temps) suivante de la section jouée, en fondu enchaîné ; les couches jouent en phase, leur volume suit leur paramètre | — |
+
+Un paramètre est cherché dans l'instance, puis dans la banque. Exemple (extrait de `assets/audio/banks/tranche.bank.json`) :
+
+```json
+{"version": 1,
+ "buses": {"effects/pas": {"volume": 0.9}},
+ "parameters": {"sol": {"labels": ["pave", "dalle"], "default": "pave"}},
+ "events": {
+   "personnage/pas": {"bus": "effects/pas", "order": "shuffle", "volume": [0.5, 0.65], "pitch": [0.94, 1.06],
+     "sounds": {"parameter": "sol", "cases": {"pave": ["audio/kenney_impact/footstep_concrete_000.ogg"],
+                                              "dalle": ["audio/kenney_impact/impactGeneric_light_000.ogg"]}},
+     "spatial": {"min": 2, "max": 22}, "max_instances": 4}}}
+```

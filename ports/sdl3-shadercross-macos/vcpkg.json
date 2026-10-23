@@ -1,0 +1,23 @@
+{
+  "name": "sdl3-shadercross-macos",
+  "version": "3.0.0-preview2",
+  "description": "SDL_shadercross built on macOS (milestone 9 bis, part 2): the shadercross tool, which compiles the engine's HLSL to MSL on the Mac itself. HLSL goes through the DXC of the LunarG Vulkan SDK (vcpkg's directx-dxc has no macOS build), then SPIRV-Cross. NOT TRIED YET: written on Windows, to check at the next Mac session (moteur_doc/TEST_MAC.md).",
+  "homepage": "https://github.com/libsdl-org/SDL_shadercross",
+  "license": "Zlib",
+  "supports": "osx",
+  "dependencies": [
+    {
+      "name": "sdl3",
+      "default-features": false
+    },
+    "spirv-cross",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

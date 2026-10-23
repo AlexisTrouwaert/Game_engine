@@ -1,0 +1,12 @@
+<!-- The languages offered, by their own names; the change applies at once. -->
+<ui class="shade" back-action="back">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 360">
+        <label class="title" text="{options-language-title}"/>
+        <repeat source="languages">
+            <button action="language" text="{$item.name}"/>
+        </repeat>
+        <button action="back" text="{common-back}"/>
+        <label class="dim" text="{options-language-help}"/>
+    </panel>
+</ui>

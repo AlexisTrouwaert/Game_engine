@@ -1,0 +1,13 @@
+<!-- A question with two answers (keep the new display settings?). -->
+<ui class="shade" back-action="cancel">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 440">
+        <label class="title" text="{$confirm.title}"/>
+        <label class="dim" text="{$confirm.text}"/>
+        <spacer class="gap"/>
+        <row class="buttons">
+            <button action="keep" text="{common-keep}" autofocus="true"/>
+            <button action="cancel" text="{common-cancel}"/>
+        </row>
+    </panel>
+</ui>

@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "moteur/application.hpp"
+#include "moteur/audio_events.hpp"
 #include "moteur/camera3d.hpp"
 #include "moteur/collision.hpp"
 #include "moteur/environment.hpp"
@@ -28,10 +30,20 @@
 #include "moteur/renderer.hpp"
 #include "moteur/spatial_hash.hpp"
 #include "moteur/tilemap.hpp"
+#include "moteur/ui.hpp"
 #include "moteur/visibility.hpp"
 #include "moteur/world_debug.hpp"
 #include "moteur/save_file.hpp"
 #include "moteur/world_save.hpp"
+
+// The slice's menu actions, with their default bindings (see assets/input/demo3d.json): what
+// moteur::UiInput::from_actions() reads.
+inline constexpr const char* kMenuActions[] = {"menu_up", "menu_down", "menu_left", "menu_right", "menu_confirm", "menu_click"};
+
+// The name of an input profile (the current one without `profile`): the game's
+// `input-profile-<name>` message, else the label of the bindings file.
+std::string profile_label(moteur::Application& app, const std::string& profile);
+std::string profile_label(moteur::Application& app);
 #include "moteur/world.hpp"
 
 #include "sandbox_scene.hpp"
@@ -88,6 +100,12 @@ public:
         // Milestone 7, part 11: a save already read (the menus read slots, with their backup):
         // the slice starts from it, as from `load_path`.
         std::shared_ptr<const moteur::SaveGame> saved_game;
+        // Milestone 9 bis, part 6: the interface the overlay (ui/hud.ui) is drawn by, the game's
+        // (it draws it with its menus); null: the demo makes one of its own and draws it.
+        moteur::Ui* ui = nullptr;
+        // Milestone 9 bis, part 7: the sound events the slice plays through, the game's (its bank
+        // loaded); null: the demo makes its own and updates it.
+        moteur::AudioEvents* sound = nullptr;
         // Milestone 7, part 8: the decor and creatures drawn at random written as objects of the
         // slice's map into this file (a v2 map), then the program stops. Once the map has objects,
         // the slice places those instead of drawing.
@@ -113,8 +131,9 @@ public:
     };
 
     // The assets it loads from files (a loading screen loads them ahead: see StatesDemo).
-    static constexpr const char* kFont = "fonts/Inter-Regular.ttf";
-    static constexpr float kFontPixelHeight = 20.0f;
+    static constexpr const char* kFont = "fonts/tranche.font.json";  // the slice's interface (ui/*.ui): the shipped fonts
+    static constexpr const char* kHud = "ui/hud.ui";
+    static constexpr const char* kGhost = "models/fantome/fantome.glb";  // tools/models/make_ghost.py
     static constexpr const char* kBarrel = "models/polyhaven/wine_barrel_01/wine_barrel_01_1k.gltf";
     // The ARPG's first assets, read in place from the game's folder (ApplicationConfig::asset_folders,
     // milestone 9 part 4; without it, the slice keeps its checkered floor and its lamps are plain
@@ -123,16 +142,12 @@ public:
     static constexpr const char* kPavingA = "models/sols/sol_paves_humides_a_8m.glb";
     static constexpr const char* kPavingB = "models/sols/sol_paves_humides_b_8m.glb";
     static constexpr const char* kStreetLamp = "models/props/lampadaire_gothique.prefab.json";
-    // The hero's sounds (tools/audio/fetch_test_sounds.py; without them, the slice is silent).
-    static constexpr const char* kSteps[5] = {
-        "audio/kenney_impact/footstep_concrete_000.ogg", "audio/kenney_impact/footstep_concrete_001.ogg",
-        "audio/kenney_impact/footstep_concrete_002.ogg", "audio/kenney_impact/footstep_concrete_003.ogg",
-        "audio/kenney_impact/footstep_concrete_004.ogg"};
-    static constexpr const char* kImpacts[5] = {
-        "audio/kenney_impact/impactMetal_light_000.ogg", "audio/kenney_impact/impactMetal_light_001.ogg",
-        "audio/kenney_impact/impactMetal_light_002.ogg", "audio/kenney_impact/impactMetal_light_003.ogg",
-        "audio/kenney_impact/impactMetal_light_004.ogg"};
+    // The slice's sounds: events of its bank (milestone 9 bis, part 7), whose files come from
+    // tools/audio/fetch_test_sounds.py (without them, the slice is silent: kAmbience tells).
+    static constexpr const char* kBank = "audio/banks/tranche.bank.json";
     static constexpr const char* kAmbience = "audio/ambience/forgotten_tombs.mp3";
+    // The sound events' system the slice plays through (null: silent).
+    moteur::AudioEvents* sound() const { return sound_; }
     // The slice's animated characters (milestone 5): their models, skeletons and clips are in the
     // same files; the description of their animations is shared (the KayKit rig).
     static constexpr const char* kKnight = "models/characters/kaykit_adventurers/Knight.glb";
@@ -201,6 +216,9 @@ private:
     // A creature loses `blow` of its health (a share of 1): its blow taken, or its fall (effects,
     // collider gone). What a strike and "kill all" share.
     void hurt(entt::entity creature, float blow);
+    // Milestone 9 bis, part 2: every tick, the flashes of the blows fade, the remains of the dead
+    // dissolve, the ghost goes round its pillar.
+    void update_effects();
     // What each creature is: drawn, read from the "monstre" objects of the map, or asked for by
     // the console ("spawn").
     struct CreatureSpawn {
@@ -302,6 +320,10 @@ private:
     double elapsed_ = 0.0;
     long ticks_ = 0;
     long live_ticks_ = 0;  // ticks not frozen: what timed effects count, so that they stop with the scene
+    // The ghost (milestone 9 bis, part 2: a transparent material), round the level's point "fantome";
+    // made again with the level (not saved: its place follows live_ticks_).
+    entt::entity ghost_ = entt::null;
+    glm::vec3 ghost_center_{0.0f};
     long frames_ = 0;
     double collect_seconds_ = 0.0;
     bool capture_done_ = false;
@@ -322,9 +344,12 @@ private:
     moteur::Asset<moteur::Model> paving_b_;
     moteur::Asset<moteur::Prefab> street_lamp_;  // the ARPG's street lamp (empty: a plain post)
     std::optional<moteur::Environment> sky_;
-    moteur::Asset<moteur::Font> font_;
     moteur::Asset<moteur::Texture> glow_;
-    moteur::Texture white_;
+    // The overlay (figures, help, health bars, the words of the blows): ui/hud.ui.
+    std::unique_ptr<moteur::Ui> own_ui_;  // when Options::ui is null
+    moteur::Ui* ui_ = nullptr;
+    moteur::UiDocument* hud_ = nullptr;
+    double ui_seconds_ = 0.0;  // ticked since the last frame (own interface)
 
     // The scene's entities (one registry per scene).
     moteur::World world_;
@@ -349,10 +374,11 @@ private:
     entt::entity attack_target_ = entt::null;  // the blow under way lands on it at its impact
     std::vector<moteur::AnimatorEvent> events_;  // of the last tick
     int hits_ = 0;
-    std::vector<moteur::Asset<moteur::Sound>> steps_;
-    std::vector<moteur::Asset<moteur::Sound>> impacts_;
-    moteur::Asset<moteur::Music> ambience_;
-    moteur::SoundId ambience_voice_ = moteur::kNoSound;
+    std::unique_ptr<moteur::AudioEvents> own_sound_;  // when Options::sound is null
+    moteur::AudioEvents* sound_ = nullptr;
+    moteur::EventId ambience_ = moteur::kNoEvent;
+    // A footstep, on the hero's ground (the event's "sol" parameter: the parvis's slabs, the street's cobbles).
+    void play_step(glm::vec3 at);
 
     // Milestone 6 (the slice).
     moteur::Asset<moteur::MapData> slice_map_;

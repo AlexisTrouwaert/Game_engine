@@ -516,6 +516,28 @@ Détails dans [JALON_8_CONSOLIDATION.md](JALON_8_CONSOLIDATION.md). Les commande
 
 - [ ] Les sections des jalons 2 à 7 ci-dessus : chaque case faite ou expliquée (ce que la vérification complète couvre déjà peut être coché d'office : compilation, tests unitaires, références).
 
+## Jalon 9 bis : Niveau production, présentation
+
+Détails dans [JALON_9BIS_PRESENTATION.md](JALON_9BIS_PRESENTATION.md).
+
+**Shaders compilés sur le Mac (partie 2, écrit sans essai)**
+
+- [ ] Installer le **SDK Vulkan de LunarG** pour macOS (https://vulkan.lunarg.com/sdk/home) ; il contient `lib/libdxcompiler.dylib` et `include/dxc/dxcapi.h`. Laisser l'installation par défaut (`~/VulkanSDK/<version>/macOS`) ou exporter `VULKAN_SDK` vers ce dossier `macOS`.
+- [ ] `cmake --preset macos-debug -DVCPKG_MANIFEST_FEATURES=mac-shaders -DMOTEUR_MAC_SHADERCROSS=ON` : le port `sdl3-shadercross-macos` se construit (noter toute erreur du port : `ports/sdl3-shadercross-macos/portfile.cmake`).
+- [ ] La compilation passe les shaders en MSL (« Compiling … -> MSL ») ; `bac_a_sable` démarre ; les références (`check_references.py`) donnent les mêmes images qu'avec le MSL copié.
+- [ ] Si tout passe : retirer `shaders/generated/msl/`, l'étape « exported MSL up to date » du vérificateur et la branche de copie de `cmake/Shaders.cmake`, et passer `MOTEUR_MAC_SHADERCROSS` à ON par défaut sur le Mac.
+
+**Matériaux (partie 2)**
+
+- [ ] `bac_a_sable --materials` : le fantôme passe devant et derrière le pilier, vitres, dissolutions et leurs ombres, éclair, lave qui coule ; capture de référence `materials` (`--record` la première fois).
+
+**La tranche refaite (partie 8)**
+
+- [ ] `py -3 tools/ci/verify.py` passe sur le Mac (avec le MSL compilé si le port marche, sinon le MSL copié).
+- [ ] La tranche (`--states`) : écrans en français et en anglais (Options > Langue), texte net sur Retina, échelle de l'interface 75 à 200 %, fantôme, éclair et dissolution, ruée (compétence 2), sons par événements (pas qui changent sur le parvis, réverbération, la pause baisse la musique).
+- [ ] `python3 tools/measures/measure.py build/macos-release` : les budgets du M3 (p99 ≤ 16,7 ms, fil principal ≤ 8 ms, aucune image > 33 ms, 2 Go et 1,5 Go) ; comparer à Windows (`build/measures/j9bis_p8`).
+- [ ] Le `.dmg` de la tranche s'installe et se joue (section du jalon 8).
+
 ## Après le Mac : les tests qui restent à faire
 
 - [x] **Casque débranché sous Windows** (jalon 4, partie 7) *(fait le 2026-09-25 : pas de plantage)* : débrancher et rebrancher le casque pendant la scène « Audio » ; pas de plantage, le son suit (log `Audio: now playing on ...` ou `sound device started again`).

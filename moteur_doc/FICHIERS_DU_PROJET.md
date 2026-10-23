@@ -53,8 +53,7 @@ moteur/
       main.cpp                        le programme tranche (ce que sera l'exécutable de l'ARPG)
       cook_main.cpp                   son outil de préparation (tranche_cook)
       demo3d.hpp, .cpp                le monde de la tranche (scène de démonstration 3D)
-      states_demo.hpp, .cpp           ses écrans : titre, chargement, jeu, pause, options, sauvegardes
-      slice_ui.hpp, .cpp              son interface (menus et panneaux sans ImGui)
+      states_demo.hpp, .cpp           ses écrans : titre, chargement, jeu, pause, options, sauvegardes (assets/ui/)
       map_objects.hpp, .cpp           types d'objets des cartes
       sandbox_data.hpp, .cpp          ses tables de données
       sandbox_scene.hpp               interface des scènes du menu, aléatoire, murs des démos
@@ -108,7 +107,7 @@ moteur/
 | Domaine | En-têtes |
 |---|---|
 | Programme et plateforme | `application`, `fixed_timestep`, `frame_stats`, `state_stack`, `input`, `display`, `paths`, `file_io`, `log_file`, `crash`, `assert`, `jobs`, `process_memory`, `version` |
-| Rendu | `renderer`, `gpu_resource`, `geometry_pool`, `sprite_renderer`, `sprite_batcher`, `sprite_region`, `texture_atlas`, `atlas_builder`, `image`, `utf8`, `text_layout`, `font`, `color`, `camera3d`, `aabb`, `mesh`, `material`, `mesh_batcher`, `mesh_renderer`, `model`, `environment`, `shadow`, `billboard_batcher`, `billboard_renderer`, `debug_lines` |
+| Rendu | `renderer`, `gpu_resource`, `geometry_pool`, `sprite_renderer`, `sprite_batcher`, `sprite_region`, `texture_atlas`, `atlas_builder`, `image`, `utf8`, `unicode`, `bidi`, `font`, `font_face`, `glyph_atlas`, `msdf`, `color`, `camera3d`, `aabb`, `mesh`, `material`, `mesh_batcher`, `mesh_renderer`, `model`, `environment`, `shadow`, `billboard_batcher`, `billboard_renderer`, `debug_lines` |
 | Assets et données | `asset_cache`, `assets`, `archive`, `cook`, `credits`, `data_reader`, `data_table`, `save_file`, `world_save` |
 | Monde | `world`, `tilemap`, `map_data`, `map_document`, `nav_grid`, `collision`, `spatial_hash`, `pathfinding`, `movement`, `visibility`, `particles`, `world_debug` |
 | Animation | `animation_data`, `animation_clock`, `skeleton`, `animator`, `animation_set`, `animation_graph`, `animation_debug` |
@@ -372,7 +371,7 @@ Tout arrive dans `build/<preset>/packages/`. Les deux scripts d'OS sont lancés 
 
 ### `apps/tranche/CMakeLists.txt`
 
-**Rôle** (jalon 8, partie 12) : le code de la **tranche jouable**, dans la bibliothèque **`tranche_commun`** (tables, objets des cartes, monde `Demo3D`, écrans `StatesDemo`, interface `SliceUi`), partagée par le programme `tranche` et par le bac à sable (sa scène de la tranche, les captures de référence). Elle est construite dans toutes les configurations, la livrée comprise (Dear ImGui n'y sert qu'aux panneaux de debug, retirés de la version livrée). Hors version livrée, `MOTEUR_ASSETS_SOURCE_DIR` donne le dossier `assets/` des sources (rechargement à chaud, écriture des cartes par l'éditeur).
+**Rôle** (jalon 8, partie 12) : le code de la **tranche jouable**, dans la bibliothèque **`tranche_commun`** (tables, objets des cartes, monde `Demo3D`, écrans `StatesDemo`, dessinés par l'interface du moteur depuis `assets/ui/`), partagée par le programme `tranche` et par le bac à sable (sa scène de la tranche, les captures de référence). Elle est construite dans toutes les configurations, la livrée comprise (Dear ImGui n'y sert qu'aux panneaux de debug, retirés de la version livrée). Hors version livrée, `MOTEUR_ASSETS_SOURCE_DIR` donne le dossier `assets/` des sources (rechargement à chaud, écriture des cartes par l'éditeur).
 
 Avec `MOTEUR_BUILD_SLICE` : le programme **`tranche`** (`moteur_add_game` avec le nom « Tranche jouable », l'éditeur `PUBLISHER "moteur"` et l'icône `art/icons/tranche`), son outil de préparation **`tranche_cook`** (qui compile ses tables), et son paquet (`moteur_package` avec le manifeste `assets/livraison_tranche.json` : cible `tranche_package` dans la configuration livrée).
 
@@ -818,37 +817,24 @@ Une entrée avec `"platform"` n'est gardée que sur cet OS ; avec `"build"`, seu
 
 **Pourquoi ce fichier existe** : lire du texte français octet par octet casse les lettres accentuées et les guillemets, codés sur 2 ou 3 octets.
 
-### `src/moteur/include/moteur/text_layout.hpp` et `text_layout.cpp`
+### Le texte (jalon 9 bis, partie 4)
 
-**Rôle** : calculer la position de chaque glyphe d'un texte (retour à la ligne, alignement), **sans connaître ni police ni GPU**. Logique pure, testée : elle prend en paramètres une fonction d'avancement (`char32_t -> largeur`) et une fonction de crénage, ce qui permet de la tester avec de fausses métriques (par exemple une police imaginaire à chasse fixe).
+Le texte du jalon 2 (une police `stb_truetype` rasterisée à une taille, `layout_text()` coupant aux espaces) est **remplacé** : `text_layout.hpp/.cpp` et leurs tests n'existent plus.
 
-**Contenu**
-
-- `GlyphPlacement` : un glyphe positionné (`x`, `y`), sans la chasse ni l'ascendant de la police, qui restent à ajouter par l'appelant.
-- `TextLine` : les glyphes d'une ligne et sa largeur naturelle (avant tout décalage d'alignement).
-- `layout_text(texte, hauteur de ligne, largeur max, alignement, avance, crénage)` : le cœur de la mise en page.
-  - **Retour à la ligne** : les mots (séparés par des espaces, qui se regroupent en un seul séparateur) sont placés glouton, ligne par ligne ; un `\n` force une nouvelle ligne ; un mot plus large que la largeur maximale déborde plutôt que d'être coupé.
-  - **Espace insécable simplifiée** : un signe seul parmi `: ; ! ?` est rattaché au mot précédent (avec l'espace) avant le remplissage des lignes, ce qui empêche une ligne de commencer par ce signe.
-  - **Alignement** : la boîte de référence est la plus grande valeur entre la largeur maximale et la ligne la plus large ; à gauche, rien ne bouge, au centre et à droite chaque ligne est décalée dans cette boîte.
-
-### `src/moteur/include/moteur/font.hpp` et `font.cpp`
-
-**Rôle** : charger une police TrueType et en dessiner du texte. C'est la seule brique de cette partie qui dépend du GPU.
-
-**Contenu**
-
-| Élément | Explication |
+| Fichier | Rôle |
 |---|---|
-| `TextOptions` | Couleur (une seule, le texte enrichi est volontairement repoussé mais la structure peut l'accueillir), alignement, largeur maximale (retour à la ligne si non nulle), profondeur. |
-| `Font::default_charset()` | Latin de base (0x20–0x7E), Latin-1 (0xA0–0xFF, accents et « »), plus œ/Œ, tirets demi et cadratin, guillemets courbes : environ 236 caractères. |
-| `Font::load(renderer, chemin, taille en pixels, jeu de caractères)` | Lit le fichier avec `read_file()`, initialise `stb_truetype`, rasterise chaque caractère du jeu à la taille demandée, et **empaquette les glyphes avec l'outil d'atlas de la partie 5** (`build_atlas`), réutilisé tel quel. Un caractère sans encre (l'espace) garde ses métriques d'avancement mais n'entre pas dans l'atlas. Chaque page est nommée `font glyphs #N` pour les captures de débogage. |
-| `measure()`, `draw()` | Partagent la même fonction privée `resolve()`, qui appelle `layout_text()` avec les métriques réelles de la police : elles ne peuvent donc pas donner des résultats incohérents entre eux. |
+| `include/moteur/unicode.hpp`, `unicode.cpp` | Propriétés Unicode d'un point de code (`char_info()` : classe bidirectionnelle, classe de coupure, catégorie générale, coupure de graphème, écriture ISO 15924, largeur est-asiatique), **graphèmes** (UAX #29, `grapheme_boundaries()`) et **coupure des lignes** (UAX #14, `line_breaks()`), écrits dans le moteur. La classe `IN` s'appelle `IN_` (les en-têtes Windows définissent la macro `IN`). |
+| `private/moteur/unicode_tables.inc` | **Généré** par `tools/text/make_unicode_tables.py` depuis l'UCD 18.0.0 : table à deux étages (blocs de 128 points de code, 1014 enregistrements distincts, ~104 Kio), étiquettes des écritures, paires de crochets. Ne pas modifier à la main. |
+| `include/moteur/bidi.hpp`, `bidi.cpp` | L'**algorithme bidirectionnel** (UAX #9) : niveaux explicites et isolats (X1 à X10), types faibles (W1 à W7), paires de crochets (N0), neutres (N1, N2), niveaux implicites (I1, I2), règles de ligne L1 et L2. `bidi_paragraph()`, `bidi_line_levels()`, `bidi_visual_order()`. |
+| `private/moteur/msdf.hpp`, `msdf.cpp` | **Champs de distance multicanaux** maison d'après la méthode publiée de V. Chlumský : contours (les cubiques ramenées à des quadratiques), **bord réel de la forme** (les courbes coupées où elles se croisent, seuls gardés les morceaux qui ont la forme d'un seul côté : les recouvrements des polices variables ne laissent pas de traces), coloration des arêtes, pseudo-distances, vraie distance dans l'alpha (MTSDF), signe vérifié par balayage, correction des texels en conflit. |
+| `private/moteur/font_face.hpp`, `font_face.cpp` | Un fichier de police lu par **HarfBuzz** : métriques, glyphe d'un caractère, **instances de graisse** des polices variables, contours (`hb_font_draw_glyph_or_fail` : TrueType, CFF, variations). |
+| `private/moteur/glyph_atlas.hpp`, `glyph_atlas.cpp` | L'**atlas dynamique** : pages de 1024² (8 au plus), rangées, glyphes faits à la demande (48 par image au plus, sur les fils du `JobSystem` ; un compte, pas un temps : les captures restent identiques), page la plus ancienne vidée quand tout est plein (jamais une page de l'image en cours). Sans renderer, les pages restent en mémoire (tests). |
+| `private/moteur/font_library.hpp` | Ce que les polices partagent : les fichiers lus une fois, l'atlas, le cache des textes mis en page (2048). |
+| `include/moteur/font.hpp`, `font.cpp` | `Font` (pile de polices `.font.json` ou fichier seul), `TextStyle`, `TextLayout`, balises (`parse_text_markup()`). La mise en page : repli par graphème, écritures résolues, paragraphes (classe B), niveaux bidirectionnels, mise en forme HarfBuzz avec tout le paragraphe en contexte, coupure gloutonne aux opportunités d'Unicode, lignes réordonnées (L1, L2), alignement selon le sens. `draw()` : ombres puis glyphes, en sprites du pipeline de glyphes. |
+| `sprite_batcher`, `sprite_renderer` | Un **second genre de quad** : les glyphes (`GlyphVertex` : couleurs de remplissage et de contour, dilatation, contour, douceur), triés par profondeur avec les sprites ; un second pipeline (`text.vert/frag`, filtrage linéaire). `top_shift` / `bottom_shift` penchent un quad (italique). |
+| `shaders/text.vert.hlsl`, `text.frag.hlsl` | La distance médiane pour le remplissage, la vraie distance pour le contour et le flou de l'ombre, sur une plage en pixels d'écran calculée par `fwidth` (2D, interface et monde). |
 
-**Pourquoi rasteriser au chargement, pas à l'exécution** : le jeu de caractères est fixe et connu à l'avance (le français tient dans Latin-1), donc un atlas dynamique rempli glyphe par glyphe n'apporte rien ici. Ce sera à revoir pour des écritures plus larges.
-
-**Pourquoi une seule taille** : agrandir le rendu d'une police plus petite le rend flou. Charger la police à la taille physique finale évite le problème, au prix de devoir recharger la police pour changer de taille.
-
-**Format de la texture de glyphes** : `stb_truetype` produit une image en niveaux de gris (la couverture). Elle est stockée comme du blanc avec cette couverture en alpha, ce qui la fait passer par le même pipeline de sprites que toutes les autres textures (y compris l'alpha pré-multiplié de la partie 5).
+**Pourquoi des champs de distance** : une seule génération par glyphe pour toutes les tailles (4K, Retina, échelle de l'interface), contour et ombre gratuits. **Pourquoi HarfBuzz pour les contours aussi** : il lit déjà la police pour la mise en forme ; il donne les contours de toutes les sortes de polices et à toute graisse (stb_truetype ignore les variations et lit mal le CFF).
 
 **Un piège MSVC découvert ici, mais qui dépasse le texte** : les accents corrompus par la page de codes du compilateur, corrigés par `/utf-8` (voir `cmake/Warnings.cmake`, partie 3).
 
@@ -1148,6 +1134,34 @@ atlas_packer --input <dossier> --output <dossier> --name <nom>
 
 **Rôle** : télécharger les sons et musiques de test dans `assets/audio/` (10 Mo, hors de Git, tous en CC0 : Kenney et OpenGameArt), en vérifiant le SHA-256 de chaque fichier ; ne garde que les fichiers utilisés des paquets de Kenney, avec leur `License.txt`. Les crédits sont dans `assets/credits.json` (section `sounds`).
 
+### La localisation (jalon 9 bis, partie 5)
+
+| Fichier | Rôle |
+|---|---|
+| `include/moteur/locale.hpp`, `locale.cpp` | Règles du CLDR : catégorie de pluriel d'un nombre dans une langue (cardinale, ordinale ; opérandes `PluralOperands`), nombres écrits selon la langue (`format_number()` : séparateurs, groupement, pourcentage). |
+| `private/moteur/locale_tables.inc` | **Généré** par `tools/text/make_locale_tables.py` depuis le CLDR 48.2.3 : 65 fonctions de pluriel (cardinales et ordinales des 224 langues), symboles et motifs de 29 langues. Ne pas modifier à la main. |
+| `include/moteur/localization.hpp`, `localization.cpp` | `Localization` : lecture des `.ftl` (syntaxe de Fluent, lecteur maison), résolution (variables, sélecteurs, termes, `NUMBER`, `DURATION`, fonctions du jeu), repli, vérification (`check()`, `describe()`), pseudo-localisation `qps`, langue du système. |
+| `assets_moteur/locales/{fr,en}/moteur.ftl` | Les textes du moteur vus par le joueur : noms des commandes, durées. |
+| `assets/locales/languages.json`, `assets/locales/{fr,en}/tranche.ftl` | Les langues de la tranche et du bac à sable, et les textes de la tranche. |
+| `tests/test_localization.cpp`, `tests/data/locale/plural_samples.txt` | Les tests, et les exemples officiels du CLDR (générés). |
+
+`make_locale_tables.py` lit `tools/text/cldr/` (téléchargé par `fetch_text_data.py`) ; à relancer pour une nouvelle version du CLDR (`CLDR_VERSION`, puis `--print-hashes`).
+
+### L'interface du jeu (jalon 9 bis, partie 6)
+
+| Fichier | Rôle |
+|---|---|
+| `include/moteur/ui.hpp`, `ui.cpp` | `Ui` (documents, modèle, navigation, dessin), `UiDocument`, `UiElement`, `UiModel`, `UiEvent`, `UiInput::from_actions()`. Arbre d'éléments, cascade, mise en page *flexbox*, transitions, dessin (boîtes arrondies en champ de distance dans l'atlas des glyphes, neuf tranches, découpe), focus et voisins, saisie de texte, infobulles, listes répétées, instances de modèles, rechargement à chaud. |
+| `private/moteur/ui_markup.hpp`, `ui_markup.cpp` | Lecture des `.ui` (sous-ensemble de XML : éléments, attributs, entités, commentaires). |
+| `private/moteur/ui_style.hpp`, `ui_style.cpp` | Lecture des `.uss` (sous-ensemble de CSS), sélecteurs et spécificité, valeurs calculées (`ComputedStyle`), couleurs, longueurs, courbes. |
+| `ui_check.cpp` | `check_ui_files()` : les écrans d'un jeu vérifiés sans les afficher (`--check-data`, préparation). |
+| `assets/ui/tranche.uss`, `assets/ui/*.ui` | Le thème et les écrans de la tranche : titre, chargement, pause, options (affichage, audio, commandes, langue), question, attente d'une touche, emplacements, HUD. |
+| `tests/test_ui.cpp` | Balises, styles, sélecteurs, cascade, `flex`, modèle, vérification des fichiers. La mise en page et le dessin : `--ui-tour` (références). |
+
+### `tools/text/fetch_text_data.py` et `tools/text/make_unicode_tables.py`
+
+**Rôle** (jalon 9 bis, partie 4) : `fetch_text_data.py` télécharge (SHA-256 vérifié, hors de Git) la base de données Unicode 18.0.0 dans `tools/text/ucd/` et les polices de repli Noto Sans Arabic et Noto Sans SC (SIL OFL, avec leur licence) dans `assets/fonts/noto/`. `make_unicode_tables.py` en génère `src/moteur/private/moteur/unicode_tables.inc` et les tests de conformité compressés `tests/data/unicode/*.txt.zst` (BidiTest, BidiCharacterTest, LineBreakTest, GraphemeBreakTest : 640 Kio), gardés dans Git : construire le moteur ne télécharge rien. À relancer pour passer à une nouvelle version d'Unicode (changer `UCD_VERSION`, puis les listes de valeurs si le script le demande). La licence Unicode est dans `assets_moteur/licenses/Unicode-License.txt` (livrée).
+
 ### `src/moteur/include/moteur/process_memory.hpp` et `process_memory.cpp`
 
 **Rôle** : `process_memory_bytes()`, la mémoire que le processus s'est réservée (Windows : *private bytes* ; macOS : *physical footprint* ; Linux : mémoire résidente). Pour comparer deux moments d'une même exécution (fuites), pas deux systèmes.
@@ -1387,6 +1401,33 @@ Le format est décrit dans `FORMATS.md`.
 
 **Rôle** (jalon 9, partie 11) : le **niveau de la tranche** : une rue gothique du kit de l'ARPG, une place, le parvis de la cathédrale 0,84 m plus haut par trois escaliers, les pavés peints, les lampadaires et braséros, 40 apparitions de squelettes (`apparition.prefab.json` : une racine sans modèle, ses propriétés disent qui vient), le socle du parvis (`socle_terrasse.prefab.json`). Le script en fait le premier état (fixe : les références en dépendent) ; l'éditeur l'ouvre et le joue. Dans l'ARPG : `assets_source/commun/collisions.py` donne leur collision aux accessoires du kit et fait les préfabriqués des sols.
 
+### Les matériaux de production (jalon 9 bis, partie 2)
+
+| Fichier | Rôle |
+|---|---|
+| `include/moteur/material.hpp`, `material.cpp` | `MaterialFactors::blend`, `uv_scroll`, `emissive_pulse` ; `MaterialEffects` (dissolution, éclair) ; `parse_material()`, le lecteur des `.material.json` (FORMATS 24). |
+| `mesh_batcher.hpp/.cpp` | `build_transparent()` (tri d'arrière en avant), `pack_effects()` (les effets dans un seul attribut d'instance : SDL_GPU en permet 16, un maillage animé les prend tous). |
+| `mesh_renderer.hpp/.cpp`, `renderer.cpp` | Pipelines transparents, `render_transparent()` dans la passe mélangée (avant les particules), `set_effects()`, `set_time()`. |
+| `shaders/material_effects.hlsli`, `mesh_transparent.frag.hlsl` | Le bruit de dissolution et le dépaquetage des effets, partagés par la scène et les ombres ; la variante transparente de `mesh.frag.hlsl`. |
+| `world.hpp/.cpp`, `component_types.cpp`, `assets.hpp/.cpp` | Composant `material_effects`, `ModelComponent::materials` (remplacement par nom), `WorldSink::effects()`, `Assets::material()`. |
+| `apps/bac_a_sable/materials_test.hpp/.cpp` | Scène « Materials » (`--materials`, capture de référence `materials`) : fantôme autour d'un pilier, vitres, dissolutions, éclair, lave, voile remplacé. |
+| `tools/models/make_ghost.py`, `assets/models/fantome/fantome.glb` | Le fantôme de la tranche (Blender en arrière-plan) : voile BLEND qui s'efface vers le bas, yeux émissifs. |
+| `tools/textures/make_lava_texture.py`, `assets/textures/test/lave*.png`, `assets/materials/test/lave.material.json` | La lave de test (textures tuilables générées). |
+| `ports/sdl3-shadercross-macos/`, `triplets/arm64-osx.cmake` | Port vcpkg maison : `shadercross` construit sur le Mac avec le DXC du SDK Vulkan de LunarG (fonctionnalité vcpkg `mac-shaders`, option `MOTEUR_MAC_SHADERCROSS`). **Pas encore essayé.** |
+
+### L'audio par événements (jalon 9 bis, partie 7)
+
+| Fichier | Rôle |
+|---|---|
+| `include/moteur/sound_bank.hpp`, `sound_bank.cpp` | `SoundBank::parse()`, le lecteur des `.bank.json` (FORMATS 25) : événements, bus, VCA, instantanés, paramètres, réverbérations ; `files()` pour le chargement et la préparation. |
+| `include/moteur/audio_events.hpp`, `audio_events.cpp` | `AudioEvents` : jouer par nom, paramètres, automations, limites et vol, instantanés, VCA, zones de réverbération, occlusion, musique interactive. |
+| `private/moteur/audio_reverb.hpp`, `audio_reverb.cpp` | La réverbération (Freeverb), en nœud miniaudio sur un bus. |
+| `audio.hpp/.cpp` | Bus (`add_bus`, volumes, pauses, réverbération), passe-bas par voix, départ et arrêt programmés (`start_at`, `stop_at`, `time_frames()`). |
+| `assets.hpp/.cpp`, `cook.cpp` | `Assets::sound_bank()` ; la préparation prend les sons d'une banque. |
+| `assets/audio/banks/tranche.bank.json` | La banque de la tranche. |
+| `tools/audio/fetch_test_sounds.py` | Télécharge les sons (le paquet Kenney Impact complet, 130 fichiers). |
+| `tests/test_audio_events.cpp` | Banques et événements, mixés sans périphérique. |
+
 ### `apps/bac_a_sable/level3d_test.hpp` et `level3d_test.cpp`
 
 **Rôle** (jalon 9, partie 5) : la scène « Level 3D » du bac à sable (`--level3d` ; `--level3d-auto` : seule, le héros sur un parcours fixe, pour les captures) : un niveau en maquette (escalier, plateforme, pont, rampes, rebord, plafond bas), le héros au clic (rayon contre le niveau) ou au clavier, des marcheurs sur le pont et dessous, l'affichage `debug.collision`.
@@ -1441,13 +1482,13 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 
 **Rôle** : les écrans de la tranche jouable (jalon 4, partie 9, né du test des états de jeu de la partie 6), sur une `moteur::StateStack` ; le programme `tranche` et le bac à sable (« Playable slice (game states) » dans le menu, ou `--states`) les lancent.
 
-**Contenu** : le titre (« Jouer », « Continuer », « Charger », « Options », « Quitter »), le chargement par étapes (`DemoLoadingState`, une barre de progression), le jeu (le monde `Demo3D` en mode héros), la pause (transparente et bloquante : le monde reste dessiné, assombri et figé ; « Reprendre », « Sauvegarder », « Options », « Retour au titre »), les emplacements de sauvegarde (`SlotsState`, trois emplacements avec vignette, dans `sauvegardes/` du dossier du joueur ; sauvegarde automatique toutes les deux minutes de jeu, variable `save.auto`), et les options (`OptionsState` : affichage `DisplayOptionsState`, son `AudioOptionsState`, touches `ControlsOptionsState`). Un changement d'écran ou de mode d'affichage est annulé s'il n'est pas confirmé dans les 15 secondes. Les menus lisent des actions (`menu_up`, `menu_down`, `menu_confirm`) : une manette et un rejeu les pilotent aussi bien que la souris. Ils sont dessinés par `SliceUi`, sans ImGui ; ImGui ne sert qu'au panneau de debug, retiré de la version livrée.
+**Contenu** : le titre (« Jouer », « Continuer », « Charger », « Options », « Quitter »), le chargement par étapes (`DemoLoadingState`, une barre de progression), le jeu (le monde `Demo3D` en mode héros), la pause (transparente et bloquante : le monde reste dessiné, assombri et figé ; « Reprendre », « Sauvegarder », « Options », « Retour au titre »), les emplacements de sauvegarde (`SlotsState`, trois emplacements avec vignette, dans `sauvegardes/` du dossier du joueur ; sauvegarde automatique toutes les deux minutes de jeu, variable `save.auto`), et les options (`OptionsState` : affichage `DisplayOptionsState`, son `AudioOptionsState`, touches `ControlsOptionsState`, langue `LanguageOptionsState`). Un changement d'écran ou de mode d'affichage est annulé s'il n'est pas confirmé dans les 15 secondes. Depuis le jalon 9 bis (partie 6), chaque état est un `Screen` : il ouvre son document `assets/ui/*.ui` en entrant (calque selon sa place), remplit le modèle de l'interface (`moteur::Ui`, possédée par `StatesDemo`, passée à `Demo3D` pour son HUD) et réagit à ses événements par leur `action` ; `StatesDemo` fait le tick de l'interface avant ceux des états, la dessine après eux, et joue les sons d'interface. La navigation lit des actions (`menu_*`, `pause`) : une manette et un rejeu pilotent les menus aussi bien que la souris. ImGui ne sert qu'au panneau de debug, retiré de la version livrée.
 
 **Vérifications** : `--states-cycles N` (ou le réglage « Automatic cycles » de la page de la scène, dans le bac à sable) : un pilote automatique enchaîne titre, jeu, pause, jeu, pause, titre N fois ; à chaque retour au titre il note les assets, les objets GPU et la mémoire du processus, et vérifie que le monde n'a pas bougé pendant les pauses. `--capture` : une image de la première pause ; avec `--freeze-after N`, celle du jeu gelé après N de ses ticks (la capture de référence, avec `--replay-input tests/data/slice_replay.json`). La mesure du chargement est écrite (`Slice: loaded in ... ms`).
 
-### `apps/tranche/slice_ui.hpp` et `slice_ui.cpp`
+**Visite de l'interface** (jalon 9 bis, partie 6) : `--ui-tour DOSSIER` (bac à sable) ouvre tour à tour le titre, les options et leurs pages, les emplacements à charger, capture chacun dans `DOSSIER/<écran>.png` et compte les problèmes de l'interface (`Ui::problems()`) ; code de sortie 1 s'il y en a.
 
-**Rôle** (jalon 8, partie 12) : l'interface propre de la tranche, ses menus et ses panneaux dessinés avec le texte et les sprites du moteur (`screen_sprites()`), comme les dessinera un jeu livré. Un panneau se construit de haut en bas, centré (`begin_panel()`, lignes, boutons, cartes, barres, `end_panel()`, qui dessine le fond derrière : les sprites sont triés par profondeur). Les tailles sont en points, multipliées par la densité de l'écran, pour que l'interface garde sa taille sur un écran Retina.
+L'ancienne interface écrite à la main (`slice_ui.hpp`, `slice_ui.cpp`, jalon 8) a été retirée à la partie 6 du jalon 9 bis.
 
 ### `apps/tranche/main.cpp`
 
@@ -1496,12 +1537,12 @@ Différences attendues : Blender trace la lumière (les objets s'ombrent eux-mê
 | Domaine | Fichiers |
 |---|---|
 | Programme et plateforme | `test_fixed_timestep`, `test_frame_stats`, `test_state_stack`, `test_input` (actions, profils, fichier du joueur, changement des touches, rejeu), `test_display` (points et pixels, réglages d'affichage), `test_jobs` (système de tâches), `test_user_paths` (dossier du joueur au nom accentué, disque plein, dossier où rien ne s'écrit : les données du joueur restent intactes) |
-| Rendu | `test_sprite_batcher`, `test_sprite_region`, `test_atlas_builder`, `test_image`, `test_utf8`, `test_text_layout`, `test_color`, `test_camera3d`, `test_mesh`, `test_mesh_batcher`, `test_billboard_batcher`, `test_debug_lines`, `test_environment`, `test_shadow`, `test_anti_aliasing`, `test_geometry_pool` (tranches, alignement, réutilisation différée), `test_model` |
+| Rendu | `test_sprite_batcher`, `test_sprite_region`, `test_atlas_builder`, `test_image`, `test_utf8`, `test_unicode` (tests de conformité officiels d'Unicode : bidi, coupure, graphèmes), `test_text` (champs de distance, HarfBuzz, mise en page, repli, balises, atlas), `test_color`, `test_camera3d`, `test_mesh`, `test_mesh_batcher`, `test_billboard_batcher`, `test_debug_lines`, `test_environment`, `test_shadow`, `test_anti_aliasing`, `test_geometry_pool` (tranches, alignement, réutilisation différée), `test_model` |
 | Assets et données | `test_asset_cache`, `test_ktx_texture`, `test_archive` (aller-retour, casse, archive abîmée, montage), `test_cook` (globs, clés du manifeste), `test_data_table`, `test_save_file`, `test_world_save`, `test_robustness` (fichiers abîmés, dont ceux trouvés par le fuzzing, `tests/data/fuzz/`), `test_reflection` (description, lecture et écriture, alias, schéma), `test_prefab` (instanciation, imbrication, variantes, surcharges), `test_asset_registry` (identifiants, `.meta`, doublons, déplacement, registre figé, dossiers montés), `test_mesh_optimize` (simplification, cache), `test_model_import` (import, `.mmdl`), `test_document` (JSON et CBOR) |
 | Monde en 3D | `test_collision_scene` (arbre comparé à la force brute, sol sur deux hauteurs, murs, marches, pentes, pont, rebord, déterminisme au bit près, collision importée, `StaticCollision`), `test_navigation` (maillage sur plusieurs étages, liaisons, portes, zones, obstacles, forme sauvegardée, déplacements planifiés, 500 monstres), `test_picking` (formes, priorités, monstre à moitié caché, sol à travers un trou, lignes de vue, grille d'un étage), `test_level` (document v3, migration, état de partie, préparation par morceaux, fichiers, navigation raccordée) ; `test_levels.hpp` : le niveau de test partagé |
 | Monde | `test_tilemap`, `test_map_data`, `test_world_grid` (collisions, chemins, requêtes, vision, déplacements, et mesures), `test_particles`, `test_world`, `test_map_document` |
 | Animation | `test_ozz`, `test_skeleton`, `test_animator`, `test_blending`, `test_attachment`, `test_animation_debug`, `test_skinning`, `test_animation_graph` |
-| Audio | `test_audio` (règles, décodage, mixage sans périphérique) |
+| Audio | `test_audio` (règles, décodage, mixage sans périphérique), `test_audio_events` (banques, événements) |
 | Outils | `test_console`, `test_profiler`, `test_debug_tools` (filtre et inspecteurs de composants) |
 | Revue de l'API | `test_review_core`, `test_review_platform`, `test_review_readers`, `test_review_render`, `test_review_world`, `test_review_world2`, `test_review_apps` : les défauts trouvés en documentant l'API (jalon 8, partie 9), chacun gardé comme test de non-régression |
 | 2D du bac à sable | `test_camera`, `test_iso`, `test_animation` : compilés seulement quand `bac_a_sable_2d` est construite |

@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "moteur/glyph_atlas.hpp"
+
 namespace moteur {
 
 namespace {
@@ -48,6 +50,7 @@ SpriteRenderer::SpriteRenderer(Renderer& renderer, SDL_GPUTextureFormat depth_fo
                                            indices.size() * sizeof(std::uint16_t), (name_ + ".indices").c_str());
 
     ensure_capacity(kInitialCapacity);
+    glyph_sampler_ = renderer.create_sampler(SDL_GPU_FILTER_LINEAR, (name_ + ".glyph sampler").c_str());
 
     SDL_GPUVertexBufferDescription vertex_buffer = {};
     vertex_buffer.slot = 0;
@@ -109,6 +112,44 @@ SpriteRenderer::SpriteRenderer(Renderer& renderer, SDL_GPUTextureFormat depth_fo
         throw std::runtime_error(std::string("SDL_CreateGPUGraphicsPipeline failed: ") + SDL_GetError());
     }
     pipeline_ = GpuGraphicsPipeline(renderer.device(), pipeline);
+
+    // The glyph pipeline: same blending and targets, its own shaders and vertices.
+    ShaderInfo glyph_vertex_info;
+    glyph_vertex_info.stage = SDL_GPU_SHADERSTAGE_VERTEX;
+    glyph_vertex_info.uniform_buffers = 1;
+    ShaderInfo glyph_fragment_info;
+    glyph_fragment_info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
+    glyph_fragment_info.samplers = 1;          // the atlas page
+    glyph_fragment_info.uniform_buffers = 1;   // its size and distance range
+    const GpuShader glyph_vertex_shader = renderer.load_shader("text.vert", glyph_vertex_info);
+    const GpuShader glyph_fragment_shader = renderer.load_shader("text.frag", glyph_fragment_info);
+
+    SDL_GPUVertexBufferDescription glyph_buffer = {};
+    glyph_buffer.slot = 0;
+    glyph_buffer.pitch = sizeof(GlyphVertex);
+    glyph_buffer.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+    SDL_GPUVertexAttribute glyph_attributes[5] = {};
+    glyph_attributes[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, static_cast<Uint32>(offsetof(GlyphVertex, x))};
+    glyph_attributes[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, static_cast<Uint32>(offsetof(GlyphVertex, u))};
+    glyph_attributes[2] = {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, static_cast<Uint32>(offsetof(GlyphVertex, r))};
+    glyph_attributes[3] = {3, 0, SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM,
+                           static_cast<Uint32>(offsetof(GlyphVertex, outline_r))};
+    glyph_attributes[4] = {4, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, static_cast<Uint32>(offsetof(GlyphVertex, dilate))};
+
+    SDL_GPUGraphicsPipelineCreateInfo glyph_info = info;
+    glyph_info.vertex_shader = glyph_vertex_shader.get();
+    glyph_info.fragment_shader = glyph_fragment_shader.get();
+    glyph_info.vertex_input_state.vertex_buffer_descriptions = &glyph_buffer;
+    glyph_info.vertex_input_state.vertex_attributes = glyph_attributes;
+    glyph_info.vertex_input_state.num_vertex_attributes = 5;
+    const std::string glyph_pipeline_name = name_ + " glyph pipeline";
+    const NameProperty glyph_name_property(SDL_PROP_GPU_GRAPHICSPIPELINE_CREATE_NAME_STRING, glyph_pipeline_name.c_str());
+    glyph_info.props = glyph_name_property.id();
+    SDL_GPUGraphicsPipeline* glyph_pipeline = SDL_CreateGPUGraphicsPipeline(renderer.device(), &glyph_info);
+    if (glyph_pipeline == nullptr) {
+        throw std::runtime_error(std::string("SDL_CreateGPUGraphicsPipeline (glyphs) failed: ") + SDL_GetError());
+    }
+    glyph_pipeline_ = GpuGraphicsPipeline(renderer.device(), glyph_pipeline);
 }
 
 void SpriteRenderer::draw(const Texture& texture, glm::vec2 position, glm::vec2 size,
@@ -122,6 +163,10 @@ void SpriteRenderer::draw(const Texture& texture, glm::vec2 position, glm::vec2 
     sprite.depth = options.depth;
     sprite.flip_x = options.flip_x;
     sprite.flip_y = options.flip_y;
+    if (options.clip) {
+        sprite.clip = *options.clip;
+        sprite.has_clip = true;
+    }
     batcher_.add(sprite);
 }
 
@@ -130,6 +175,44 @@ void SpriteRenderer::draw(const SpriteRegion& region, glm::vec2 anchor, float sc
     SpriteOptions with_region = options;
     with_region.uv_rect = region.uv_rect;
     draw(*region.texture, placed.position, placed.size, with_region);
+}
+
+void SpriteRenderer::draw_glyph(const Texture& page, glm::vec2 position, glm::vec2 size, glm::vec4 uv,
+                                const GlyphLook& look, float depth, float top_shift, float bottom_shift,
+                                const std::optional<glm::vec4>& clip) {
+    SpriteDesc sprite;
+    sprite.texture = page.gpu.get();
+    sprite.position = position;
+    sprite.size = size;
+    sprite.uv_rect = uv;
+    sprite.tint = pack_color(look.color);
+    sprite.depth = depth;
+    sprite.top_shift = top_shift;
+    sprite.bottom_shift = bottom_shift;
+    if (clip) {
+        sprite.clip = *clip;
+        sprite.has_clip = true;
+    }
+    GlyphStyle style;
+    style.outline_color = pack_color(look.outline_color);
+    style.dilate = look.dilate;
+    style.outline = look.outline;
+    style.softness = look.softness;
+    batcher_.add_glyph(sprite, style);
+}
+
+void SpriteRenderer::ensure_glyph_capacity(std::size_t glyphs) {
+    if (glyphs <= glyph_capacity_) {
+        return;
+    }
+    std::size_t capacity = std::max<std::size_t>(glyph_capacity_, 1024);
+    while (capacity < glyphs) {
+        capacity *= 2;
+    }
+    const std::size_t bytes = capacity * 4 * sizeof(GlyphVertex);
+    glyph_vertex_buffer_ = renderer_.create_buffer(SDL_GPU_BUFFERUSAGE_VERTEX, bytes, (name_ + ".glyph vertices").c_str());
+    glyph_transfer_buffer_ = renderer_.create_transfer_buffer(bytes);
+    glyph_capacity_ = capacity;
 }
 
 void SpriteRenderer::ensure_capacity(std::size_t sprites) {
@@ -153,31 +236,49 @@ void SpriteRenderer::ensure_capacity(std::size_t sprites) {
 
 void SpriteRenderer::prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats) {
     batcher_.finish();
-    const std::size_t count = batcher_.sprite_count();
-    if (count == 0) {
+    if (batcher_.sprite_count() == 0) {
         return;
     }
-    ensure_capacity(count);
+    const std::size_t sprites = batcher_.sprite_count() - batcher_.glyph_count();
+    const std::size_t glyphs = batcher_.glyph_count();
+    ensure_capacity(sprites);
+    ensure_glyph_capacity(glyphs);
 
-    // Write the vertices into the staging buffer. `cycle = true` lets SDL hand out a fresh
+    // Write the vertices into the staging buffers. `cycle = true` lets SDL hand out a fresh
     // buffer if the previous frame's is still being read by the GPU, instead of waiting for it.
-    const std::size_t bytes = count * 4 * sizeof(SpriteVertex);
     SDL_GPUDevice* device = renderer_.device();
-    void* mapped = SDL_MapGPUTransferBuffer(device, transfer_buffer_.get(), true);
-    if (mapped == nullptr) {
-        throw std::runtime_error(std::string("SDL_MapGPUTransferBuffer failed: ") + SDL_GetError());
+    const auto stage = [&](GpuTransferBuffer& transfer, const void* data, std::size_t bytes) {
+        void* mapped = SDL_MapGPUTransferBuffer(device, transfer.get(), true);
+        if (mapped == nullptr) {
+            throw std::runtime_error(std::string("SDL_MapGPUTransferBuffer failed: ") + SDL_GetError());
+        }
+        std::memcpy(mapped, data, bytes);
+        SDL_UnmapGPUTransferBuffer(device, transfer.get());
+    };
+    const std::size_t sprite_bytes = sprites * 4 * sizeof(SpriteVertex);
+    const std::size_t glyph_bytes = glyphs * 4 * sizeof(GlyphVertex);
+    if (sprite_bytes > 0) {
+        stage(transfer_buffer_, batcher_.vertices().data(), sprite_bytes);
     }
-    std::memcpy(mapped, batcher_.vertices().data(), bytes);
-    SDL_UnmapGPUTransferBuffer(device, transfer_buffer_.get());
+    if (glyph_bytes > 0) {
+        stage(glyph_transfer_buffer_, batcher_.glyph_vertices().data(), glyph_bytes);
+    }
 
-    // The copy happens in its own pass, before the render pass opens. Only the used part is sent.
+    // The copies happen in their own pass, before the render pass opens. Only the used part is sent.
     SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(commands);
-    const SDL_GPUTransferBufferLocation source = {transfer_buffer_.get(), 0};
-    const SDL_GPUBufferRegion destination = {vertex_buffer_.get(), 0, static_cast<Uint32>(bytes)};
-    SDL_UploadToGPUBuffer(copy_pass, &source, &destination, true);
+    if (sprite_bytes > 0) {
+        const SDL_GPUTransferBufferLocation source = {transfer_buffer_.get(), 0};
+        const SDL_GPUBufferRegion destination = {vertex_buffer_.get(), 0, static_cast<Uint32>(sprite_bytes)};
+        SDL_UploadToGPUBuffer(copy_pass, &source, &destination, true);
+    }
+    if (glyph_bytes > 0) {
+        const SDL_GPUTransferBufferLocation source = {glyph_transfer_buffer_.get(), 0};
+        const SDL_GPUBufferRegion destination = {glyph_vertex_buffer_.get(), 0, static_cast<Uint32>(glyph_bytes)};
+        SDL_UploadToGPUBuffer(copy_pass, &source, &destination, true);
+    }
     SDL_EndGPUCopyPass(copy_pass);
 
-    stats.bytes_uploaded += bytes;
+    stats.bytes_uploaded += sprite_bytes + glyph_bytes;
 }
 
 void SpriteRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass, std::uint32_t width,
@@ -186,11 +287,7 @@ void SpriteRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* p
         return;
     }
 
-    SDL_BindGPUGraphicsPipeline(pass, pipeline_.get());
-    const SDL_GPUBufferBinding vertices = {vertex_buffer_.get(), 0};
-    SDL_BindGPUVertexBuffers(pass, 0, &vertices, 1);
     const SDL_GPUBufferBinding indices = {index_buffer_.get(), 0};
-    SDL_BindGPUIndexBuffer(pass, &indices, SDL_GPU_INDEXELEMENTSIZE_16BIT);
 
     // One matrix for the whole frame. Unless the game gave one (a camera), sprites are placed in
     // window pixels: origin at the top left, y pointing down. That default follows the swapchain
@@ -199,13 +296,30 @@ void SpriteRenderer::render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* p
         has_view_projection_
             ? view_projection_
             : glm::orthoRH_ZO(0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, -1.0f, 1.0f);
-    SDL_PushGPUVertexUniformData(commands, 0, glm::value_ptr(projection), sizeof(projection));
+    // The atlas page's size and distance range, for the glyphs' screen-space distance.
+    const float atlas_info[4] = {static_cast<float>(GlyphAtlas::kPageSize), static_cast<float>(GlyphAtlas::kPageSize),
+                                 GlyphAtlas::kRangeTexels, 0.0f};
 
     const void* bound_texture = nullptr;
+    int bound_kind = -1;  // 0: sprites, 1: glyphs
     for (const SpriteRun& run : batcher_.runs()) {
+        const int kind = run.glyphs ? 1 : 0;
+        if (kind != bound_kind) {
+            // Uniforms are pushed after the bind: a pipeline change may reset them.
+            SDL_BindGPUGraphicsPipeline(pass, run.glyphs ? glyph_pipeline_.get() : pipeline_.get());
+            const SDL_GPUBufferBinding vertices = {run.glyphs ? glyph_vertex_buffer_.get() : vertex_buffer_.get(), 0};
+            SDL_BindGPUVertexBuffers(pass, 0, &vertices, 1);
+            SDL_BindGPUIndexBuffer(pass, &indices, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+            SDL_PushGPUVertexUniformData(commands, 0, glm::value_ptr(projection), sizeof(projection));
+            if (run.glyphs) {
+                SDL_PushGPUFragmentUniformData(commands, 0, atlas_info, sizeof(atlas_info));
+            }
+            bound_kind = kind;
+            bound_texture = nullptr;
+        }
         if (run.texture != bound_texture) {
             const SDL_GPUTextureSamplerBinding binding = {static_cast<SDL_GPUTexture*>(const_cast<void*>(run.texture)),
-                                                          sampler_.get()};
+                                                          run.glyphs ? glyph_sampler_.get() : sampler_.get()};
             SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
             bound_texture = run.texture;
         }

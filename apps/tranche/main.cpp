@@ -84,6 +84,8 @@ int main(int argc, char* argv[]) {
             i += 2;
         } else if (arg == "--replay-input" && has_one) {
             config.replay_input_path = argv[++i];
+        } else if (arg == "--language" && has_one) {  // the texts in this language, whatever the player chose
+            config.language = argv[++i];
         } else if (arg == "--freeze-after" && has_one) {
             freeze_after = std::atol(argv[++i]);
         } else if (arg == "--capture" && has_one) {

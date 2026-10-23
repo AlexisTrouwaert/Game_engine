@@ -318,6 +318,19 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
         return !registry_.any_of<PreviousTransform, Parent, Hidden>(entity) && registry_.all_of<Transform>(entity);
     };
 
+    // The effects of an entity go to its meshes (only looked up when some entity has them).
+    const bool effects = !registry_.storage<MaterialEffects>().empty();
+    const MaterialEffects* last_effects = nullptr;
+    const auto give_effects = [&](entt::entity entity) {
+        if (effects) {
+            const MaterialEffects* e = registry_.try_get<MaterialEffects>(entity);
+            if (e != last_effects) {
+                sink.effects(e);
+                last_effects = e;
+            }
+        }
+    };
+
     // Meshes, in the order the entities were created (reach(): EnTT's own order is the reverse).
     for (const auto& [entity, instance] : registry_.storage<MeshComponent>().reach()) {
         if (!instance.mesh) {
@@ -326,6 +339,7 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
         if (options.pick_ids) {
             sink.pick(pick_id_of(entity));
         }
+        give_effects(entity);
         const Mesh& mesh = *instance.mesh;
         if (const WorldCache* cache = registry_.try_get<WorldCache>(entity)) {
             sink.mesh(mesh, cache->world, instance.material, cache->bounds);
@@ -375,9 +389,19 @@ void World::collect(WorldSink& sink, float alpha, const CollectOptions& options)
         if (!instance.model) {
             continue;
         }
+        give_effects(entity);
         const Model& model = *instance.model;
         const auto material_of = [&](const Model::Part& part) -> const Material& {
-            return part.material >= 0 ? model.materials[static_cast<std::size_t>(part.material)] : fallback;
+            if (part.material < 0) {
+                return fallback;
+            }
+            const auto index = static_cast<std::size_t>(part.material);
+            for (const ModelComponent::MaterialOverride& replaced : instance.materials) {
+                if (replaced.with && index < model.material_names.size() && model.material_names[index] == replaced.material) {
+                    return *replaced.with;
+                }
+            }
+            return model.materials[index];
         };
 
         // An animated model: its pose between the last two ticks, sampled only when in view.
@@ -539,6 +563,7 @@ public:
         billboards_.draw(texture, center, size, options);
     }
     void pick(std::uint32_t id) override { meshes_.set_pick_id(id); }
+    void effects(const MaterialEffects* effects) override { meshes_.set_effects(effects); }
 
 private:
     MeshRenderer& meshes_;
@@ -558,6 +583,7 @@ void World::submit(Renderer& renderer, float alpha, const CollectOptions& option
     with_glow.pick_ids = with_glow.pick_ids || renderer.meshes().ids();
     collect(sink, alpha, with_glow);
     renderer.meshes().set_pick_id(0);
+    renderer.meshes().set_effects(nullptr);
 }
 
 std::uint32_t World::pick_id_of(entt::entity entity) const {

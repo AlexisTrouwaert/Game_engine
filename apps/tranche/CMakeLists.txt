@@ -4,7 +4,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 # (Demo3D), the screens (StatesDemo) and their interface (SliceUi). Shared by the program `tranche`
 # and by the sandbox (its "states" scene and the reference captures); built in every configuration,
 # the shipping one included (Dear ImGui only in its debug panels, compiled out there).
-add_library(tranche_commun STATIC sandbox_data.cpp map_objects.cpp demo3d.cpp states_demo.cpp slice_ui.cpp)
+add_library(tranche_commun STATIC sandbox_data.cpp map_objects.cpp demo3d.cpp states_demo.cpp)
 target_link_libraries(tranche_commun PUBLIC moteur nlohmann_json::nlohmann_json)
 target_include_directories(tranche_commun PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 moteur_enable_warnings(tranche_commun)

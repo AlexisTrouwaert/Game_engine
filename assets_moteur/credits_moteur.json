@@ -36,6 +36,30 @@
       "license_file": "licenses/stb.txt"
     },
     {
+      "name": "HarfBuzz",
+      "version": "14.4.0",
+      "license": "MIT",
+      "copyright": "Copyright © 2010-2026 Google, Inc.; © 2018-2026 Ebrahim Byagowi; © 2004-2026 Red Hat, Inc. and others",
+      "url": "https://github.com/harfbuzz/harfbuzz",
+      "license_file": "licenses/harfbuzz.txt"
+    },
+    {
+      "name": "Unicode Character Database (tables générées : bidi, coupure des lignes, graphèmes, écritures)",
+      "version": "18.0.0",
+      "license": "Unicode License v3",
+      "copyright": "Copyright © 1991-2026 Unicode, Inc.",
+      "url": "https://www.unicode.org/ucd/",
+      "license_file": "assets/licenses/Unicode-License.txt"
+    },
+    {
+      "name": "Unicode CLDR (règles de pluriel, formats des nombres)",
+      "version": "48.2.3",
+      "license": "Unicode License v3",
+      "copyright": "Copyright © 1991-2026 Unicode, Inc.",
+      "url": "https://cldr.unicode.org",
+      "license_file": "assets/licenses/Unicode-License.txt"
+    },
+    {
       "name": "JSON for Modern C++",
       "version": "3.12.0",
       "license": "MIT",

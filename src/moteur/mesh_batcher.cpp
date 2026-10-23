@@ -1,6 +1,9 @@
 #include "moteur/mesh_batcher.hpp"
 
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/packing.hpp>
+
+#include <algorithm>
 
 #include <functional>
 
@@ -26,6 +29,15 @@ std::size_t MeshBatcher::KeyHash::operator()(const Key& key) const {
     return hash;
 }
 
+glm::uvec4 MeshBatcher::pack_effects(const MaterialEffects& effects, float emissive_pulse, glm::vec2 uv_scroll) {
+    const glm::vec4 flash = glm::clamp(glm::vec4(glm::vec3(effects.flash) * 0.25f, effects.flash.a), 0.0f, 1.0f);
+    // The edge's glow: its color over its brightest channel, and that brightness / 16.
+    const float peak = std::max({effects.dissolve_edge.r, effects.dissolve_edge.g, effects.dissolve_edge.b, 1e-6f});
+    const glm::vec4 edge = glm::clamp(glm::vec4(effects.dissolve_edge / peak, peak / 16.0f), 0.0f, 1.0f);
+    return {glm::packUnorm4x8(flash), glm::packUnorm4x8(edge), glm::packHalf2x16(glm::vec2(effects.dissolve, emissive_pulse)),
+            glm::packHalf2x16(uv_scroll)};
+}
+
 MeshInstance MeshBatcher::make_instance(const MeshDraw& draw) {
     // GLM stores columns: row r of a matrix m is (m[0][r], m[1][r], m[2][r], m[3][r]). Normals only
     // need the 3 x 3 part, whose inverse is much cheaper than the full one.
@@ -42,7 +54,8 @@ MeshInstance MeshBatcher::make_instance(const MeshDraw& draw) {
     instance.factors = glm::vec4(material.metallic, material.roughness, material.normal_scale, material.occlusion_strength);
     // w: the palette of a skinned instance, or -1 for a mesh that fades before the hero (cutout).
     instance.emissive = glm::vec4(material.emissive, draw.palette >= 0 ? static_cast<float>(draw.palette)
-                                                     : (material.fades ? -1.0f : 0.0f));
+                                                     : (material.fades && !material.blend ? -1.0f : 0.0f));
+    instance.effects = pack_effects(draw.effects, material.emissive_pulse, material.uv_scroll);
     return instance;
 }
 
@@ -79,12 +92,13 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
     for (std::size_t k = 0; k < count; ++k) {
         const std::size_t i = subset != nullptr ? (*subset)[k] : k;
         const MeshDraw& draw = draws[i];
-        if (pass == Pass::Shadow && !draw.material.casts_shadow) {
-            continue;
+        if (draw.material.blend || (pass == Pass::Shadow && !draw.material.casts_shadow)) {
+            continue;  // transparent: build_transparent()
         }
         ++submitted_;
         const DrawMaterial& material = draw.material;
-        const bool masked = material.alpha_cutoff > 0.0f;
+        // A dissolving object's shadow is cut out like an alpha-tested one's (by its noise).
+        const bool masked = material.alpha_cutoff > 0.0f || (pass == Pass::Shadow && draw.effects.dissolve > 0.0f);
         const std::uint8_t lod = draw.lod < draw.mesh->lods.size() ? draw.lod : std::uint8_t{0};
         Key key = {{draw.mesh, nullptr, nullptr, nullptr, nullptr, nullptr}, material.double_sided, draw.palette >= 0, masked, lod};
         if (pass == Pass::Main) {
@@ -194,7 +208,58 @@ void MeshBatcher::build(const std::vector<MeshDraw>& draws, const std::vector<st
             instance.emissive = glm::vec4(0.0f, 0.0f, 0.0f, draw.palette >= 0 ? static_cast<float>(draw.palette) : 0.0f);
             instance.base_color = draw.material.base_color;
             instance.normal_matrix[0].w = draw.material.alpha_cutoff;
+            instance.effects = pack_effects(draw.effects, 0.0f, glm::vec2(0.0f));
         }
+    }
+}
+
+void MeshBatcher::build_transparent(const std::vector<MeshDraw>& draws, const Frustum& frustum, glm::vec3 eye) {
+    instances_.clear();
+    batches_.clear();
+    submitted_ = 0;
+    triangles_ = 0;
+    visible_.clear();
+    sorted_.clear();
+    for (std::size_t i = 0; i < draws.size(); ++i) {
+        const MeshDraw& draw = draws[i];
+        if (!draw.material.blend) {
+            continue;
+        }
+        ++submitted_;
+        if (!frustum.intersects(draw.bounds)) {
+            continue;
+        }
+        const glm::vec3 offset = (draw.bounds.empty() ? glm::vec3(draw.world[3]) : draw.bounds.center()) - eye;
+        sorted_.emplace_back(glm::dot(offset, offset), static_cast<std::uint32_t>(i));
+    }
+    // The farthest first; equal distances keep the recording order (a stable sort): the same on
+    // every run.
+    std::stable_sort(sorted_.begin(), sorted_.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    Key last = {};
+    for (const auto& entry : sorted_) {
+        const std::uint32_t index = entry.second;
+        const MeshDraw& draw = draws[index];
+        const DrawMaterial& material = draw.material;
+        const std::uint8_t lod = draw.lod < draw.mesh->lods.size() ? draw.lod : std::uint8_t{0};
+        const Key key = {{draw.mesh, material.base_color_texture, material.metallic_roughness_texture, material.normal_texture,
+                          material.occlusion_texture, material.emissive_texture},
+                         material.double_sided, draw.palette >= 0, material.alpha_cutoff > 0.0f, lod};
+        if (batches_.empty() || !(key == last)) {
+            MeshBatch batch;
+            batch.mesh = draw.mesh;
+            batch.material = &draw.material;
+            batch.first_instance = static_cast<std::uint32_t>(instances_.size());
+            batch.skinned = key.skinned;
+            batch.masked = key.masked;
+            batch.lod = lod;
+            batches_.push_back(batch);
+            last = key;
+        }
+        ++batches_.back().count;
+        instances_.push_back(make_instance(draw));
+        visible_.push_back(index);
+        const std::uint32_t indices = draw.mesh->lods.empty() ? draw.mesh->index_count : draw.mesh->lods[lod].index_count;
+        triangles_ += indices / 3;
     }
 }
 

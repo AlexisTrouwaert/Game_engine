@@ -36,6 +36,13 @@ AnimationSet AnimationSet::parse(std::string_view json_text, const std::string& 
                 settings.ground_speed = clip.value("ground_speed", 0.0f);
                 settings.fade_ticks = clip.value("fade_ticks", -1);
                 settings.phase = clip.value("phase", 0.0f);
+                if (clip.contains("root_motion")) {
+                    const nlohmann::json& root = clip.at("root_motion");
+                    settings.root_motion = root.is_boolean() ? (root.get<bool>() ? 1.0f : 0.0f) : root.get<float>();
+                    if (settings.root_motion < 0.0f) {
+                        throw std::runtime_error("clip '" + name + "': root_motion is negative");
+                    }
+                }
                 if (settings.ground_speed < 0.0f || settings.fade_ticks < -1 || settings.phase < 0.0f ||
                     settings.phase >= 1.0f) {
                     throw std::runtime_error("clip '" + name +
@@ -47,8 +54,12 @@ AnimationSet AnimationSet::parse(std::string_view json_text, const std::string& 
                         parsed.time = event.at("time").get<float>();
                         parsed.name = event.at("name").get<std::string>();
                         parsed.always = event.value("always", false);
+                        parsed.end = event.value("end", -1.0f);
                         if (parsed.time < 0.0f || parsed.name.empty()) {
                             throw std::runtime_error("clip '" + name + "': an event needs a name and a time >= 0");
+                        }
+                        if (event.contains("end") && parsed.end <= parsed.time) {
+                            throw std::runtime_error("clip '" + name + "': event '" + parsed.name + "' ends before it starts");
                         }
                         settings.events.push_back(std::move(parsed));
                     }
@@ -73,6 +84,33 @@ AnimationSet AnimationSet::parse(std::string_view json_text, const std::string& 
         if (!set.upper_mask_.empty() && set.masks_.count(set.upper_mask_) == 0) {
             throw std::runtime_error("upper_mask '" + set.upper_mask_ + "' is not in masks");
         }
+        // The layers (milestone 9 bis, part 3); without them, the whole body and the upper body.
+        if (doc.contains("layers")) {
+            const nlohmann::json& layers = doc.at("layers");
+            if (!layers.is_array() || layers.empty() || layers.size() > static_cast<std::size_t>(kMaxLayers)) {
+                throw std::runtime_error("layers: 1 to " + std::to_string(kMaxLayers) + " layers");
+            }
+            for (const nlohmann::json& l : layers) {
+                LayerSettings layer;
+                layer.name = l.value("name", std::string());
+                layer.mask = l.value("mask", std::string());
+                layer.additive = l.value("additive", false);
+                if (!layer.mask.empty() && set.masks_.count(layer.mask) == 0) {
+                    throw std::runtime_error("layer '" + layer.name + "': mask '" + layer.mask + "' is not in masks");
+                }
+                set.layers_.push_back(std::move(layer));
+            }
+            if (set.layers_.front().additive || !set.layers_.front().mask.empty()) {
+                throw std::runtime_error("layers: the first one moves the whole body (no mask, not additive)");
+            }
+        } else {
+            set.layers_ = {LayerSettings{"body", {}, false}, LayerSettings{"upper", set.upper_mask_, false}};
+        }
+        set.max_motions_ = doc.value("max_motions", 4);
+        if (set.max_motions_ < 1 || set.max_motions_ > 16) {
+            throw std::runtime_error("max_motions: 1 to 16");
+        }
+        set.root_joint_ = doc.value("root_joint", std::string("root"));
         if (doc.contains("attach_points")) {
             for (const auto& [name, point] : doc.at("attach_points").items()) {
                 AttachPoint data;
@@ -123,6 +161,10 @@ AnimationSet AnimationSet::parse(std::string_view json_text, const std::string& 
         }
         if (doc.contains("graph")) {
             set.graph_ = AnimationGraph::parse(doc.at("graph"));
+            if (set.graph_.layers.size() > set.layers_.size()) {
+                throw std::runtime_error("graph: " + std::to_string(set.graph_.layers.size()) + " layers for " +
+                                         std::to_string(set.layers_.size()) + " layers of the animator");
+            }
             // Every motion of a state is a clip (any name: the library is checked when it plays) or a
             // blend space of this file; a blend space's name is only known here.
         }

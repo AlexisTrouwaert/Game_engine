@@ -1,0 +1,14 @@
+<!-- The pause, over the frozen game. -->
+<ui class="shade" back-action="resume">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 300">
+        <label class="title" text="{pause-title}"/>
+        <label class="dim" text="{pause-frozen}"/>
+        <spacer class="gap"/>
+        <button action="resume" text="{pause-resume}" autofocus="true"/>
+        <button action="save" text="{pause-save}"/>
+        <button action="options" text="{pause-options}"/>
+        <button action="quit" text="{pause-quit}"/>
+        <label class="dim" text="{pause-help}"/>
+    </panel>
+</ui>

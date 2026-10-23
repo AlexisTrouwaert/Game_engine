@@ -35,6 +35,8 @@ assets/environments/**
 assets/audio/**
 !assets/audio/**/
 !assets/audio/**/*.meta
+# The sound banks are the project's own (milestone 9 bis, part 7)
+!assets/audio/banks/*.bank.json
 # Animated test characters downloaded by tools/models/fetch_test_characters.py (CC0 and CC-BY 4.0,
 # about 14 MB)
 assets/models/characters/**
@@ -45,3 +47,12 @@ assets/models/characters/**
 assets/models/arpg/**
 !assets/models/arpg/**/
 !assets/models/arpg/**/*.meta
+# The Unicode Character Database downloaded by tools/text/fetch_text_data.py (about 18 MB unpacked):
+# the generator's input; its output (unicode_tables.inc, tests/data/unicode/) is kept in Git
+tools/text/ucd/
+# Fallback fonts downloaded by the same script (Noto, SIL OFL 1.1, about 19 MB)
+assets/fonts/noto/**
+!assets/fonts/noto/**/
+!assets/fonts/noto/**/*.meta
+# CLDR files downloaded by the same script (plural rules, number formats): the generator's input
+tools/text/cldr/

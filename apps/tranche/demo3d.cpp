@@ -29,7 +29,6 @@
 
 #include "map_objects.hpp"
 #include "sandbox_data.hpp"
-#include "slice_ui.hpp"
 
 namespace {
 
@@ -83,6 +82,9 @@ struct Archetype {  // what a character of the slice is: its row of the "personn
     float pace = 1.0f;  // its own pace: multiplies the row's speed
 };
 struct HeroTag {};  // the hero of the slice (saves tell it from the creatures)
+struct Remains {  // a dead creature (milestone 9 bis, part 2): lies, then dissolves
+    int ticks = 0;  // since its death
+};
 struct Hunter {  // a creature of the slice (milestone 6): wanders, sees the hero, chases, strikes
     glm::vec2 wander{0.0f};  // its way while it does not chase (turned back when blocked)
     bool chasing = false;
@@ -102,6 +104,7 @@ MOTEUR_REFLECT(Archetype,
                MOTEUR_FIELD_AS(pace, "allure", {.min = 0.0, .doc = "multiplies the row's speed",
                                                 .flags = moteur::kFieldDefault | moteur::kFieldLogic}));
 MOTEUR_REFLECT(HeroTag);
+MOTEUR_REFLECT(Remains, MOTEUR_FIELD_AS(ticks, "ticks", {.min = 0, .unit = "ticks", .flags = moteur::kFieldDefault | moteur::kFieldLogic}));
 MOTEUR_REFLECT(Hunter, MOTEUR_FIELD_AS(wander, "errance", {.flags = moteur::kFieldDefault | moteur::kFieldLogic}),
                MOTEUR_FIELD_AS(chasing, "chasse", {.flags = moteur::kFieldDefault | moteur::kFieldLogic}),
                MOTEUR_FIELD_AS(lost_ticks, "perdu", {.min = 0, .unit = "ticks", .flags = moteur::kFieldDefault | moteur::kFieldLogic}),
@@ -116,7 +119,15 @@ void register_slice_components() {
     types.add<Archetype>("archetype", moteur::upgrade_from_array({"personnage", "allure"}));
     types.add<HeroTag>("heros", [](const nlohmann::json& value) { return value.is_object() ? value : nlohmann::json::object(); });
     types.add<Hunter>("chasseur", moteur::upgrade_from_array({"errance", "chasse", "perdu", "recharge"}));
+    types.add<Remains>("restes");
 }
+
+// The remains of the dead (milestone 9 bis, part 2): they lie this long, then dissolve over this long.
+constexpr int kRemainsLie = 90;      // ticks
+constexpr int kRemainsVanish = 90;   // ticks
+// A blow's flash: almost white, faded out over this many ticks.
+constexpr glm::vec3 kFlashColor{3.0f, 2.7f, 2.3f};
+constexpr int kFlashTicks = 10;
 
 // The row's identifier of a saved Archetype (an object since milestone 9, an array before).
 std::string archetype_id(const nlohmann::json& archetype) {
@@ -173,7 +184,13 @@ Demo3D::Demo3D(moteur::Application& app, const Options& options, bool standalone
     tile_ = moteur::make_asset(moteur::Mesh::create(renderer, moteur::make_plane(), "demo.tile"));
     sphere_ = moteur::make_asset(moteur::Mesh::create(renderer, moteur::make_sphere(0.5f, 16, 8), "demo.sphere"));
     rock_ = moteur::make_asset(moteur::Mesh::create(renderer, moteur::make_sphere(0.5f, 7, 4), "demo.rock"));  // faceted
-    font_ = app.assets().font(kFont, kFontPixelHeight);
+    if (options_.ui != nullptr) {
+        ui_ = options_.ui;
+    } else {
+        own_ui_ = std::make_unique<moteur::Ui>(app, kFont);
+        ui_ = own_ui_.get();
+    }
+    hud_ = &ui_->open(kHud, 0);
     sky_ = moteur::Environment::create(renderer, moteur::make_sky(512, 256), "demo.sky");
     if (app.assets().exists(kBarrel)) {
         barrel_ = app.assets().model(kBarrel);
@@ -229,12 +246,6 @@ Demo3D::Demo3D(moteur::Application& app, const Options& options, bool standalone
     moteur::TextureSettings mask;
     mask.mipmaps = true;
     glow_ = moteur::make_asset(renderer.create_texture(glow, mask, "demo.glow"));
-    moteur::Image white;
-    white.width = 1;
-    white.height = 1;
-    white.pixels = {255, 255, 255, 255};
-    white_ = renderer.create_texture(white, "demo.white");
-
     debug_flags_ = moteur::WorldDebugFlags::declare(app.console().variables());
     effects_on_ = &app.console().variables().add_bool("effects.enabled", true, "effets de particules de la tranche (purement visuels)");
     setup_serializers();
@@ -293,20 +304,15 @@ Demo3D::Demo3D(moteur::Application& app, const Options& options, bool standalone
             create_selection_marks();  // a level without creatures: the hero's marks still
         }
         moteur::Assets& assets = app.assets();
-        if (assets.exists(kAmbience)) {
-            for (const char* path : kSteps) {
-                steps_.push_back(assets.sound(path));
+        if (assets.exists(kAmbience) && assets.exists(kBank)) {
+            // The sounds as events (milestone 9 bis, part 7): the game's system, or one of its own.
+            sound_ = options_.sound;
+            if (sound_ == nullptr) {
+                own_sound_ = std::make_unique<moteur::AudioEvents>(app.audio(), assets);
+                own_sound_->load(kBank);
+                sound_ = own_sound_.get();
             }
-            for (const char* path : kImpacts) {
-                impacts_.push_back(assets.sound(path));
-            }
-            ambience_ = assets.music(kAmbience);
-            moteur::PlaySound ambience;
-            ambience.group = moteur::SoundGroup::Ambience;
-            ambience.volume = 0.5f;
-            ambience.loop = true;
-            ambience.fade_in = 1.5f;
-            ambience_voice_ = app.audio().play_stream(ambience_, ambience);
+            ambience_ = sound_->play("ambiance/tombes");
         }
     }
 
@@ -368,6 +374,15 @@ Demo3D::Demo3D(moteur::Application& app, const Options& options, bool standalone
 #endif
 }
 
+std::string profile_label(moteur::Application& app, const std::string& profile) {
+    const std::string id = "input-profile-" + profile;
+    return app.localization().has(id) ? app.localization().format(id) : app.input().profile_label(profile);
+}
+
+std::string profile_label(moteur::Application& app) {
+    return profile_label(app, app.input().profile());
+}
+
 void Demo3D::declare_actions(moteur::Application& app) {
     // The actions, then their bindings: the defaults, and the player's changes over them.
     moteur::Input& input = app.input();
@@ -382,7 +397,7 @@ void Demo3D::declare_actions(moteur::Application& app) {
         input.add_button("skill_" + std::to_string(i + 1));
     }
     input.add_button("pause");
-    for (const char* name : kMenuActions) {  // the menus (SliceUi): arrows, pad, Enter, a click
+    for (const char* name : kMenuActions) {  // the menus (moteur::Ui): arrows, pad, Enter, a click
         input.add_button(name);
     }
     input.load_bindings(moteur::read_text_file(app.assets().file_path("input/demo3d.json")), "input/demo3d.json");
@@ -421,6 +436,7 @@ std::string Demo3D::user_bindings_path() const {
 }
 
 Demo3D::~Demo3D() {
+    ui_->close(kHud);
     for (const char* name : {"god", "heal", "tp", "spawn", "kill", "fog"}) {
         app_.console().remove(name);
     }
@@ -431,8 +447,10 @@ Demo3D::~Demo3D() {
         tools->forget(world_);
     }
 #endif
-    if (ambience_voice_ != moteur::kNoSound) {
-        app_.audio().stop(ambience_voice_, 0.5f);
+    if (sound_ != nullptr) {
+        sound_->stop(ambience_);
+        sound_->set_reverb_zones({});
+        sound_->set_occlusion_test({});
     }
 }
 
@@ -964,6 +982,19 @@ void Demo3D::animate_characters(float dt) {
     }
     events_.clear();
     moteur::advance_animators(registry, 1, &events_);
+    // Root motion (milestone 9 bis, part 3): the clips' own moves, for the next tick's movement
+    // (through the walls' collisions). Millimetres of the file, in the model's space (KayKit faces
+    // +Z): turned by the facing, scaled by the character's size.
+    for (auto [entity, transform, animator, mover] : registry.view<moteur::Transform, moteur::Animator, moteur::Mover>().each()) {
+        const glm::ivec3 root = animator.take_root_motion();
+        if (root == glm::ivec3(0)) {
+            continue;
+        }
+        const glm::vec2 forward = mover.facing;
+        const glm::vec2 side(forward.y, -forward.x);  // the model's +X once turned
+        const float metres = transform.scale.y / 1000.0f;
+        mover.root_motion += (forward * static_cast<float>(root.z) + side * static_cast<float>(root.x)) * metres;
+    }
     for (const moteur::AnimatorEvent& event : events_) {
         if (event.entity != hero_) {
             if (event.name == "impact" && options_.hero) {
@@ -985,15 +1016,7 @@ void Demo3D::animate_characters(float dt) {
         } else if (event.name.rfind("step", 0) == 0) {
             const glm::vec3 at = foot_of(hero_);
             play_effect(kDust, at + glm::vec3(0.0f, 0.05f, 0.0f), 0.8f);
-            if (steps_.empty()) {
-                continue;
-            }
-            moteur::PlaySound step;
-            step.position = at;
-            step.volume = 0.6f;
-            step.pitch_variation = 0.06f;
-            step.volume_variation = 0.15f;
-            app_.audio().play(steps_, step);
+            play_step(at);
         }
     }
 }
@@ -1022,11 +1045,20 @@ void Demo3D::hurt(entt::entity creature, float blow) {
         walker.velocity = glm::vec2(0.0f);
         walker.goal.reset();
     }
+    if (was_alive) {
+        // The blow flashes on its target (milestone 9 bis, part 2); a death leaves remains, which
+        // dissolve after a while.
+        moteur::MaterialEffects& effects = registry.get_or_emplace<moteur::MaterialEffects>(creature);
+        effects.flash = glm::vec4(kFlashColor, 1.0f);
+        if (health.value <= 0.0f) {
+            registry.emplace_or_replace<Remains>(creature);
+        }
+    }
     if (moteur::Animator* animator = registry.try_get<moteur::Animator>(creature)) {
         if (health.value <= 0.0f && was_alive) {
             animator->fire("mort");  // falls, and stays on the ground
         } else if (health.value > 0.0f) {
-            animator->fire("touche");  // the upper body takes the blow
+            animator->fire("touche");  // the blow shakes it, added over what it does (an additive layer)
         }
     }
     if (options_.hero) {
@@ -1048,6 +1080,34 @@ void Demo3D::hurt(entt::entity creature, float blow) {
     }
 }
 
+void Demo3D::update_effects() {
+    entt::registry& registry = world_.registry();
+    for (auto [entity, remains] : registry.view<Remains>().each()) {
+        ++remains.ticks;
+        const float dissolve = std::clamp(static_cast<float>(remains.ticks - kRemainsLie) / kRemainsVanish, 0.0f, 1.0f);
+        if (dissolve > 0.0f) {
+            registry.get_or_emplace<moteur::MaterialEffects>(entity).dissolve = dissolve;
+        }
+    }
+    std::vector<entt::entity> done;
+    for (auto [entity, effects] : registry.view<moteur::MaterialEffects>().each()) {
+        effects.flash.a = std::max(0.0f, effects.flash.a - 1.0f / kFlashTicks);
+        if (effects.flash.a <= 0.0f && effects.dissolve <= 0.0f) {
+            done.push_back(entity);  // nothing left to show: the meshes go back to the plain path
+        }
+    }
+    registry.remove<moteur::MaterialEffects>(done.begin(), done.end());
+    if (ghost_ != entt::null) {
+        // Once round its pillar every 9 s, bobbing; facing where it goes.
+        const float angle = static_cast<float>(live_ticks_ % 540) / 540.0f * glm::two_pi<float>();
+        const float bob = 0.12f * std::sin(static_cast<float>(live_ticks_ % 120) / 120.0f * glm::two_pi<float>());
+        moteur::Transform& transform = registry.get<moteur::Transform>(ghost_);
+        transform.position = ghost_center_ + glm::vec3(1.6f * std::cos(angle), bob, 1.6f * std::sin(angle));
+        transform.rotation = glm::angleAxis(-angle, glm::vec3(0.0f, 1.0f, 0.0f));
+        registry.patch<moteur::Transform>(ghost_);
+    }
+}
+
 void Demo3D::strike(entt::entity creature) {
     entt::registry& registry = world_.registry();
     // The slice: the hero's damage over the creature's life, from their rows.
@@ -1059,13 +1119,17 @@ void Demo3D::strike(entt::entity creature) {
     hurt(creature, blow);
     flashes_.push_back({0, creature, live_ticks_ + 45});
     ++hits_;
-    if (!impacts_.empty()) {
-        moteur::PlaySound impact;
-        impact.position = foot_of(creature) + glm::vec3(0.0f, 1.0f, 0.0f);
-        impact.pitch_variation = 0.08f;
-        impact.volume_variation = 0.1f;
-        app_.audio().play(impacts_, impact);
+    if (sound_ != nullptr) {
+        sound_->play("combat/impact", {.position = foot_of(creature) + glm::vec3(0.0f, 1.0f, 0.0f)});
     }
+}
+
+void Demo3D::play_step(glm::vec3 at) {
+    if (sound_ == nullptr) {
+        return;
+    }
+    sound_->set_global("sol", floor_of(at.y) > 0 ? "dalle" : "pave");
+    sound_->play("personnage/pas", {.position = at});
 }
 
 void Demo3D::play_steps(glm::vec2 before) {
@@ -1076,14 +1140,7 @@ void Demo3D::play_steps(glm::vec2 before) {
         return;
     }
     step_distance_ = std::fmod(step_distance_, kStride);
-    if (!steps_.empty()) {
-        moteur::PlaySound step;
-        step.position = foot_of(hero_);
-        step.volume = 0.6f;
-        step.pitch_variation = 0.06f;
-        step.volume_variation = 0.15f;
-        app_.audio().play(steps_, step);
-    }
+    play_step(foot_of(hero_));
 }
 
 void Demo3D::place_street_lamps() {
@@ -1353,9 +1410,14 @@ void Demo3D::apply_input(float dt) {
         if (input.pressed(actions_.skills[i])) {
             ++skill_uses_[i];
             flashes_.push_back({i + 1, selected_, live_ticks_ + 45});
-            // The slice: the first skill strikes the nearest creature within reach.
+            // The slice: the first skill strikes the nearest creature within reach; the second one
+            // dashes forward (milestone 9 bis, part 3: root motion, dodging blows meanwhile).
             if (i == 0 && hero_ != entt::null) {
                 attack(creature_in_reach());
+            } else if (i == 1 && hero_ != entt::null) {
+                if (moteur::Animator* animator = world_.registry().try_get<moteur::Animator>(hero_)) {
+                    animator->fire("ruee");
+                }
             }
         }
     }
@@ -1366,6 +1428,7 @@ void Demo3D::apply_input(float dt) {
 }
 
 void Demo3D::update(double dt) {
+    ui_seconds_ += dt;
     if (stop_after_export_) {
         app_.quit();
         return;
@@ -1394,6 +1457,7 @@ void Demo3D::update(double dt) {
         return;
     }
     ++live_ticks_;
+    update_effects();
     live_pointer_ = app_.input().pointer();
     const auto step = static_cast<float>(dt);
     const glm::vec2 hero_before = hero_ != entt::null ? cell_position(hero_) : glm::vec2(0.0f);
@@ -1491,6 +1555,13 @@ void Demo3D::render(moteur::Renderer& renderer, double alpha) {
     moteur::MeshRenderer& meshes = renderer.meshes();
     moteur::BillboardRenderer& billboards = renderer.billboards();
     meshes.set_camera(camera.view_projection(), camera.position());
+    meshes.set_time(static_cast<double>(live_ticks_) / moteur::tick_rate());  // the materials' animations
+    // Who hears: the camera's target (milestone 9 bis, part 7; the listener stayed at the origin
+    // before, and the sounds of the far street faded as if heard from the gate).
+    app_.audio().set_listener(camera);
+    if (own_sound_) {
+        own_sound_->update(static_cast<float>(1.0 / std::max(1, moteur::tick_rate())));
+    }
     billboards.set_camera(camera);
     if (level_mode()) {
         const moteur::LevelLighting& lighting = level_->header().lighting;  // the level's, as the editor shows it
@@ -1581,40 +1652,41 @@ void Demo3D::render(moteur::Renderer& renderer, double alpha) {
 }
 
 void Demo3D::draw_overlay(moteur::Renderer& renderer, const moteur::Camera3D& camera, float blend) {
-    moteur::SpriteRenderer& screen = renderer.screen_sprites();
-    const float ui = app_.to_pixels({1.0f, 0.0f}).x - app_.to_pixels({0.0f, 0.0f}).x;
+    moteur::UiModel& model = ui_->model();
+    const float scale = ui_->scale();  // pixels per point
     const glm::vec2 view(static_cast<float>(renderer.width()), static_cast<float>(renderer.height()));
 
-    // Health bars over the creatures on screen: constant size, one depth per kind of element.
+    // Health bars over the creatures on screen (the `health` template: one per creature, kept while
+    // asked for each frame), above the box.
     if (health_bars_) {
-        const glm::vec2 bar(48.0f * ui, 5.0f * ui);
-        // In the order of creation: bars that overlap always cover each other the same way.
         for (auto [entity, health] : world_.registry().storage<Health>().reach()) {
             if (world_.registry().all_of<moteur::Hidden>(entity)) {
                 continue;  // out of the hero's sight (the slice's fog of war)
             }
+            if (const auto* effects = world_.registry().try_get<moteur::MaterialEffects>(entity); effects != nullptr && effects->dissolve > 0.0f) {
+                continue;  // its remains are going
+            }
             const glm::vec3 p = world_.world_position(entity, blend);
-            const auto head = camera.world_to_screen({p.x, p.y + top_of(entity), p.z});  // above the box, still
-            if (!head || head->x < -bar.x || head->y < -bar.y || head->x > view.x + bar.x || head->y > view.y + bar.y) {
+            const auto head = camera.world_to_screen({p.x, p.y + top_of(entity), p.z});
+            const glm::vec2 margin = glm::vec2(48.0f, 5.0f) * scale;
+            if (!head || head->x < -margin.x || head->y < -margin.y || head->x > view.x + margin.x || head->y > view.y + margin.y) {
                 continue;
             }
-            const glm::vec2 corner = glm::round(*head - glm::vec2(bar.x * 0.5f, bar.y));
-            moteur::SpriteOptions frame;
-            frame.tint = {0.0f, 0.0f, 0.0f, 0.7f};
-            frame.depth = 1.0f;
-            screen.draw(white_, corner - glm::vec2(ui), bar + glm::vec2(2.0f * ui), frame);
-            moteur::SpriteOptions fill;
-            fill.tint = glm::vec4(glm::mix(glm::vec3(0.85f, 0.15f, 0.1f), glm::vec3(0.2f, 0.8f, 0.25f), health.value), 1.0f);
-            if (entity == selected_) {
-                fill.tint = {0.95f, 0.85f, 0.3f, 1.0f};  // the selected one stands out
-            }
-            fill.depth = 1.1f;
-            screen.draw(white_, corner, {std::round(bar.x * health.value), bar.y}, fill);
+            const auto key = static_cast<std::uint64_t>(entt::to_integral(entity));
+            moteur::UiElement* bar = hud_->instance("health", key);
+            model.set("health." + std::to_string(key) + ".value", health.value);
+            bar->set_class("hurt", health.value < 0.6f);
+            bar->set_class("low", health.value < 0.3f);
+            bar->set_class("selected", entity == selected_);  // the selected one stands out
+            const glm::vec4 rect = bar->rect();
+            const glm::vec2 size = rect.z > 0.0f ? glm::vec2(rect.z, rect.w) : glm::vec2(44.0f, 5.0f) * scale;
+            bar->set_screen_position(glm::round(*head - glm::vec2(size.x * 0.5f, size.y)));
         }
     }
 
-    // Skills just used: their number over the creature, rising and fading; the newest lowest, the
-    // older ones stacked above it.
+    // Skills just used: their words over the creature, rising and fading; the newest lowest, the
+    // older ones stacked above it (the `flash` template).
+    const moteur::Localization& words = app_.localization();
     for (std::size_t f = 0; f < flashes_.size(); ++f) {
         const SkillFlash& flash = flashes_[f];
         const auto newer = std::count_if(flashes_.begin() + static_cast<std::ptrdiff_t>(f) + 1, flashes_.end(),
@@ -1627,62 +1699,72 @@ void Demo3D::draw_overlay(moteur::Renderer& renderer, const moteur::Camera3D& ca
         if (!head) {
             continue;
         }
+        // One label per flash: its creature, its end and its skill make it.
+        const std::uint64_t key = (static_cast<std::uint64_t>(entt::to_integral(flash.creature)) << 32) ^
+                                  (static_cast<std::uint64_t>(flash.until_tick) << 4) ^ static_cast<std::uint64_t>(flash.skill);
+        moteur::UiElement* label = hud_->instance("flash", key);
+        model.set("flash." + std::to_string(key) + ".text",
+                  flash.skill == 0 ? words.format("flash-hit") : words.format("flash-skill", {{"number", flash.skill}}));
         const float left = static_cast<float>(flash.until_tick - live_ticks_) / 45.0f;  // 1 when used, 0 at the end
-        moteur::TextOptions style;
-        style.align = moteur::TextAlign::Center;
-        style.max_width = 200.0f;
-        style.depth = 1.5f;
-        style.color = {1.0f, 0.85f, 0.3f, std::clamp(left * 1.5f, 0.0f, 1.0f)};
-        const std::string label = flash.skill == 0 ? std::string("Touché !") : "Compétence " + std::to_string(flash.skill);
-        const float rise = (1.0f - left) * 30.0f * ui + static_cast<float>(newer) * font_->line_height();
-        font_->draw(screen, label, *head - glm::vec2(100.0f, font_->line_height() + rise), style);
+        char opacity[32];
+        std::snprintf(opacity, sizeof(opacity), "opacity: %.2f", std::clamp(left * 1.5f, 0.0f, 1.0f));
+        label->set_style(opacity);
+        const glm::vec4 rect = label->rect();
+        const float line = rect.w > 0.0f ? rect.w : 22.0f * scale;
+        const float rise = (1.0f - left) * 30.0f * scale + static_cast<float>(newer) * line;
+        label->set_screen_position(glm::round(*head - glm::vec2(100.0f * scale, line + rise)));
     }
 
     // Statistics and help, top left.
-    const float line = font_->line_height();
-    const glm::vec2 corner(20.0f, 40.0f);
-    moteur::TextOptions title;
-    title.depth = 2.0f;
-    moteur::TextOptions detail;
-    detail.depth = 2.0f;
-    detail.color = {0.8f, 0.85f, 0.9f, 1.0f};
-    char text[256];
-    std::snprintf(text, sizeof(text), "Démo 3D : carte %dx%d, %zu créatures, %zu objets fixes, %zu torches",
-                  options_.map_size, options_.map_size, creatures_, static_draws_, torches_);
-    font_->draw(screen, text, corner, title);
+    const auto count = [](std::size_t n) { return static_cast<std::int64_t>(n); };
+    model.set("hud.world", words.format("hud-world", {{"width", options_.map_size}, {"height", options_.map_size},
+                                                      {"creatures", count(creatures_)}, {"objects", count(static_draws_)},
+                                                      {"torches", count(torches_)}}));
     const moteur::RenderStats& s = last_stats_;
-    std::snprintf(text, sizeof(text), "scène : %d / %d maillages, %zu triangles, %d draw calls ; ombre : %d / %d, %d draw calls",
-                  s.meshes, s.meshes_submitted, s.triangles, s.mesh_draw_calls, s.shadow_casters, s.shadow_casters_submitted,
-                  s.shadow_draw_calls);
-    font_->draw(screen, text, corner + glm::vec2(0.0f, line), detail);
-    std::snprintf(text, sizeof(text), "torches : %d ombrées, %d recalculées, %d draw calls ; billboards : %d ; draw calls en tout : %d",
-                  s.point_shadow_lights, s.point_shadow_updates, s.point_shadow_draw_calls, s.billboards, s.draw_calls);
-    font_->draw(screen, text, corner + glm::vec2(0.0f, 2.0f * line), detail);
+    model.set("hud.scene", words.format("hud-scene", {{"meshes", s.meshes}, {"meshes_submitted", s.meshes_submitted},
+                                                      {"triangles", count(s.triangles)}, {"draws", s.mesh_draw_calls},
+                                                      {"casters", s.shadow_casters}, {"casters_submitted", s.shadow_casters_submitted},
+                                                      {"shadow_draws", s.shadow_draw_calls}}));
+    model.set("hud.lights", words.format("hud-lights", {{"shadowed", s.point_shadow_lights}, {"updated", s.point_shadow_updates},
+                                                        {"light_draws", s.point_shadow_draw_calls}, {"billboards", s.billboards},
+                                                        {"draws", s.draw_calls}}));
     // The controls of the current profile, named as on the player's keyboard.
     // Only the device in use: the keys, or the gamepad's buttons.
     const moteur::Input& input = app_.input();
     const moteur::InputDevice device = input.last_device();
     const bool click_to_move = !input.sources(actions_.move_to).empty() && device == moteur::InputDevice::KeyboardMouse;
-    std::string help = input.profile_label(input.profile()) + " : se déplacer " +
-                       input.describe(click_to_move ? actions_.move_to : actions_.move, device) + ", compétences";
+    std::string skills;
     for (int i = 0; i < kSkills; ++i) {
         if (!input.sources(actions_.skills[i]).empty()) {
-            help += (i == 0 ? " " : ", ") + input.describe(actions_.skills[i], device);
+            skills += (skills.empty() ? "" : ", ") + input.describe(actions_.skills[i], device);
         }
     }
-    font_->draw(screen, help, corner + glm::vec2(0.0f, 3.0f * line), detail);
+    model.set("hud.move", words.format("hud-move", {{"layout", profile_label(app_)},
+                                                    {"keys", input.describe(click_to_move ? actions_.move_to : actions_.move, device)},
+                                                    {"skills", skills}}));
+    const std::string following = words.format(follow_ ? "common-yes" : "common-no");
+    std::string text;
     if (hero_ != entt::null) {
-        std::snprintf(text, sizeof(text), "%s sur une créature proche, ou %s : la frapper (coups : %d). %s : caméra suivie (%s), %s : pause",
-                      input.describe(actions_.move_to, device).c_str(), input.describe(actions_.skills[0], device).c_str(), hits_,
-                      input.describe(actions_.follow, device).c_str(), follow_ ? "oui" : "non",
-                      input.describe(actions_.pause, device).c_str());
+        text = words.format("hud-hero", {{"move", input.describe(actions_.move_to, device)},
+                                         {"strike", input.describe(actions_.skills[0], device)}, {"hits", hits_},
+                                         {"follow", input.describe(actions_.follow, device)}, {"following", following},
+                                         {"pause", input.describe(actions_.pause, device)}});
     } else {
-        std::snprintf(text, sizeof(text), "%s%s : choisir une créature, %s : la suivante, %s : la suivre (%s)",
-                      hovered_cell_ ? ("Case (" + std::to_string(hovered_cell_->x) + ", " + std::to_string(hovered_cell_->y) + "). ").c_str() : "",
-                      input.describe(actions_.select, device).c_str(), input.describe(actions_.next, device).c_str(),
-                      input.describe(actions_.follow, device).c_str(), follow_ ? "oui" : "non");
+        const std::string cell = hovered_cell_ ? words.format("hud-cell", {{"x", hovered_cell_->x}, {"y", hovered_cell_->y}}) + " "
+                                               : std::string();
+        text = words.format("hud-observer", {{"cell", cell}, {"select", input.describe(actions_.select, device)},
+                                             {"next", input.describe(actions_.next, device)},
+                                             {"follow", input.describe(actions_.follow, device)}, {"following", following}});
     }
-    font_->draw(screen, text, corner + glm::vec2(0.0f, 4.0f * line), detail);
+    model.set("hud.actions", text);
+
+    // On its own (the sandbox's demo), the overlay is drawn here; in the game, with its menus.
+    if (own_ui_) {
+        float density = app_.to_pixels({1.0f, 0.0f}).x - app_.to_pixels({0.0f, 0.0f}).x;
+        own_ui_->set_scale(density > 0.0f ? density : 1.0f);
+        own_ui_->render(renderer, ui_seconds_);
+        ui_seconds_ = 0.0;
+    }
 }
 
 #if !defined(MOTEUR_SHIPPING)
@@ -1863,6 +1945,9 @@ void Demo3D::creature_blow(entt::entity creature) {
     if (glm::length(hero - cell_position(creature)) > target.radius + striker.radius + striker.reach + 0.4f) {
         return;  // the hero stepped out of the swing
     }
+    if (const moteur::Animator* animator = registry.try_get<moteur::Animator>(hero_); animator != nullptr && animator->in_window("esquive")) {
+        return;  // dashing: the blow passes (an event window of the clip, milestone 9 bis, part 3)
+    }
     Health& health = registry.get<Health>(hero_);
     const float blow = static_cast<float>(striker.damage) / static_cast<float>(target.life);
     if (!god_) {
@@ -1873,12 +1958,8 @@ void Demo3D::creature_blow(entt::entity creature) {
     if (!target.hit_effect.empty()) {
         play_effect(target.hit_effect.c_str(), hero_foot + glm::vec3(0.0f, 1.1f, 0.0f), 0.8f);  // the hero's row: blood
     }
-    if (!impacts_.empty()) {
-        moteur::PlaySound impact;
-        impact.position = hero_foot + glm::vec3(0.0f, 1.0f, 0.0f);
-        impact.volume = 0.5f;
-        impact.pitch_variation = 0.08f;
-        app_.audio().play(impacts_, impact);
+    if (sound_ != nullptr) {
+        sound_->play("combat/coup_recu", {.position = hero_foot + glm::vec3(0.0f, 1.0f, 0.0f)});
     }
 }
 
@@ -2061,6 +2142,23 @@ void Demo3D::open_level() {
         throw std::runtime_error("Tranche : le niveau « " + options_.level + " » ne s'est pas chargé");
     }
     std::sort(level_spawns_.begin(), level_spawns_.end(), [](const LevelSpawn& a, const LevelSpawn& b) { return a.id < b.id; });
+    if (sound_ != nullptr) {
+        // The places' reverberation: the street's stone, the parvis before the cathedral (its zone
+        // starts at the stairs); and what the level's walls hide is muffled.
+        sound_->set_reverb_zones({{"rue", moteur::Aabb{{-6.5f, -1.0f, -2.0f}, {6.5f, 12.0f, 48.0f}}, 3.0f},
+                                  {"parvis", moteur::Aabb{{-12.5f, -1.0f, 57.0f}, {12.5f, 20.0f, 78.0f}}, 3.0f}});
+        sound_->set_occlusion_test([this](glm::vec3 listener, glm::vec3 source) {
+            const glm::vec3 ear = listener + glm::vec3(0.0f, 1.6f, 0.0f);
+            return level_ && !level_->collision().segment_clear(ear, source) ? 1.0f : 0.0f;
+        });
+    }
+    if (const moteur::LevelPoint* haunt = level_->header().point("fantome"); haunt != nullptr && app_.assets().exists(kGhost)) {
+        ghost_center_ = haunt->position;
+        ghost_ = registry.create();
+        registry.emplace<moteur::Transform>(ghost_, place(ghost_center_, glm::vec3(1.0f)));
+        registry.emplace<moteur::ModelComponent>(ghost_, moteur::ModelComponent{app_.assets().model(kGhost)});
+        registry.emplace<moteur::Name>(ghost_, "fantôme");
+    }
 
     // The fog of war over the whole level, a cell per metre; the floors' grids made now (the first
     // walk up the stairs does not wait for them).

@@ -46,6 +46,11 @@ void install_crash_reporter(const std::string& directory, const std::string& pro
 /// Handlers installed by someone else after it are replaced by the earlier ones.
 void uninstall_crash_reporter();
 
+/// Replaces the message shown to the player after a crash (`{report}` where the report's path
+/// goes; empty: kDefaultCrashMessage), for instance in the language the player just chose. Main
+/// thread; nothing when the reporter is not installed.
+void set_crash_message(const std::string& player_message);
+
 /// The message shown to the player after a crash when the game gives none: English, with
 /// `{report}` where the report's path goes.
 inline constexpr const char* kDefaultCrashMessage =

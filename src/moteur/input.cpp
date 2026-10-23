@@ -1,6 +1,7 @@
 #include "moteur/input.hpp"
 
 #include "moteur/document.hpp"
+#include "moteur/localization.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -18,10 +19,20 @@ struct MouseName {
     const char* label;
 };
 constexpr MouseName kMouseButtons[] = {
-    {"left", SDL_BUTTON_LEFT, "Clic gauche"},    {"right", SDL_BUTTON_RIGHT, "Clic droit"},
-    {"middle", SDL_BUTTON_MIDDLE, "Clic milieu"}, {"x1", SDL_BUTTON_X1, "Souris 4"},
-    {"x2", SDL_BUTTON_X2, "Souris 5"},
+    {"left", SDL_BUTTON_LEFT, "Left click"},    {"right", SDL_BUTTON_RIGHT, "Right click"},
+    {"middle", SDL_BUTTON_MIDDLE, "Middle click"}, {"x1", SDL_BUTTON_X1, "Mouse 4"},
+    {"x2", SDL_BUTTON_X2, "Mouse 5"},
 };
+
+// A label: the message `id` of the localization, or the English text without one (or without
+// the message: a game that does not ship the engine's strings).
+std::string label(const Localization* localization, std::string_view id, std::string_view english,
+                  LocalizedArgs args = {}) {
+    if (localization != nullptr && localization->has(id)) {
+        return localization->format(id, args);
+    }
+    return std::string(english);
+}
 
 std::string lower(std::string_view text) {
     std::string result(text);
@@ -161,11 +172,18 @@ std::string input_source_text(const InputSource& source) {
     return "?";
 }
 
-std::string input_source_label(const InputSource& source) {
+std::string input_source_label(const InputSource& source, const Localization* localization) {
     switch (source.kind) {
         case InputSource::Kind::Key: {
-            // The key as printed on the player's keyboard, whatever its layout.
+            // The keys without a character (Space, Shift, arrows...) by the localization
+            // (input-key-<SDL name, lower case, spaces as dashes>), the others as printed on the
+            // player's keyboard, whatever its layout.
             const auto scancode = static_cast<SDL_Scancode>(source.code);
+            std::string id = "input-key-" + lower(SDL_GetScancodeName(scancode));
+            std::replace(id.begin(), id.end(), ' ', '-');
+            if (localization != nullptr && localization->has(id)) {
+                return localization->format(id);
+            }
             const SDL_Keycode key = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false);
             const char* name = key != SDLK_UNKNOWN ? SDL_GetKeyName(key) : "";
             return name[0] != '\0' ? name : SDL_GetScancodeName(scancode);
@@ -173,39 +191,44 @@ std::string input_source_label(const InputSource& source) {
         case InputSource::Kind::MouseButton:
             for (const MouseName& mouse : kMouseButtons) {
                 if (mouse.button == source.code) {
-                    return mouse.label;
+                    return label(localization, std::string("input-mouse-") + mouse.text, mouse.label);
                 }
             }
-            return "Souris ?";
+            return label(localization, "input-mouse-other", "Mouse ?");
         case InputSource::Kind::Wheel:
-            return source.direction > 0 ? "Molette haut" : "Molette bas";
+            return source.direction > 0 ? label(localization, "input-wheel-up", "Wheel up")
+                                        : label(localization, "input-wheel-down", "Wheel down");
         case InputSource::Kind::GamepadButton:
             switch (static_cast<SDL_GamepadButton>(source.code)) {
                 // Names of an Xbox pad, the most common; by position (A is the bottom button).
-                case SDL_GAMEPAD_BUTTON_SOUTH: return "Manette A";
-                case SDL_GAMEPAD_BUTTON_EAST: return "Manette B";
-                case SDL_GAMEPAD_BUTTON_WEST: return "Manette X";
-                case SDL_GAMEPAD_BUTTON_NORTH: return "Manette Y";
-                case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return "Manette LB";
-                case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return "Manette RB";
-                case SDL_GAMEPAD_BUTTON_LEFT_STICK: return "Manette L3";
-                case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return "Manette R3";
-                case SDL_GAMEPAD_BUTTON_DPAD_UP: return "Croix haut";
-                case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return "Croix bas";
-                case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "Croix gauche";
-                case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "Croix droite";
-                case SDL_GAMEPAD_BUTTON_START: return "Manette Start";
-                case SDL_GAMEPAD_BUTTON_BACK: return "Manette Select";
-                default:
-                    return std::string("Manette ") + SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(source.code));
+                case SDL_GAMEPAD_BUTTON_SOUTH: return label(localization, "input-pad-a", "Pad A");
+                case SDL_GAMEPAD_BUTTON_EAST: return label(localization, "input-pad-b", "Pad B");
+                case SDL_GAMEPAD_BUTTON_WEST: return label(localization, "input-pad-x", "Pad X");
+                case SDL_GAMEPAD_BUTTON_NORTH: return label(localization, "input-pad-y", "Pad Y");
+                case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return label(localization, "input-pad-lb", "Pad LB");
+                case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return label(localization, "input-pad-rb", "Pad RB");
+                case SDL_GAMEPAD_BUTTON_LEFT_STICK: return label(localization, "input-pad-l3", "Pad L3");
+                case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return label(localization, "input-pad-r3", "Pad R3");
+                case SDL_GAMEPAD_BUTTON_DPAD_UP: return label(localization, "input-pad-dpad-up", "D-pad up");
+                case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return label(localization, "input-pad-dpad-down", "D-pad down");
+                case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return label(localization, "input-pad-dpad-left", "D-pad left");
+                case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return label(localization, "input-pad-dpad-right", "D-pad right");
+                case SDL_GAMEPAD_BUTTON_START: return label(localization, "input-pad-start", "Pad Start");
+                case SDL_GAMEPAD_BUTTON_BACK: return label(localization, "input-pad-select", "Pad Select");
+                default: {
+                    const char* name = SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(source.code));
+                    return label(localization, "input-pad-button", std::string("Pad ") + name, {{"name", name}});
+                }
             }
         case InputSource::Kind::GamepadAxis:
             switch (static_cast<SDL_GamepadAxis>(source.code)) {
-                case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: return "Manette LT";
-                case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: return "Manette RT";
-                default:
-                    return std::string("Manette ") + SDL_GetGamepadStringForAxis(static_cast<SDL_GamepadAxis>(source.code)) +
-                           (source.direction > 0 ? "+" : "-");
+                case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: return label(localization, "input-pad-lt", "Pad LT");
+                case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: return label(localization, "input-pad-rt", "Pad RT");
+                default: {
+                    const std::string name = std::string(SDL_GetGamepadStringForAxis(static_cast<SDL_GamepadAxis>(source.code))) +
+                                             (source.direction > 0 ? "+" : "-");
+                    return label(localization, "input-pad-axis", "Pad " + name, {{"name", name}});
+                }
             }
     }
     return "?";
@@ -455,7 +478,7 @@ std::string Input::describe(ActionId action, std::optional<InputDevice> device) 
     std::vector<std::string> gamepad;
     const auto add = [&](const InputSource& source) {
         const bool pad = source.kind == InputSource::Kind::GamepadButton || source.kind == InputSource::Kind::GamepadAxis;
-        (pad ? gamepad : keyboard).push_back(input_source_label(source));
+        (pad ? gamepad : keyboard).push_back(input_source_label(source, localization_));
     };
     if (is_axis(action)) {
         const AxisBinding& binding = bound_axes_.at(static_cast<std::size_t>(action));
@@ -465,7 +488,8 @@ std::string Input::describe(ActionId action, std::optional<InputDevice> device) 
             }
         }
         if (binding.stick >= 0) {
-            gamepad.push_back(binding.stick == 0 ? "Stick gauche" : "Stick droit");
+            gamepad.push_back(binding.stick == 0 ? label(localization_, "input-pad-left-stick", "Left stick")
+                                                 : label(localization_, "input-pad-right-stick", "Right stick"));
         }
     } else {
         for (const InputSource& source : bound_buttons_.at(static_cast<std::size_t>(action))) {
@@ -487,7 +511,7 @@ std::string Input::describe(ActionId action, std::optional<InputDevice> device) 
             text += (text.empty() ? "" : " / ") + part;
         }
     }
-    return text.empty() ? "(aucune)" : text;
+    return text.empty() ? label(localization_, "input-none", "(none)") : text;
 }
 
 // --- Rebinding

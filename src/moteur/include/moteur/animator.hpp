@@ -1,6 +1,7 @@
 #pragma once
 
 #include <entt/entity/fwd.hpp>
+#include <glm/glm.hpp>
 #include <nlohmann/json_fwd.hpp>
 
 #include <array>
@@ -18,7 +19,7 @@ namespace moteur {
 
 /// How to start a motion (a clip, or a blend space of the AnimationSet) on an Animator.
 struct PlayOptions {
-    int layer = 0;         ///< 0: the whole body; 1: the upper body (the set's upper mask)
+    int layer = 0;         ///< 0: the whole body; 1: the upper body (the set's upper mask); more: AnimationSet::layers()
     /// The crossfade, in ticks; -1: the set's for this motion (AnimationSet::fade_ticks()), 0
     /// without a set: at once.
     int fade_ticks = -1;
@@ -32,12 +33,15 @@ struct PlayOptions {
 /// An event of a clip (see ClipEvent) that fired during a tick: advance_animators() lists them for
 /// the game to read in its update() (footsteps, the moment a blow lands). Never while drawing.
 struct AnimatorEvent {
+    /// An instant, or the start or the end of a window (ClipEvent::end; milestone 9 bis, part 3).
+    enum class Phase : std::uint8_t { Instant, Begin, End };
     entt::entity entity{};  ///< the entity whose Animator fired it (the one given to Animator::advance())
     std::string name;    ///< as in the description file
     std::string clip;    ///< the clip it belongs to
     std::string motion;  ///< what the layer plays: the clip, or its blend space
-    int layer = 0;       ///< the Animator layer that played it: 0 or 1
+    int layer = 0;       ///< the Animator layer that played it
     int weight = 0;      ///< of the clip when it fired, thousandths
+    Phase phase = Phase::Instant;  ///< an instant, or a window's start or end
 };
 
 /// What drawing needs from an Animator for one frame: its clips, each with its place and weight,
@@ -46,7 +50,8 @@ struct AnimatorEvent {
 /// destroyed. Keep one and reuse it: pose() then allocates nothing once it has grown.
 struct PoseRequest {
     std::vector<PoseInput> inputs;  ///< the clips to blend; none: the rest pose
-    std::vector<float> base_weights;  ///< the whole-body layer where the upper layer takes over
+    /// Per layer, what it counts joint by joint where the layers above take over (empty: alone).
+    std::vector<std::vector<float>> layer_weights;
 };
 
 /// Plays skeletal clips on an entity (milestone 5): which clips, where in them, how much each
@@ -55,10 +60,17 @@ struct PoseRequest {
 /// machine. The pose itself is only computed when drawing (see World::collect and AnimationPose),
 /// between the last two ticks: the game never reads it.
 ///
-/// Two layers: 0 moves the whole body, 1 the upper body only (the set's upper mask), over layer 0.
-/// A layer plays motions: a clip, or a blend space (clips of a walk placed on the move speed,
-/// played in step). play() crossfades from what the layer played to the new motion; interrupted
-/// fades keep their weights and fade out from there.
+/// Layers (AnimationSet::layers(); by default two): 0 moves the whole body, each layer above takes
+/// over the joints of its mask with its weight (layer 1: the upper body), and an additive layer
+/// adds its clips' difference from their first pose on top (a blow taken while running; milestone
+/// 9 bis, part 3). A layer plays motions: a clip, or a blend space (clips of a walk placed on the
+/// move speed, played in step). play() crossfades from what the layer played to the new motion;
+/// interrupted fades keep their weights and fade out from there.
+///
+/// Root motion (milestone 9 bis, part 3): a clip whose settings ask for it moves the character by
+/// its root joint's curve (ClipLibrary::root_track(): whole millimetres per tick), accumulated at
+/// each tick and taken by the game (take_root_motion()), which moves the character with its
+/// collisions; the pose keeps the root in place.
 ///
 /// Not thread-safe; game state, changed in update() on the game's thread (drawing only calls the
 /// const pose()). Usually an entity component, advanced by advance_animators(); saved with
@@ -73,10 +85,11 @@ struct PoseRequest {
 /// ```
 class Animator {
 public:
-    static constexpr int kLayers = 2;  ///< layer 0: the whole body; layer 1: the upper body
+    static constexpr int kMaxLayers = AnimationSet::kMaxLayers;  ///< see AnimationSet::layers()
     static constexpr int kWeightOne = 1000;    ///< weights in thousandths
     static constexpr int kPhaseTicks = 1000;   ///< a blend space's cycle, in thousandths of its cycle
-    static constexpr std::size_t kMaxMotions = 4;  ///< per layer: beyond, the faintest one goes
+    /// Per layer, without a set (AnimationSet::max_motions()): beyond, the faintest one goes.
+    static constexpr std::size_t kMaxMotions = 4;
     static constexpr int kEventWeight = 500;       ///< a clip fires its events from half its weight
 
     /// A clip of a blend space, placed on the move speed (in thousandths of metres per second).
@@ -92,6 +105,15 @@ public:
         std::string name;    ///< ClipEvent::name
         std::string clip;    ///< the clip it belongs to
         int point = -1;      ///< in a blend space: the index in Motion::points of its clip; -1 for a clip
+        bool always = false; ///< ClipEvent::always
+        AnimatorEvent::Phase phase = AnimatorEvent::Phase::Instant;  ///< a window's start or end, or an instant
+    };
+
+    /// A window of a clip (ClipEvent::end), in ticks of the clip from its start: [begin, end).
+    struct Window {
+        std::string name;    ///< ClipEvent::name
+        int begin = 0;       ///< its first tick
+        int end = 0;         ///< the tick after its last one
         bool always = false; ///< ClipEvent::always
     };
 
@@ -116,6 +138,10 @@ public:
         int fade_setting = 0;  ///< the crossfade it was started with (the upper layer fades out with it)
         std::vector<int> marks;             ///< the events' points on the clock, sorted
         std::vector<MotionEvent> events;    ///< one per mark
+        std::vector<Window> windows;        ///< a clip's windows (none for a blend space)
+        int root_joint = -1;  ///< root motion: the clip's root joint; -1 without
+        const std::vector<glm::ivec3>* root_track = nullptr;  ///< its curve (ClipLibrary::root_track()); null without
+        std::int64_t root_scale = 0;  ///< ClipSettings::root_motion, in thousandths
 
         /// True for a blend space (no single clip), false for a clip.
         bool blend_space() const { return clip == nullptr; }
@@ -127,10 +153,11 @@ public:
         float weight_at(float alpha) const;
     };
 
-    /// One of the two layers: its motions and, for layer 1, its own weight and fade. Read-only
-    /// for the game (Animator::layer()).
+    /// One layer: its motions and, above layer 0, its own weight and fade. Read-only for the game
+    /// (Animator::layer()).
     struct Layer {
         std::vector<Motion> motions;  ///< oldest first
+        bool additive = false;        ///< LayerSettings::additive
         /// The layer's own weight over the layers below (layer 0: always one), thousandths.
         int weight = 0;
         int previous_weight = 0;  ///< `weight` at the previous tick
@@ -190,7 +217,9 @@ public:
     /// Whether the layer's latest motion is `name` (and not fading out, nor a clip played once
     /// that has finished). Throws std::out_of_range for a layer out of range.
     bool playing(const std::string& name, int layer = 0) const;
-    /// The layer `index` (0 or 1), for debug tools. The reference stays valid as long as the
+    /// The number of layers (AnimationSet::layers(); 2 without a set).
+    int layer_count() const { return static_cast<int>(layers_.size()); }
+    /// The layer `index` (from 0 to layer_count() - 1), for debug tools. The reference stays valid as long as the
     /// Animator; its content changes at every play(), stop() and advance(). Throws
     /// std::out_of_range for another index.
     const Layer& layer(int index) const { return layers_.at(static_cast<std::size_t>(index)); }
@@ -198,6 +227,20 @@ public:
     /// layer plays nothing. The pointer is invalidated by the next play(), stop(), clear(),
     /// advance() or load_state(). Throws std::out_of_range for a layer out of range.
     const Motion* dominant(int layer = 0) const;
+
+    /// Root motion (milestone 9 bis, part 3): the move of the root joint since the last call, in
+    /// whole millimetres of the file, in the model's space (turn it by the character's facing and
+    /// scale it by its size), then forgotten. Only the horizontal plane (y is 0).
+    glm::ivec3 take_root_motion() {
+        const glm::ivec3 taken = root_motion_;
+        root_motion_ = glm::ivec3(0);
+        return taken;
+    }
+    /// What take_root_motion() would give now.
+    glm::ivec3 root_motion() const { return root_motion_; }
+    /// Whether a clip playing is inside the window `name` (ClipEvent::end) at this tick: a clip
+    /// that weighs half or more of its layer (or any weight for an "always" window), on any layer.
+    bool in_window(const std::string& name) const;
 
     /// Ticks advanced since it was made, and the last event that fired (tick -1: none yet), for
     /// the debug tools, whether or not the game collects the events.
@@ -314,14 +357,20 @@ private:
         std::uint64_t id = 0;                ///< the graph the indices are for
         std::vector<std::string> names;      ///< its parameters
         std::vector<double> values;          ///< their values (triggers: always 0 here)
-        std::array<int, kLayers> state{-1, -1};
-        std::array<std::string, kLayers> state_names;
+        std::vector<int> state;  ///< per graph layer
+        std::vector<std::string> state_names;
         std::vector<GraphChange> history;
         std::string error;
     };
     GraphRuntime graph_;
 
-    std::array<Layer, kLayers> layers_;
+    /// Its root motion and windows (make_motion(), load_state()): from the set and the clip.
+    void bind_clip_data(Motion& motion, bool loop) const;
+    /// Where a motion's root curve is at `time` (its clock's thousandths of a tick, not wrapped).
+    static glm::ivec3 root_position(const Motion& motion, std::int64_t time);
+    std::vector<Layer> layers_;
+    std::size_t max_motions_ = kMaxMotions;
+    glm::ivec3 root_motion_{0};
     std::int64_t speed_ = kWeightOne;
     std::int64_t move_speed_ = 0;           ///< thousandths of m/s, as last set
     std::int64_t tick_move_speed_ = 0;      ///< at the last tick

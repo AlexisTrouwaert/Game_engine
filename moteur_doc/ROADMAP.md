@@ -124,11 +124,13 @@ Documentation détaillée : [Jalon 9 - Niveau production : monde et données](JA
 ### 9 bis. Niveau production : présentation
 Documentation détaillée : [Jalon 9 bis - Niveau production : présentation](JALON_9BIS_PRESENTATION.md) *(écrite et décidée le 2026-10-17)*. Avant le jalon 1 de l'ARPG.
 
-- [ ] Matériaux (transparence, variantes) et shaders compilés sur le Mac
-- [ ] Animation : root motion, couches additives
-- [ ] Texte en champ de distance avec HarfBuzz, localisation (syntaxe inspirée de Fluent), système d'interface maison (balises et styles)
-- [ ] Audio par événements
-- [ ] La tranche refaite : interface, texte, sons
+- [x] Matériaux : transparence triée, effets par objet (dissolution, éclair), matériaux en données et remplacement par nom ; shaders du Mac : port écrit, **à essayer sur le Mac** *(partie 2, 2026-10-18)*
+- [x] Animation : root motion en entiers (collisions comprises), couches additives, couches et mouvements par l'`AnimationSet`, fenêtres d'événements ; la ruée et la réaction de la tranche *(partie 3, 2026-10-18)*
+- [x] Texte en champ de distance avec HarfBuzz : mise en forme, bidirectionnel et coupure des lignes d'Unicode, polices de repli, balises *(partie 4, 2026-10-18)*
+- [x] Localisation (syntaxe inspirée de Fluent, pluriels et nombres CLDR, vérification, pseudo-localisation) ; la tranche en français et en anglais *(partie 5, 2026-10-18)*
+- [x] Système d'interface maison (balises et styles) ; les écrans et le HUD de la tranche refaits dessus, `SliceUi` retiré *(partie 6, 2026-10-18)*
+- [x] Audio par événements (banques en données sur les concepts de FMOD Studio : paramètres, bus, VCA, instantanés, réverbération par zones, occlusion, musique sur la mesure) ; la tranche n'y joue plus aucun fichier *(partie 7, 2026-10-18)*
+- [x] La tranche refaite : interface, texte, sons, matériaux, ruée ; vérifiée, mesurée et livrée sous **Windows** *(partie 8, 2026-10-18)* ; **reste le Mac** (shaders compilés, vérificateur, mesures M3, `.dmg`)
 
 ### 10. Rendu et effets
 En parallèle de l'ARPG (change l'image, pas l'API du jeu) ; voir la [revue](REVUE_JALONS_1_A_7.md).

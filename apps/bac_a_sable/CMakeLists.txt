@@ -13,7 +13,7 @@ target_link_libraries(bac_a_sable_2d PUBLIC moteur nlohmann_json::nlohmann_json)
 target_include_directories(bac_a_sable_2d PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 moteur_enable_warnings(bac_a_sable_2d)
 
-add_library(bac_a_sable_commun STATIC world_test.cpp level3d_test.cpp level_stream_test.cpp map_editor.cpp
+add_library(bac_a_sable_commun STATIC world_test.cpp level3d_test.cpp materials_test.cpp level_stream_test.cpp map_editor.cpp
             level_editor.cpp)
 target_link_libraries(bac_a_sable_commun PUBLIC tranche_commun)
 moteur_enable_warnings(bac_a_sable_commun)

@@ -1,0 +1,36 @@
+<!-- The volumes, heard as they change. -->
+<ui class="shade" back-action="back">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 520">
+        <label class="title" text="{options-audio-title}"/>
+        <row class="setting">
+            <label text="{audio-master}"/>
+            <slider bind="audio.master" min="0" max="1" step="0.1" action="volume" autofocus="true"/>
+            <label class="value" text="{$audio.master_text}"/>
+        </row>
+        <row class="setting">
+            <label text="{audio-music}"/>
+            <slider bind="audio.music" min="0" max="1" step="0.1" action="volume"/>
+            <label class="value" text="{$audio.music_text}"/>
+        </row>
+        <row class="setting">
+            <label text="{audio-effects}"/>
+            <slider bind="audio.effects" min="0" max="1" step="0.1" action="volume"/>
+            <label class="value" text="{$audio.effects_text}"/>
+        </row>
+        <row class="setting">
+            <label text="{audio-ambience}"/>
+            <slider bind="audio.ambience" min="0" max="1" step="0.1" action="volume"/>
+            <label class="value" text="{$audio.ambience_text}"/>
+        </row>
+        <row class="setting">
+            <label text="{audio-interface}"/>
+            <slider bind="audio.interface" min="0" max="1" step="0.1" action="volume"/>
+            <label class="value" text="{$audio.interface_text}"/>
+        </row>
+        <row class="buttons">
+            <button action="back" text="{common-back}"/>
+        </row>
+        <label class="dim" text="{options-audio-help}"/>
+    </panel>
+</ui>

@@ -1,5 +1,8 @@
 #include "moteur/cook.hpp"
 
+#include "moteur/localization.hpp"
+#include "moteur/ui.hpp"
+
 #include <SDL3/SDL.h>
 
 #include <nlohmann/json.hpp>
@@ -32,6 +35,7 @@
 #include "moteur/particles.hpp"
 #include "moteur/prefab.hpp"
 #include "moteur/sound.hpp"
+#include "moteur/sound_bank.hpp"
 
 namespace moteur {
 
@@ -537,7 +541,7 @@ CookReport cook(const CookOptions& options) {
         }
     }
 
-    // Dependencies: the files of the glTF models, the textures of the effects.
+    // Dependencies: the files of the glTF models, the textures of the effects, the sounds of the banks.
     std::vector<std::string> pending;
     pending.reserve(shipped.size());
     for (const auto& [key, kind] : shipped) {
@@ -577,6 +581,14 @@ CookReport cook(const CookOptions& options) {
                     std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()), key);
                 for (const EmitterDesc& emitter : effect.emitters()) {
                     require(key, normal_key(emitter.texture));
+                }
+            } else if (key.ends_with(".bank.json")) {
+                // A sound bank: the sounds and musics of its events (milestone 9 bis, part 7).
+                const auto bytes = read_file_bytes(path);
+                const SoundBank bank =
+                    SoundBank::parse(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()), key);
+                for (const std::string& file : bank.files()) {
+                    require(key, normal_key(file));
                 }
             } else if (key.ends_with(".prefab.json") || key.ends_with(".level.json")) {
                 // Its bases, nested prefabs and the assets of its components, by identifier (a
@@ -716,6 +728,35 @@ CookReport cook(const CookOptions& options) {
                     report.bytes_out += static_cast<std::size_t>(entry.file_size());
                 }
             }
+        }
+    }
+
+    // The strings (milestone 9 bis, part 5): the sources' locales/ folders read and checked; a file
+    // that does not read or a reference to nothing stops the shipping, a missing translation does not
+    // (the base language's text is shown).
+    {
+        std::vector<std::string> folders;
+        for (const std::string& source : options.sources) {
+            const fs::path folder = utf8_path(source) / "locales";
+            if (fs::is_directory(folder, error)) {
+                folders.push_back(utf8_string(folder));
+            }
+        }
+        Localization strings;
+        const bool has_strings = !folders.empty() && strings.load(folders);
+        if (has_strings) {
+            const std::vector<LocalizationIssue> issues = strings.check();
+            for (std::string& line : Localization::describe(issues, true)) {
+                report.errors.push_back(std::move(line));
+            }
+            for (std::string& line : Localization::describe(issues, false)) {
+                report.warnings.push_back(std::move(line));
+            }
+        }
+        // The screens (milestone 9 bis, part 6): a broken document, an unknown property or a text
+        // that names no message stops the shipping.
+        for (std::string& line : check_ui_files(options.sources, has_strings ? &strings : nullptr)) {
+            report.errors.push_back(std::move(line));
         }
     }
 

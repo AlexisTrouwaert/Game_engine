@@ -108,6 +108,14 @@ struct MeshComponent {
 struct ModelComponent {
     Asset<Model> model;                       ///< the model; an empty handle draws nothing
     std::vector<std::uint32_t> hidden_parts;  ///< indices in Model::parts, sorted, without duplicates
+    /// Milestone 9 bis, part 2: a material of the game in place of one of the model's (a floor
+    /// shared by the pieces of a kit, a ghost's veil): `material` is the model's material name
+    /// (Model::material_names), `with` the game's material (Assets::material()).
+    struct MaterialOverride {
+        std::string material;  ///< the name of the model's material (glTF)
+        Asset<Material> with;  ///< what replaces it
+    };
+    std::vector<MaterialOverride> materials;  ///< replaced materials, by name; empty: the model's own
 
     /// Hides every part made from the node `node`; returns how many parts that hid (0 without a
     /// model, or if no part comes from that node).
@@ -115,11 +123,22 @@ struct ModelComponent {
     /// Whether the part at index `part` of Model::parts is in #hidden_parts (a binary search).
     bool hidden(std::size_t part) const;
 };
+MOTEUR_REFLECT_NAMED(ModelComponent::MaterialOverride, "MaterialOverride",
+    MOTEUR_FIELD(material, {.doc = "the model's material name", .flags = kFieldEdit | kFieldData | kFieldPresentation}),
+    MOTEUR_FIELD(with, {.doc = "the game's material (.material.json)", .flags = kFieldEdit | kFieldData | kFieldPresentation}));
 // Prefabs and levels give it its model by path; saves leave it out (the game rebuilds it).
 MOTEUR_REFLECT(ModelComponent,
     MOTEUR_FIELD(model, {.doc = "the glTF model", .flags = kFieldEdit | kFieldData | kFieldPresentation}),
     MOTEUR_FIELD(hidden_parts, {.doc = "indices in Model::parts, sorted",
-                                .flags = kFieldEdit | kFieldData | kFieldPresentation}));
+                                .flags = kFieldEdit | kFieldData | kFieldPresentation}),
+    MOTEUR_FIELD(materials, {.doc = "materials of the game in place of the model's, by name",
+                             .flags = kFieldEdit | kFieldData | kFieldPresentation}));
+
+/// The dissolve and flash of an entity's meshes (see MaterialEffects; milestone 9 bis, part 2).
+MOTEUR_REFLECT(MaterialEffects,
+    MOTEUR_FIELD(dissolve, {.min = 0.0, .max = 1.0, .doc = "0 whole, 1 gone"}),
+    MOTEUR_FIELD(dissolve_edge, {.min = 0.0, .doc = "the burning edge's glow (linear, HDR)", .flags = kFieldDefault | kFieldColor}),
+    MOTEUR_FIELD(flash, {.min = 0.0, .doc = "rgb the color, a the amount", .flags = kFieldDefault | kFieldColor}));
 
 /// A point light at the entity's position (see PointLight).
 struct LightSource {
@@ -190,6 +209,9 @@ public:
     /// The pick id of the meshes that follow (World::pick_id_of(); 0: none), when
     /// CollectOptions::pick_ids asks for them. By default, ignored.
     virtual void pick(std::uint32_t id) { static_cast<void>(id); }
+    /// The dissolve and flash of the meshes that follow (null: none), for the entities that have a
+    /// MaterialEffects. By default, ignored.
+    virtual void effects(const MaterialEffects* effects) { static_cast<void>(effects); }
 };
 
 /// What the last collect() spent on animation (milestone 5, part 10): poses sampled and blended,

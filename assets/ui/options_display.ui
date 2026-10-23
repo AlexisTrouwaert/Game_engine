@@ -1,0 +1,44 @@
+<!-- The display settings: chosen with the arrows, applied with "Apply". -->
+<ui class="shade" back-action="back">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 560">
+        <label class="title" text="{options-display-title}"/>
+        <row class="setting">
+            <label text="{options-display-mode-label}"/>
+            <select bind="display.mode" options="{display-mode-windowed}|{display-mode-fullscreen}" autofocus="true"/>
+        </row>
+        <row class="setting">
+            <label text="{options-display-screen-label}"/>
+            <select bind="display.screen" source="displays"/>
+        </row>
+        <row class="setting">
+            <label text="{options-display-vsync-label}"/>
+            <select bind="display.vsync" options="{choice-no}|{choice-yes}"/>
+        </row>
+        <row class="setting">
+            <label text="{options-display-frame-limit-label}"/>
+            <select bind="display.frame_limit" source="frame_limits"/>
+        </row>
+        <row class="setting">
+            <label text="{options-display-render-scale-label}"/>
+            <select bind="display.render_scale" source="render_scales"/>
+        </row>
+        <row class="setting">
+            <label text="{options-display-anti-aliasing-label}"/>
+            <select bind="display.anti_aliasing" source="anti_aliasing"/>
+        </row>
+        <row class="setting">
+            <label text="{options-display-shadows-label}"/>
+            <select bind="display.shadows" options="{shadows-low}|{shadows-medium}|{shadows-high}"/>
+        </row>
+        <row class="setting">
+            <label text="{options-display-ui-scale-label}"/>
+            <select bind="display.ui_scale" source="ui_scales"/>
+        </row>
+        <row class="buttons">
+            <button action="apply" text="{common-apply}"/>
+            <button action="back" text="{common-back}"/>
+        </row>
+        <label class="dim" text="{options-display-help}"/>
+    </panel>
+</ui>

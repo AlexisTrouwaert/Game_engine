@@ -295,6 +295,7 @@ std::vector<std::uint8_t> encode_prepared_model(const ModelData& data, std::uint
         out.vec3(m.emissive);
         out.value<std::uint8_t>(m.double_sided ? 1 : 0);
         out.f32(m.alpha_cutoff);
+        out.value<std::uint8_t>(m.blend ? 1 : 0);
         for (const int image : {m.base_color_image, m.metallic_roughness_image, m.normal_image, m.occlusion_image, m.emissive_image}) {
             out.value<std::int32_t>(image);
         }
@@ -427,6 +428,7 @@ ModelData decode_prepared_model(const void* data, std::size_t size, const std::s
         material.emissive = in.vec3();
         material.double_sided = in.value<std::uint8_t>() != 0;
         material.alpha_cutoff = in.f32();
+        material.blend = in.value<std::uint8_t>() != 0;
         for (int* image : {&material.base_color_image, &material.metallic_roughness_image, &material.normal_image,
                            &material.occlusion_image, &material.emissive_image}) {
             *image = in.value<std::int32_t>();

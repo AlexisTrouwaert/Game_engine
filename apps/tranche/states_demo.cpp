@@ -24,8 +24,10 @@
 #include "moteur/gpu_resource.hpp"
 #include "moteur/image.hpp"
 #include "moteur/process_memory.hpp"
+#include "moteur/ui.hpp"
 
 #include <filesystem>
+#include <functional>
 
 namespace {
 
@@ -51,167 +53,234 @@ std::filesystem::path utf8_path(const std::string& text) {
     return std::filesystem::path(std::u8string(text.begin(), text.end()));
 }
 
-// "03/10/2026 14:22" in local time.
-std::string local_time(std::int64_t seconds) {
+// The local time in the language's order ("03/10/2026 14:22" in French: `date-time`).
+std::string local_time(const StatesDemo& demo, std::int64_t seconds) {
     SDL_DateTime t{};
     if (!SDL_TimeToDateTime(static_cast<SDL_Time>(seconds) * SDL_NS_PER_SECOND, &t, true)) {
         return "?";
     }
-    char text[32];
-    std::snprintf(text, sizeof(text), "%02d/%02d/%04d %02d:%02d", t.day, t.month, t.year, t.hour, t.minute);
-    return text;
+    const auto two = [](int value) {
+        char text[8];
+        std::snprintf(text, sizeof(text), "%02d", value);
+        return std::string(text);
+    };
+    return demo.tr("date-time", {{"day", two(t.day)}, {"month", two(t.month)}, {"year", std::to_string(t.year)},
+                                 {"hour", two(t.hour)}, {"minute", two(t.minute)}});
 }
 
-std::string slot_label(const std::string& name) {
+std::string slot_label(const StatesDemo& demo, const std::string& name) {
     if (name.starts_with("emplacement_")) {
-        return "Emplacement " + name.substr(12);
+        return demo.tr("slot-manual", {{"number", name.substr(12)}});
     }
     if (name.starts_with("auto_")) {
-        return "Sauvegarde automatique " + name.substr(5);
+        return demo.tr("slot-auto", {{"number", name.substr(5)}});
     }
     return name;
 }
 
-// A column of buttons (SliceMenu: actions, or a click, read in the tick) with the menu's sounds.
-class Menu {
+// A screen of the slice (milestone 9 bis, part 6): its document (assets/ui/*.ui) is open while the
+// state is on the stack, filled through the interface's model, and its events are handled in the
+// tick. The documents of the states below stay drawn under it (a dimmed pause over the game).
+class Screen : public moteur::GameState {
 public:
-    explicit Menu(std::vector<std::string> items) : menu_(std::move(items)) {}
-    void set_items(std::vector<std::string> items) { menu_.set_items(std::move(items)); }
-    const std::string& item(int index) const { return menu_.item(index); }
-    int focus() const { return menu_.focus(); }
+    Screen(StatesDemo& demo, std::string path, int layer) : demo_(demo), path_(std::move(path)), layer_(layer) {}
 
-    // The item chosen in this tick, or -1.
-    int update(StatesDemo& demo) {
-        bool moved = false;
-        bool chosen = false;
-        const int item = menu_.update(demo.app(), moved, chosen);
-        if (moved) {
-            demo.play_click();
-        }
-        if (chosen) {
-            demo.play_confirm();
-        }
-        return item;
-    }
-    void draw(SliceUi& ui, float width_points = 0.0f) { menu_.draw(ui, width_points); }
-    void set_rect(int index, const SliceUi::Rect& rect) { menu_.set_rect(index, rect); }
-    void set_visible_rows(int rows) { menu_.set_visible_rows(rows); }
-
-private:
-    SliceMenu menu_;
-};
-
-// --- The display options (milestone 8, part 8): over the title or the pause.
-class DisplayOptionsState final : public moteur::GameState {
-public:
-    explicit DisplayOptionsState(StatesDemo& demo) : demo_(demo), pending_(demo.app().display()) {}
-
-    const char* name() const override { return "options_display"; }
     bool transparent() const override { return true; }
     bool blocking() const override { return true; }
 
+    void enter() override {
+        document_ = &demo_.ui().open(path_, layer_);
+        refresh();
+    }
+    void exit() override {
+        demo_.ui().close(path_);
+        document_ = nullptr;
+    }
     void update(double) override {
-        moteur::Input& input = demo_.app().input();
-        const auto pressed = [&input](const char* name) {
-            const moteur::ActionId action = input.find(name);
-            return action != moteur::kNoAction && input.pressed(action);
-        };
-        if (confirming_) {
-            // A new mode or screen: kept only if the player can still answer (15 s).
-            if (--confirm_ticks_ <= 0) {
-                revert();
-                return;
+        for (const moteur::UiEvent& event : demo_.events(path_)) {
+            if (event.kind == moteur::UiEvent::Kind::Activate || event.kind == moteur::UiEvent::Kind::Back) {
+                if (!event.action.empty()) {
+                    action(event.action, event.index);
+                }
+            } else if (event.kind == moteur::UiEvent::Kind::Change) {
+                changed(event);
             }
-            if (const int chosen = confirm_.update(demo_); chosen >= 0) {
-                if (chosen == 0) {
-                    confirming_ = false;  // kept
-                } else {
+        }
+        refresh();
+    }
+
+protected:
+    // Writes what the screen shows into the model; called every tick (an unchanged value costs
+    // nothing), so that a change of language or of device shows at once.
+    virtual void refresh() {}
+    // A button (or the document's back-action): `index` is the item of a list, -1 outside one.
+    virtual void action(const std::string& name, int index) = 0;
+    // A control changed its value (already written in the model).
+    virtual void changed(const moteur::UiEvent&) {}
+
+    moteur::UiModel& model() { return demo_.ui().model(); }
+    moteur::UiDocument& document() { return *document_; }
+    void back() {
+        if (!stack()->has_pending()) {
+            stack()->pop();
+        }
+    }
+    void push(std::unique_ptr<moteur::GameState> state) {
+        if (!stack()->has_pending()) {
+            stack()->push(std::move(state));
+        }
+    }
+
+    StatesDemo& demo_;
+
+private:
+    std::string path_;
+    int layer_;
+    moteur::UiDocument* document_ = nullptr;
+};
+
+// The layers of the documents: what is pushed over draws above and takes the input.
+constexpr int kLayerBase = 0;      // title, loading
+constexpr int kLayerPause = 10;
+constexpr int kLayerMenu = 20;     // options, slots
+constexpr int kLayerPage = 30;     // the options' pages
+constexpr int kLayerDialog = 40;   // a question, a key to press
+
+// A list of the model (`<repeat source>`, `<select source>`): its count and each item's name.
+void set_list(moteur::UiModel& model, const std::string& list, const std::vector<std::string>& names) {
+    model.set_count(list, static_cast<int>(names.size()));
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        model.set(list + "." + std::to_string(i) + ".name", names[i]);
+    }
+}
+
+// --- The display options (milestone 8, part 8): chosen with the arrows, applied with "Apply"; a new
+// mode or screen is kept only if the player answers within 15 seconds.
+class DisplayOptionsState final : public Screen {
+public:
+    explicit DisplayOptionsState(StatesDemo& demo) : Screen(demo, "ui/options_display.ui", kLayerPage), pending_(demo.app().display()) {
+        for (int mode = 0; mode < 4; ++mode) {  // the modes the GPU can do
+            if (demo.app().renderer().supports(static_cast<moteur::AntiAliasing>(mode))) {
+                anti_aliasing_.push_back(static_cast<moteur::AntiAliasing>(mode));
+            }
+        }
+    }
+
+    const char* name() const override { return "options_display"; }
+
+    void exit() override {
+        demo_.ui().close(kConfirm);
+        Screen::exit();
+    }
+
+    void update(double dt) override {
+        if (confirming_) {
+            for (const moteur::UiEvent& event : demo_.events(kConfirm)) {
+                if (event.action == "keep") {
+                    confirming_ = false;
+                    demo_.ui().close(kConfirm);
+                } else if (event.action == "cancel") {
                     revert();
                 }
             }
-            return;
-        }
-        if (pressed("pause")) {
-            back();
-            return;
-        }
-        const int row = menu_.focus();
-        const int step = pressed("menu_right") ? 1 : pressed("menu_left") ? -1 : 0;
-        if (step != 0 && row < kApply) {
-            change(row, step);
-            demo_.play_click();
-        }
-        if (const int chosen = menu_.update(demo_); chosen >= 0) {
-            if (chosen < kApply) {
-                change(chosen, 1);
-            } else if (chosen == kApply) {
-                apply();
-            } else {
-                back();
+            if (confirming_ && --confirm_ticks_ <= 0) {
+                revert();
             }
+        }
+        Screen::update(dt);
+    }
+
+protected:
+    void refresh() override {
+        moteur::UiModel& m = model();
+        const std::vector<std::string> screens = moteur::displays();
+        std::vector<std::string> names;
+        for (int i = 0; i < std::max(1, static_cast<int>(screens.size())); ++i) {
+            names.push_back(i < static_cast<int>(screens.size()) ? screens[static_cast<std::size_t>(i)]
+                                                                 : demo_.tr("options-display-screen-number", {{"number", i + 1}}));
+        }
+        set_list(m, "displays", names);
+        names.clear();
+        for (const int limit : kFrameLimits) {
+            names.push_back(demo_.tr("options-display-frame-limit", {{"limit", limit}}));
+        }
+        set_list(m, "frame_limits", names);
+        names.clear();
+        for (int percent = 50; percent <= 100; percent += 10) {
+            names.push_back(demo_.tr("common-percent", {{"value", percent / 100.0}}));
+        }
+        set_list(m, "render_scales", names);
+        names.clear();
+        for (const moteur::AntiAliasing mode : anti_aliasing_) {
+            names.push_back(anti_aliasing_label(mode));
+        }
+        set_list(m, "anti_aliasing", names);
+        names.clear();
+        for (const int percent : kUiScales) {
+            names.push_back(demo_.tr("common-percent", {{"value", percent / 100.0}}));
+        }
+        set_list(m, "ui_scales", names);
+
+        m.set("display.mode", static_cast<int>(pending_.mode));
+        m.set("display.screen", pending_.display);
+        m.set("display.vsync", pending_.vsync ? 1 : 0);
+        m.set("display.frame_limit", index_of(kFrameLimits, pending_.frame_limit));
+        m.set("display.render_scale", std::clamp((static_cast<int>(std::lround(pending_.render_scale * 100.0f)) - 50) / 10, 0, 5));
+        const auto aa = std::find(anti_aliasing_.begin(), anti_aliasing_.end(), pending_.anti_aliasing);
+        m.set("display.anti_aliasing", aa == anti_aliasing_.end() ? 0 : static_cast<int>(aa - anti_aliasing_.begin()));
+        m.set("display.shadows", static_cast<int>(pending_.shadows));
+        m.set("display.ui_scale", index_of(kUiScales, demo_.ui_scale_percent()));
+        if (confirming_) {
+            m.set("confirm.title", demo_.tr("options-display-confirm-title"));
+            m.set("confirm.text", demo_.tr("options-display-confirm-countdown",
+                                           {{"seconds", (confirm_ticks_ + moteur::tick_rate() - 1) / moteur::tick_rate()}}));
         }
     }
 
-    void render(moteur::Renderer& renderer, double) override {
-        SliceUi& ui = demo_.ui();
-        ui.dim(renderer, 0.6f, 2);
-        ui.begin_panel(renderer, 440.0f, 2);
-        if (confirming_) {
-            ui.title("Garder ces réglages ?");
-            ui.text("Retour aux réglages précédents dans " + std::to_string((confirm_ticks_ + moteur::tick_rate() - 1) / moteur::tick_rate()) + " s.",
-                    SliceUi::Tone::Dim);
-            ui.space();
-            confirm_.draw(ui);
-            ui.end_panel();
-            return;
+    void changed(const moteur::UiEvent&) override {
+        const moteur::UiModel& m = model();
+        const auto at = [&m](const char* path) { return static_cast<int>(m.number(path)); };
+        pending_.mode = static_cast<moteur::WindowMode>(at("display.mode"));
+        pending_.display = at("display.screen");
+        pending_.vsync = at("display.vsync") != 0;
+        pending_.frame_limit = kFrameLimits[std::clamp(at("display.frame_limit"), 0, 5)];
+        pending_.render_scale = static_cast<float>(50 + std::clamp(at("display.render_scale"), 0, 5) * 10) / 100.0f;
+        if (!anti_aliasing_.empty()) {
+            pending_.anti_aliasing = anti_aliasing_[static_cast<std::size_t>(
+                std::clamp(at("display.anti_aliasing"), 0, static_cast<int>(anti_aliasing_.size()) - 1))];
         }
-        ui.title("Affichage");
-        menu_.set_items(labels());
-        menu_.draw(ui);
-        ui.text("Flèches gauche et droite : changer ; Entrée : appliquer", SliceUi::Tone::Dim);
-        ui.end_panel();
+        pending_.shadows = static_cast<moteur::ShadowQuality>(std::clamp(at("display.shadows"), 0, 2));
+        // The interface's size applies at once (nothing to confirm: the menu stays readable).
+        demo_.set_ui_scale_percent(kUiScales[std::clamp(at("display.ui_scale"), 0, static_cast<int>(std::size(kUiScales)) - 1)]);
+    }
+
+    void action(const std::string& name, int) override {
+        if (name == "apply") {
+            apply();
+        } else if (name == "back") {
+            back();
+        }
     }
 
 private:
-    static constexpr int kApply = 7;
+    static constexpr const char* kConfirm = "ui/confirm.ui";
     static constexpr int kFrameLimits[] = {0, 30, 60, 120, 144, 240};
+    static constexpr int kUiScales[] = {75, 90, 100, 110, 125, 150, 175, 200};
 
-    std::vector<std::string> labels() const {
-        const std::vector<std::string> screens = moteur::displays();
-        const std::string screen = pending_.display < static_cast<int>(screens.size())
-                                       ? screens[static_cast<std::size_t>(pending_.display)]
-                                       : "Écran " + std::to_string(pending_.display + 1);
-        char scale[32];
-        std::snprintf(scale, sizeof(scale), "%d %%", static_cast<int>(std::lround(pending_.render_scale * 100.0f)));
-        return {std::string("Mode : ") + mode_label(pending_.mode),
-                "Écran : " + screen,
-                std::string("Synchronisation verticale : ") + (pending_.vsync ? "oui" : "non"),
-                "Limite d'images : " + (pending_.frame_limit == 0 ? std::string("aucune") : std::to_string(pending_.frame_limit) + " par seconde"),
-                std::string("Résolution de la 3D : ") + scale,
-                std::string("Anticrénelage : ") + anti_aliasing_label(pending_.anti_aliasing),
-                std::string("Ombres : ") + shadows_label(pending_.shadows),
-                "Appliquer",
-                "Retour"};
-    }
-
-    // The game's own words for the engine's settings (the engine shows no text to the player).
-    static const char* mode_label(moteur::WindowMode mode) {
-        return mode == moteur::WindowMode::Fullscreen ? "Plein écran" : "Fenêtré";
-    }
-    static const char* shadows_label(moteur::ShadowQuality quality) {
-        switch (quality) {
-            case moteur::ShadowQuality::Low:
-                return "Basses";
-            case moteur::ShadowQuality::Medium:
-                return "Moyennes";
-            default:
-                return "Hautes";
+    template <std::size_t N>
+    static int index_of(const int (&values)[N], int value) {
+        for (std::size_t i = 0; i < N; ++i) {
+            if (values[i] == value) {
+                return static_cast<int>(i);
+            }
         }
+        return 0;
     }
-    static const char* anti_aliasing_label(moteur::AntiAliasing mode) {
+
+    std::string anti_aliasing_label(moteur::AntiAliasing mode) const {
         switch (mode) {
             case moteur::AntiAliasing::None:
-                return "Aucun";
+                return demo_.tr("anti-aliasing-none");
             case moteur::AntiAliasing::Fxaa:
                 return "FXAA";
             case moteur::AntiAliasing::Msaa2:
@@ -221,56 +290,14 @@ private:
         }
     }
 
-    void change(int row, int step) {
-        const auto cycle = [step](int value, int count) { return ((value + step) % count + count) % count; };
-        switch (row) {
-            case 0:
-                pending_.mode = static_cast<moteur::WindowMode>(cycle(static_cast<int>(pending_.mode), 2));
-                break;
-            case 1:
-                pending_.display = cycle(pending_.display, std::max(1, static_cast<int>(moteur::displays().size())));
-                break;
-            case 2:
-                pending_.vsync = !pending_.vsync;
-                break;
-            case 3: {
-                int index = 0;
-                for (int i = 0; i < 6; ++i) {
-                    index = kFrameLimits[i] == pending_.frame_limit ? i : index;
-                }
-                pending_.frame_limit = kFrameLimits[cycle(index, 6)];
-                break;
-            }
-            case 4: {
-                const int percent = static_cast<int>(std::lround(pending_.render_scale * 100.0f));
-                pending_.render_scale = static_cast<float>(50 + cycle((percent - 50) / 10, 6) * 10) / 100.0f;
-                break;
-            }
-            case 5: {
-                moteur::AntiAliasing mode = pending_.anti_aliasing;
-                for (int tries = 0; tries < 4; ++tries) {  // the modes the GPU can do
-                    mode = static_cast<moteur::AntiAliasing>(cycle(static_cast<int>(mode), 4));
-                    if (demo_.app().renderer().supports(mode)) {
-                        break;
-                    }
-                }
-                pending_.anti_aliasing = mode;
-                break;
-            }
-            case 6:
-                pending_.shadows = static_cast<moteur::ShadowQuality>(cycle(static_cast<int>(pending_.shadows), 3));
-                break;
-            default:
-                break;
-        }
-    }
-
     void apply() {
         previous_ = demo_.app().display();
         demo_.app().apply_display(pending_);
         if (pending_.changes_screen(previous_)) {
             confirming_ = true;
             confirm_ticks_ = static_cast<int>(moteur::ticks_from_seconds(15.0));
+            refresh();  // the question's texts, before the dialog is laid out
+            demo_.ui().open(kConfirm, kLayerDialog);
         }
     }
 
@@ -278,129 +305,78 @@ private:
         demo_.app().apply_display(previous_);
         pending_ = previous_;
         confirming_ = false;
+        demo_.ui().close(kConfirm);
     }
 
-    void back() {
-        if (!stack()->has_pending()) {
-            stack()->pop();
-        }
-    }
-
-    StatesDemo& demo_;
     moteur::DisplaySettings pending_;
     moteur::DisplaySettings previous_;
+    std::vector<moteur::AntiAliasing> anti_aliasing_;
     bool confirming_ = false;
     int confirm_ticks_ = 0;
-    Menu menu_{{"Retour"}};
-    Menu confirm_{{"Garder", "Annuler"}};
 };
 
-// --- The audio options (milestone 8, part 12): the player's volumes, heard as they change.
-class AudioOptionsState final : public moteur::GameState {
+// --- The audio options (milestone 8, part 12): the player's volumes, heard as they change (the
+// sliders' click is an interface sound, played after the change).
+class AudioOptionsState final : public Screen {
 public:
-    explicit AudioOptionsState(StatesDemo& demo) : demo_(demo) {}
+    explicit AudioOptionsState(StatesDemo& demo) : Screen(demo, "ui/options_audio.ui", kLayerPage) {}
 
     const char* name() const override { return "options_audio"; }
-    bool transparent() const override { return true; }
-    bool blocking() const override { return true; }
 
-    void update(double) override {
-        moteur::Input& input = demo_.app().input();
-        const auto pressed = [&input](const char* name) {
-            const moteur::ActionId action = input.find(name);
-            return action != moteur::kNoAction && input.pressed(action);
-        };
-        if (pressed("pause")) {
-            back();
-            return;
+protected:
+    void refresh() override {
+        const moteur::Audio& audio = demo_.app().audio();
+        for (int row = 0; row < 5; ++row) {
+            const float volume = row == 0 ? audio.master_volume() : audio.group_volume(kGroups[row - 1]);
+            const std::string path = std::string("audio.") + kNames[row];
+            model().set(path, std::round(volume * 10.0f) / 10.0f);
+            model().set(path + "_text", demo_.tr("audio-volume", {{"volume", std::round(volume * 100.0f) / 100.0f}}));
         }
-        const int row = menu_.focus();
-        const int step = pressed("menu_right") ? 1 : pressed("menu_left") ? -1 : 0;
-        if (step != 0 && row < kBack) {
-            change(row, step, false);
-        }
-        if (const int chosen = menu_.update(demo_); chosen >= 0) {
-            if (chosen < kBack) {
-                change(chosen, 1, true);
+    }
+
+    void changed(const moteur::UiEvent&) override {
+        moteur::Audio& audio = demo_.app().audio();
+        for (int row = 0; row < 5; ++row) {
+            const float volume = static_cast<float>(model().number(std::string("audio.") + kNames[row]));
+            if (row == 0) {
+                audio.set_master_volume(volume);
             } else {
-                back();
+                audio.set_group_volume(kGroups[row - 1], volume);
             }
         }
     }
 
-    void render(moteur::Renderer& renderer, double) override {
-        SliceUi& ui = demo_.ui();
-        ui.dim(renderer, 0.6f, 2);
-        ui.begin_panel(renderer, 440.0f, 2);
-        ui.title("Audio");
-        menu_.set_items(labels());
-        menu_.draw(ui);
-        ui.text("Flèches gauche et droite : changer", SliceUi::Tone::Dim);
-        ui.end_panel();
-    }
-
-private:
-    static constexpr int kBack = 5;
-
-    // Row -1 is the master volume; the others, the groups in the order of the rows.
-    static constexpr moteur::SoundGroup kGroups[] = {moteur::SoundGroup::Music, moteur::SoundGroup::Effects,
-                                                     moteur::SoundGroup::Ambience, moteur::SoundGroup::Interface};
-
-    float value(int row) const {
-        const moteur::Audio& audio = demo_.app().audio();
-        return row == 0 ? audio.master_volume() : audio.group_volume(kGroups[row - 1]);
-    }
-
-    std::vector<std::string> labels() const {
-        const char* names[] = {"Volume général", "Musique", "Effets", "Ambiance", "Interface"};
-        std::vector<std::string> items;
-        for (int row = 0; row < kBack; ++row) {
-            items.push_back(std::string(names[row]) + " : " + std::to_string(static_cast<int>(std::lround(value(row) * 100.0f))) + " %");
-        }
-        items.emplace_back("Retour");
-        return items;
-    }
-
-    // Steps of 10 %; Enter goes round (100 % then 0 %), the arrows stop at the ends.
-    void change(int row, int step, bool wrap) {
-        int percent = static_cast<int>(std::lround(value(row) * 10.0f)) * 10 + step * 10;
-        percent = wrap ? (percent > 100 ? 0 : percent) : std::clamp(percent, 0, 100);
-        moteur::Audio& audio = demo_.app().audio();
-        const float slider = static_cast<float>(percent) / 100.0f;
-        if (row == 0) {
-            audio.set_master_volume(slider);
-        } else {
-            audio.set_group_volume(kGroups[row - 1], slider);
-        }
-        demo_.play_click();  // an interface sound: heard at the new volume
-    }
-
-    void back() {
-        if (!stack()->has_pending()) {
+    void action(const std::string& name, int) override {
+        if (name == "back" && !stack()->has_pending()) {
             demo_.app().save_audio_settings();
             stack()->pop();
         }
     }
 
-    StatesDemo& demo_;
-    Menu menu_{{"Retour"}};
+private:
+    // Row 0 is the master volume; the others, the groups in the order of the rows.
+    static constexpr const char* kNames[] = {"master", "music", "effects", "ambience", "interface"};
+    static constexpr moteur::SoundGroup kGroups[] = {moteur::SoundGroup::Music, moteur::SoundGroup::Effects,
+                                                     moteur::SoundGroup::Ambience, moteur::SoundGroup::Interface};
 };
 
 // --- The controls (milestone 8, part 12): the layout (profile), and each action rebound, for the
 // device the player confirms with (the keyboard and mouse, or the gamepad).
-class ControlsOptionsState final : public moteur::GameState {
+class ControlsOptionsState final : public Screen {
 public:
-    explicit ControlsOptionsState(StatesDemo& demo) : demo_(demo) { menu_.set_visible_rows(8); }
+    explicit ControlsOptionsState(StatesDemo& demo) : Screen(demo, "ui/options_controls.ui", kLayerPage) {}
 
     const char* name() const override { return "options_controls"; }
-    bool transparent() const override { return true; }
-    bool blocking() const override { return true; }
 
-    void exit() override { demo_.app().input().cancel_capture(); }
+    void exit() override {
+        demo_.app().input().cancel_capture();
+        demo_.ui().close(kCapture);
+        Screen::exit();
+    }
 
-    void update(double) override {
-        moteur::Input& input = demo_.app().input();
+    void update(double dt) override {
         if (capturing_) {
+            moteur::Input& input = demo_.app().input();
             if (!input.capturing()) {
                 if (const std::optional<moteur::InputSource> source = input.take_captured()) {
                     captured(*source);
@@ -408,89 +384,115 @@ public:
             }
             return;
         }
-        const auto pressed = [&input](const char* name) {
-            const moteur::ActionId action = input.find(name);
-            return action != moteur::kNoAction && input.pressed(action);
-        };
-        if (pressed("pause")) {
-            back();
-            return;
+        Screen::update(dt);
+    }
+
+protected:
+    void refresh() override {
+        moteur::UiModel& m = model();
+        moteur::Input& input = demo_.app().input();
+        const bool pad = input.last_device() == moteur::InputDevice::Gamepad;
+        m.set("controls.device", demo_.tr(pad ? "controls-device-pad" : "controls-device-keyboard"));
+        const std::vector<std::string> profiles = input.profiles();
+        std::vector<std::string> names;
+        for (const std::string& profile : profiles) {
+            names.push_back(profile_label(demo_.app(), profile));
         }
-        const int count = static_cast<int>(kEntries.size());
-        const int row = menu_.focus();
-        if (row == 0 && (pressed("menu_right") || pressed("menu_left"))) {
-            next_profile(pressed("menu_left") ? -1 : 1);
-        }
-        if (const int chosen = menu_.update(demo_); chosen >= 0) {
-            if (chosen == 0) {
-                next_profile(1);
-            } else if (chosen <= count) {
-                start_capture(chosen - 1);
-            } else if (chosen == count + 1) {
-                input.reset_all_sources();
-                message_ = "Touches par défaut rétablies.";
-                save();
-            } else {
-                back();
+        set_list(m, "profiles", names);
+        const auto at = std::find(profiles.begin(), profiles.end(), input.profile());
+        m.set("controls.profile", at == profiles.end() ? 0 : static_cast<int>(at - profiles.begin()));
+        const moteur::Localization& localization = demo_.app().localization();
+        m.set_count("controls", static_cast<int>(kEntries.size()));
+        for (std::size_t i = 0; i < kEntries.size(); ++i) {
+            std::string keys;
+            for (const moteur::InputSource& source : sources(kEntries[i])) {
+                if (on_gamepad(source) == pad) {
+                    keys += (keys.empty() ? "" : ", ") + moteur::input_source_label(source, &localization);
+                }
             }
+            const std::string item = "controls." + std::to_string(i) + ".";
+            m.set(item + "label", entry_label(kEntries[i]));
+            m.set(item + "keys", keys.empty() ? demo_.tr("input-none") : keys);
+        }
+        std::vector<moteur::LocalizedArg> args;
+        for (const auto& [name, value] : message_args_) {
+            args.emplace_back(name, value);
+        }
+        m.set("controls.message", message_.empty() ? std::string() : demo_.tr(message_, args));
+        if (capturing_) {
+            const bool capture_pad = device_ == moteur::InputDevice::Gamepad;
+            m.set("capture.action", entry_label(kEntries[static_cast<std::size_t>(entry_)]));
+            m.set("capture.press", demo_.tr(capture_pad ? "controls-press-pad" : "controls-press-keyboard"));
+            m.set("capture.cancel", demo_.tr(capture_pad ? "controls-cancel-pad" : "controls-cancel-keyboard"));
         }
     }
 
-    void render(moteur::Renderer& renderer, double) override {
-        SliceUi& ui = demo_.ui();
-        ui.dim(renderer, 0.6f, 2);
-        ui.begin_panel(renderer, 560.0f, 2);
-        ui.title("Commandes");
-        if (capturing_) {
-            const bool pad = device_ == moteur::InputDevice::Gamepad;
-            ui.text(std::string(kEntries[static_cast<std::size_t>(entry_)].label));
-            ui.space();
-            ui.text(pad ? "Appuyez sur un bouton de la manette." : "Appuyez sur une touche ou un bouton de la souris.");
-            ui.text(pad ? "Start : annuler" : "Échap : annuler", SliceUi::Tone::Dim);
-            ui.end_panel();
+    void changed(const moteur::UiEvent& event) override {
+        if (event.action != "profile") {
             return;
         }
-        const bool pad = demo_.app().input().last_device() == moteur::InputDevice::Gamepad;
-        ui.text(pad ? "Manette (le clavier : confirmer au clavier)" : "Clavier et souris (la manette : confirmer à la manette)",
-                SliceUi::Tone::Dim);
-        menu_.set_items(labels());
-        menu_.draw(ui);
-        ui.text(message_.empty() ? std::string("Entrée : changer la touche") : message_,
-                message_.empty() ? SliceUi::Tone::Dim : SliceUi::Tone::Accent);
-        ui.end_panel();
+        moteur::Input& input = demo_.app().input();
+        const std::vector<std::string> profiles = input.profiles();
+        const int index = static_cast<int>(model().number("controls.profile"));
+        if (index >= 0 && index < static_cast<int>(profiles.size())) {
+            input.set_profile(profiles[static_cast<std::size_t>(index)]);
+            message_.clear();
+            message_args_.clear();
+            save();
+        }
+    }
+
+    void action(const std::string& name, int index) override {
+        if (name == "rebind" && index >= 0 && index < static_cast<int>(kEntries.size())) {
+            start_capture(index);
+        } else if (name == "reset") {
+            demo_.app().input().reset_all_sources();
+            message_ = "controls-reset-done";
+            message_args_.clear();
+            save();
+        } else if (name == "back") {
+            back();
+        }
     }
 
 private:
+    static constexpr const char* kCapture = "ui/capture.ui";
+
     // What the player can rebind: a button action, or one direction of an axis action.
     struct Entry {
-        const char* label;
+        const char* label;  // message identifier
+        int number;         // its $number (the skills), 0 for none
         const char* action;
         int direction;  // -1: a button; otherwise a moteur::AxisDirection
     };
     static constexpr int kButton = -1;
     static constexpr std::array<Entry, 21> kEntries{{
-        {"Se déplacer (au clic)", "move_to", kButton},
-        {"Avancer", "move", static_cast<int>(moteur::AxisDirection::Up)},
-        {"Reculer", "move", static_cast<int>(moteur::AxisDirection::Down)},
-        {"Aller à gauche", "move", static_cast<int>(moteur::AxisDirection::Left)},
-        {"Aller à droite", "move", static_cast<int>(moteur::AxisDirection::Right)},
-        {"Compétence 1", "skill_1", kButton},
-        {"Compétence 2", "skill_2", kButton},
-        {"Compétence 3", "skill_3", kButton},
-        {"Compétence 4", "skill_4", kButton},
-        {"Compétence 5", "skill_5", kButton},
-        {"Compétence 6", "skill_6", kButton},
-        {"Zoom avant", "zoom_in", kButton},
-        {"Zoom arrière", "zoom_out", kButton},
-        {"Choisir une créature", "select", kButton},
-        {"Créature suivante", "next", kButton},
-        {"Suivre la créature", "follow", kButton},
-        {"Caméra : haut", "camera", static_cast<int>(moteur::AxisDirection::Up)},
-        {"Caméra : bas", "camera", static_cast<int>(moteur::AxisDirection::Down)},
-        {"Caméra : gauche", "camera", static_cast<int>(moteur::AxisDirection::Left)},
-        {"Caméra : droite", "camera", static_cast<int>(moteur::AxisDirection::Right)},
-        {"Pause", "pause", kButton},
+        {"action-move-to", 0, "move_to", kButton},
+        {"action-forward", 0, "move", static_cast<int>(moteur::AxisDirection::Up)},
+        {"action-backward", 0, "move", static_cast<int>(moteur::AxisDirection::Down)},
+        {"action-left", 0, "move", static_cast<int>(moteur::AxisDirection::Left)},
+        {"action-right", 0, "move", static_cast<int>(moteur::AxisDirection::Right)},
+        {"action-skill", 1, "skill_1", kButton},
+        {"action-skill", 2, "skill_2", kButton},
+        {"action-skill", 3, "skill_3", kButton},
+        {"action-skill", 4, "skill_4", kButton},
+        {"action-skill", 5, "skill_5", kButton},
+        {"action-skill", 6, "skill_6", kButton},
+        {"action-zoom-in", 0, "zoom_in", kButton},
+        {"action-zoom-out", 0, "zoom_out", kButton},
+        {"action-select", 0, "select", kButton},
+        {"action-next", 0, "next", kButton},
+        {"action-follow", 0, "follow", kButton},
+        {"action-camera-up", 0, "camera", static_cast<int>(moteur::AxisDirection::Up)},
+        {"action-camera-down", 0, "camera", static_cast<int>(moteur::AxisDirection::Down)},
+        {"action-camera-left", 0, "camera", static_cast<int>(moteur::AxisDirection::Left)},
+        {"action-camera-right", 0, "camera", static_cast<int>(moteur::AxisDirection::Right)},
+        {"action-pause", 0, "pause", kButton},
     }};
+
+    std::string entry_label(const Entry& entry) const {
+        return entry.number > 0 ? demo_.tr(entry.label, {{"number", entry.number}}) : demo_.tr(entry.label);
+    }
 
     static bool on_gamepad(const moteur::InputSource& source) {
         return source.kind == moteur::InputSource::Kind::GamepadButton || source.kind == moteur::InputSource::Kind::GamepadAxis;
@@ -516,46 +518,20 @@ private:
         }
     }
 
-    std::vector<std::string> labels() const {
-        const moteur::Input& input = demo_.app().input();
-        const bool pad = input.last_device() == moteur::InputDevice::Gamepad;
-        std::vector<std::string> items;
-        items.push_back("Disposition : " + input.profile_label(input.profile()));
-        for (const Entry& entry : kEntries) {
-            std::string keys;
-            for (const moteur::InputSource& source : sources(entry)) {
-                if (on_gamepad(source) == pad) {
-                    keys += (keys.empty() ? "" : ", ") + moteur::input_source_label(source);
-                }
-            }
-            items.push_back(std::string(entry.label) + " : " + (keys.empty() ? "(aucune)" : keys));
-        }
-        items.emplace_back("Rétablir les touches par défaut");
-        items.emplace_back("Retour");
-        return items;
-    }
-
-    void next_profile(int step) {
-        moteur::Input& input = demo_.app().input();
-        const std::vector<std::string> profiles = input.profiles();
-        if (profiles.size() < 2) {
-            return;
-        }
-        const auto at = std::find(profiles.begin(), profiles.end(), input.profile());
-        const int index = at == profiles.end() ? 0 : static_cast<int>(at - profiles.begin());
-        const int count = static_cast<int>(profiles.size());
-        input.set_profile(profiles[static_cast<std::size_t>(((index + step) % count + count) % count)]);
-        demo_.play_click();
-        message_.clear();
-        save();
-    }
-
     void start_capture(int entry) {
         entry_ = entry;
         device_ = demo_.app().input().last_device();  // the device the player confirmed with
         capturing_ = true;
         message_.clear();
+        message_args_.clear();
+        refresh();  // the dialog's texts
+        demo_.ui().open(kCapture, kLayerDialog);
         demo_.app().input().begin_capture();
+    }
+
+    void end_capture() {
+        capturing_ = false;
+        demo_.ui().close(kCapture);
     }
 
     void captured(const moteur::InputSource& source) {
@@ -564,14 +540,14 @@ private:
         const bool cancel = pad ? source == moteur::InputSource{moteur::InputSource::Kind::GamepadButton, SDL_GAMEPAD_BUTTON_START, 0}
                                 : source == moteur::InputSource{moteur::InputSource::Kind::Key, SDL_SCANCODE_ESCAPE, 0};
         if (cancel) {
-            capturing_ = false;
+            end_capture();
             return;
         }
         if (on_gamepad(source) != pad) {
             input.begin_capture();  // the other device: still waiting for this one
             return;
         }
-        capturing_ = false;
+        end_capture();
         const Entry& entry = kEntries[static_cast<std::size_t>(entry_)];
         // The entries that had this source lose it (one source, one action of the game).
         std::string taken;
@@ -582,7 +558,7 @@ private:
             std::vector<moteur::InputSource> list = sources(other);
             if (std::erase(list, source) > 0) {
                 set_sources(other, std::move(list));
-                taken += (taken.empty() ? "" : ", ") + std::string(other.label);
+                taken += (taken.empty() ? "" : ", ") + entry_label(other);
             }
         }
         // This device's sources are replaced; the other device's stay.
@@ -591,7 +567,12 @@ private:
         list.push_back(source);
         set_sources(entry, std::move(list));
         demo_.play_confirm();
-        message_ = taken.empty() ? std::string() : moteur::input_source_label(source) + " retiré de : " + taken;
+        message_.clear();
+        message_args_.clear();
+        if (!taken.empty()) {
+            message_ = "controls-taken";
+            message_args_ = {{"key", moteur::input_source_label(source, &demo_.app().localization())}, {"actions", taken}};
+        }
         save();
     }
 
@@ -604,71 +585,67 @@ private:
         std::string error;
         if (!moteur::write_file_atomic(directory + "demo3d_bindings.json", demo_.app().input().user_bindings_json(), error)) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Controls: %s", error.c_str());
-            message_ = "Impossible d'enregistrer les touches.";
+            message_ = "controls-save-failed";
+            message_args_.clear();
         }
     }
 
-    void back() {
-        if (!stack()->has_pending()) {
-            stack()->pop();
-        }
-    }
-
-    StatesDemo& demo_;
-    Menu menu_{{"Retour"}};
     bool capturing_ = false;
     int entry_ = 0;
     moteur::InputDevice device_ = moteur::InputDevice::KeyboardMouse;
-    std::string message_;
+    std::string message_;  // a message identifier, and its variables (put in words in refresh())
+    std::vector<std::pair<std::string, std::string>> message_args_;
+};
+
+// --- The language (milestone 9 bis, part 5): the languages offered, by their own names; the
+// choice applies at once.
+class LanguageOptionsState final : public Screen {
+public:
+    explicit LanguageOptionsState(StatesDemo& demo) : Screen(demo, "ui/options_language.ui", kLayerPage) {}
+
+    const char* name() const override { return "options_language"; }
+
+protected:
+    void refresh() override {
+        const moteur::Localization& localization = demo_.app().localization();
+        std::vector<std::string> names;
+        for (const moteur::LanguageInfo& info : localization.languages()) {
+            names.push_back((info.code == localization.language() ? "• " : "") + info.name);  // • the current one
+        }
+        set_list(model(), "languages", names);
+    }
+
+    void action(const std::string& name, int index) override {
+        const std::vector<moteur::LanguageInfo>& languages = demo_.app().localization().languages();
+        if (name == "language" && index >= 0 && index < static_cast<int>(languages.size())) {
+            demo_.app().set_language(languages[static_cast<std::size_t>(index)].code);
+        } else if (name == "back") {
+            back();
+        }
+    }
 };
 
 // --- The options: a menu of their pages, over the title or the pause.
-class OptionsState final : public moteur::GameState {
+class OptionsState final : public Screen {
 public:
-    explicit OptionsState(StatesDemo& demo) : demo_(demo) {}
+    explicit OptionsState(StatesDemo& demo) : Screen(demo, "ui/options.ui", kLayerMenu) {}
 
     const char* name() const override { return "options"; }
-    bool transparent() const override { return true; }
-    bool blocking() const override { return true; }
 
-    void update(double) override {
-        moteur::Input& input = demo_.app().input();
-        const moteur::ActionId pause = input.find("pause");
-        if (pause != moteur::kNoAction && input.pressed(pause)) {
+protected:
+    void action(const std::string& name, int) override {
+        if (name == "display") {
+            push(std::make_unique<DisplayOptionsState>(demo_));
+        } else if (name == "audio") {
+            push(std::make_unique<AudioOptionsState>(demo_));
+        } else if (name == "controls") {
+            push(std::make_unique<ControlsOptionsState>(demo_));
+        } else if (name == "language") {
+            push(std::make_unique<LanguageOptionsState>(demo_));
+        } else if (name == "back") {
             back();
-            return;
-        }
-        if (const int chosen = menu_.update(demo_); chosen >= 0 && !stack()->has_pending()) {
-            if (chosen == 0) {
-                stack()->push(std::make_unique<DisplayOptionsState>(demo_));
-            } else if (chosen == 1) {
-                stack()->push(std::make_unique<AudioOptionsState>(demo_));
-            } else if (chosen == 2) {
-                stack()->push(std::make_unique<ControlsOptionsState>(demo_));
-            } else {
-                back();
-            }
         }
     }
-
-    void render(moteur::Renderer& renderer, double) override {
-        SliceUi& ui = demo_.ui();
-        ui.dim(renderer, 0.5f, 1);
-        ui.begin_panel(renderer, 320.0f, 1);
-        ui.title("Options");
-        menu_.draw(ui);
-        ui.end_panel();
-    }
-
-private:
-    void back() {
-        if (!stack()->has_pending()) {
-            stack()->pop();
-        }
-    }
-
-    StatesDemo& demo_;
-    Menu menu_{{"Affichage", "Audio", "Commandes", "Retour"}};
 };
 
 std::unique_ptr<moteur::GameState> make_options(StatesDemo& demo) {
@@ -701,11 +678,13 @@ public:
     }
     void uncovered() override { check_frozen(); }
     void exit() override { check_frozen(); }  // left from the pause ("Retour au titre")
-    void enter() override { demo_.app().audio().play_music(demo_.game_music()); }
+    void enter() override { demo_.set_music("jeu"); }
 
 private:
-    static Demo3D::Options with_save(Demo3D::Options options, std::shared_ptr<const moteur::SaveGame> saved) {
+    Demo3D::Options with_save(Demo3D::Options options, std::shared_ptr<const moteur::SaveGame> saved) {
         options.saved_game = std::move(saved);
+        options.ui = &demo_.ui();  // the overlay drawn with the menus
+        options.sound = demo_.sound();  // the sounds through the same events
         return options;
     }
     void check_frozen() {
@@ -723,28 +702,28 @@ private:
 };
 
 // --- The pause: over the game, which stays visible and frozen.
-class PauseState final : public moteur::GameState {
+class PauseState final : public Screen {
 public:
     // leave: the autopilot goes back to the title from this pause (otherwise it resumes).
-    PauseState(StatesDemo& demo, bool leave) : demo_(demo), leave_(leave) {}
+    PauseState(StatesDemo& demo, bool leave) : Screen(demo, "ui/pause.ui", kLayerPause), leave_(leave) {}
 
     const char* name() const override { return "pause"; }
-    bool transparent() const override { return true; }
-    bool blocking() const override { return true; }
 
     // The rule chosen for the sound: the music goes on, lower; the world's sounds wait.
-    void enter() override { set_paused(true); }
-    void exit() override { set_paused(false); }
+    void enter() override {
+        Screen::enter();
+        document().set_visible(false);  // until the thumbnail of the saves is taken
+        set_paused(true);
+    }
+    void exit() override {
+        Screen::exit();
+        set_paused(false);
+    }
 
-    void update(double) override {
+    void update(double dt) override {
         ++ticks_;
-        moteur::Input& input = demo_.app().input();
-        const moteur::ActionId pause = input.find("pause");
-        if (pause != moteur::kNoAction && input.pressed(pause)) {
-            resume();
-        } else if (const int chosen = menu_.update(demo_); chosen >= 0) {
-            choose(chosen);
-        } else if (demo_.options().cycles > 0 && ticks_ == kPauseTicks) {
+        Screen::update(dt);
+        if (demo_.options().cycles > 0 && ticks_ == kPauseTicks) {
             if (leave_) {
                 back_to_title();
             } else {
@@ -760,122 +739,109 @@ public:
             thumbnail_taken_ = true;
             return;
         }
+        document().set_visible(true);
         if (demo_.capture_pending() && ticks_ >= 2) {
             renderer.request_capture(demo_.options().capture_path);
             demo_.capture_done();
         }
-        // The world, darkened, under the menu.
-        SliceUi& ui = demo_.ui();
-        ui.dim(renderer, 0.47f);
-        ui.begin_panel(renderer, 300.0f);
-        ui.title("Pause");
-        ui.text("Le monde est figé dessous.", SliceUi::Tone::Dim);
-        ui.space();
-        menu_.draw(ui);
-        ui.text("Échap ou Start : reprendre", SliceUi::Tone::Dim);
-        ui.end_panel();
+    }
+
+protected:
+    void action(const std::string& name, int) override {
+        if (name == "resume") {
+            resume();
+        } else if (name == "save") {
+            open_slots(true);
+        } else if (name == "options") {
+            push(make_options(demo_));
+        } else if (name == "quit") {
+            back_to_title();
+        }
     }
 
 private:
     void set_paused(bool paused) {
-        moteur::Audio& audio = demo_.app().audio();
-        audio.set_music_volume(paused ? 0.35f : 1.0f, 0.3f);
-        audio.set_group_paused(moteur::SoundGroup::Effects, paused);
-        audio.set_group_paused(moteur::SoundGroup::Ambience, paused);
-    }
-    void choose(int item) {
-        const std::string& chosen = menu_.item(item);
-        if (chosen == "Reprendre") {
-            resume();
-        } else if (chosen == "Sauvegarder") {
-            open_slots(true);
-        } else if (chosen == "Options") {
-            if (!stack()->has_pending()) {
-                stack()->push(make_options(demo_));
+        // A snapshot of the bank (milestone 9 bis, part 7): the music lower, the world's sounds paused.
+        if (moteur::AudioEvents* sound = demo_.sound()) {
+            if (paused) {
+                sound->start_snapshot("pause");
+            } else {
+                sound->stop_snapshot("pause");
             }
-        } else {
-            back_to_title();
         }
     }
     void open_slots(bool saving);
-    void resume() {
-        if (!stack()->has_pending()) {
-            stack()->pop();
-        }
-    }
+    void resume() { back(); }
     void back_to_title() {
         if (!stack()->has_pending()) {
             stack()->reset(make_title(demo_));
         }
     }
 
-    StatesDemo& demo_;
     bool leave_;
     int ticks_ = 0;
     bool thumbnail_taken_ = false;
-    Menu menu_{{"Reprendre", "Sauvegarder", "Options", "Retour au titre"}};
 };
 
 // --- The slots: to save into (over the pause) or to load from (over the title).
-class SlotsState final : public moteur::GameState {
+class SlotsState final : public Screen {
 public:
-    SlotsState(StatesDemo& demo, bool saving) : demo_(demo), saving_(saving) {}
+    SlotsState(StatesDemo& demo, bool saving) : Screen(demo, "ui/slots.ui", kLayerMenu), saving_(saving) {}
 
     const char* name() const override { return saving_ ? "sauvegarder" : "charger"; }
     bool transparent() const override { return saving_; }  // the frozen game under it
-    bool blocking() const override { return true; }
 
-    void enter() override { refresh(); }
-
-    void update(double) override {
-        moteur::Input& input = demo_.app().input();
-        const moteur::ActionId pause = input.find("pause");
-        if (pause != moteur::kNoAction && input.pressed(pause)) {
-            back();
-        } else if (const int chosen = menu_.update(demo_); chosen >= 0) {
-            choose(chosen);
-        }
+    void enter() override {
+        load_rows();
+        Screen::enter();
+        // Over the title, the screen of its own; over the pause, the game dimmed under it.
+        document().root()->set_class(saving_ ? "shade" : "opaque", true);
+    }
+    void exit() override {
+        forget_thumbnails();
+        Screen::exit();
     }
 
     void render(moteur::Renderer& renderer, double) override {
         if (!saving_) {
             renderer.set_clear_color(0.06f, 0.05f, 0.09f);
         }
-        SliceUi& ui = demo_.ui();
-        if (saving_) {
-            ui.dim(renderer, 0.6f, 1);  // the pause's panel, darkened under this one
-        }
-        ui.begin_panel(renderer, 600.0f, 1);  // over the pause's panel
-        ui.title(saving_ ? "Sauvegarder la partie" : "Charger une partie");
-        ui.space();
-        for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
-            const Row& row = rows_[static_cast<std::size_t>(i)];
-            std::vector<SliceUi::Line> lines = {{slot_label(row.name), SliceUi::Tone::Normal}};
+    }
+
+protected:
+    void refresh() override {
+        moteur::UiModel& m = model();
+        m.set("slots.title", demo_.tr(saving_ ? "slots-save-title" : "slots-load-title"));
+        m.set("slots.status", status_);
+        m.set_count("slots", static_cast<int>(rows_.size()));
+        for (std::size_t i = 0; i < rows_.size(); ++i) {
+            const Row& row = rows_[i];
+            const std::string item = "slots." + std::to_string(i) + ".";
+            std::string line1;
+            std::string line2;
             if (!row.exists) {
-                lines.push_back({"(vide)", SliceUi::Tone::Dim});
+                line1 = demo_.tr("slot-empty");
             } else if (!row.slot.readable) {
-                lines.push_back({"Illisible : " + row.slot.error, SliceUi::Tone::Error});
+                line1 = demo_.tr("slot-unreadable", {{"error", row.slot.error}});
             } else {
                 const nlohmann::json& summary = row.slot.header.summary;
-                char text[160];
-                std::snprintf(text, sizeof(text), "%s, %.0f min de jeu%s", local_time(row.slot.header.time).c_str(),
-                              row.slot.header.play_seconds / 60.0, row.slot.from_backup ? " (copie de secours)" : "");
-                lines.push_back({text, SliceUi::Tone::Dim});
-                std::snprintf(text, sizeof(text), "Vie %d %%, %d créatures debout",
-                              static_cast<int>(summary.value("vie", 0.0) * 100.0), summary.value("creatures", 0));
-                lines.push_back({text, SliceUi::Tone::Dim});
+                line1 = demo_.tr(row.slot.from_backup ? "slot-when-backup" : "slot-when",
+                                 {{"date", local_time(demo_, row.slot.header.time)}, {"seconds", row.slot.header.play_seconds}});
+                line2 = demo_.tr("slot-summary", {{"health", summary.value("vie", 0.0)}, {"creatures", summary.value("creatures", 0)}});
             }
-            menu_.set_rect(i, ui.card(row.thumbnail.gpu ? &row.thumbnail : nullptr, {160.0f, 90.0f}, lines,
-                                      i == menu_.focus()));
+            m.set(item + "thumbnail", row.thumbnail.gpu ? thumbnail_name(i) : std::string());
+            m.set(item + "name", slot_label(demo_, row.name));
+            m.set(item + "line1", line1);
+            m.set(item + "line2", line2);
         }
-        const int back = static_cast<int>(rows_.size());
-        menu_.set_rect(back, ui.button("Retour", menu_.focus() == back, 160.0f));
-        if (!status_.empty()) {
-            ui.space();
-            ui.text(status_);
+    }
+
+    void action(const std::string& name, int index) override {
+        if (name == "back") {
+            back();
+        } else if (name == "slot" && index >= 0 && index < static_cast<int>(rows_.size())) {
+            choose(static_cast<std::size_t>(index));
         }
-        ui.text("Flèches et Entrée ; Échap : retour", SliceUi::Tone::Dim);
-        ui.end_panel();
     }
 
 private:
@@ -886,7 +852,16 @@ private:
         moteur::Texture thumbnail;
     };
 
-    void refresh() {
+    static std::string thumbnail_name(std::size_t index) { return "slot_thumbnail_" + std::to_string(index); }
+
+    void forget_thumbnails() {
+        for (std::size_t i = 0; i < rows_.size(); ++i) {
+            demo_.ui().set_texture(thumbnail_name(i), nullptr);
+        }
+    }
+
+    void load_rows() {
+        forget_thumbnails();
         rows_.clear();
         const std::vector<moteur::SaveSlots::Slot> slots = demo_.slots().list();
         const auto make_row = [&](const std::string& name) {
@@ -920,50 +895,36 @@ private:
                 make_row(slot.name);
             }
         }
-        std::vector<std::string> items;
-        for (const Row& row : rows_) {
-            items.push_back(row.name);
+        // Once the rows are in place (the textures do not move any more).
+        for (std::size_t i = 0; i < rows_.size(); ++i) {
+            if (rows_[i].thumbnail.gpu) {
+                demo_.ui().set_texture(thumbnail_name(i), &rows_[i].thumbnail);
+            }
         }
-        items.push_back("Retour");
-        menu_.set_items(items);
     }
 
-    void choose(int index) {
-        if (index >= static_cast<int>(rows_.size())) {
-            back();
-            return;
-        }
-        const Row& row = rows_[static_cast<std::size_t>(index)];
+    void choose(std::size_t index) {
+        const Row& row = rows_[index];
         if (saving_) {
             std::string error;
             if (demo_.save_game(row.name, demo_.pause_thumbnail(), error)) {
-                status_ = "Sauvegardé dans " + slot_label(row.name) + ".";
+                status_ = demo_.tr("slots-saved", {{"slot", slot_label(demo_, row.name)}});
             } else {
-                status_ = "Échec : " + error;
+                status_ = demo_.tr("slots-failed", {{"error", error}});
             }
-            refresh();
+            load_rows();
         } else if (row.exists) {
             demo_.load_game(row.name);
         }
     }
 
-    void back() {
-        if (!stack()->has_pending()) {
-            stack()->pop();
-        }
-    }
-
-    StatesDemo& demo_;
     bool saving_;
     std::vector<Row> rows_;
     std::string status_;
-    Menu menu_{{"Retour"}};
 };
 
 void PauseState::open_slots(bool saving) {
-    if (!stack()->has_pending()) {
-        stack()->push(std::make_unique<SlotsState>(demo_, saving));
-    }
+    push(std::make_unique<SlotsState>(demo_, saving));
 }
 
 void GameplayState::update(double dt) {
@@ -982,19 +943,21 @@ void GameplayState::update(double dt) {
 class DemoLoadingState final : public moteur::LoadingState {
 public:
     DemoLoadingState(StatesDemo& demo, std::vector<Step> steps, MakeState make_next)
-        : LoadingState(std::move(steps), "Construction du monde", std::move(make_next)), demo_(demo) {}
+        : LoadingState(std::move(steps), "loading-world", std::move(make_next)), demo_(demo) {}
 
-    void enter() override { demo_.loading_started(); }
+    void enter() override {
+        demo_.ui().open(kDocument, kLayerBase);
+        demo_.ui().model().set("loading.progress", 0.0);
+        demo_.loading_started();
+    }
+    void exit() override { demo_.ui().close(kDocument); }
 
 protected:
     void draw(moteur::Renderer& renderer, float progress, const std::string& label) override {
         renderer.set_clear_color(0.02f, 0.02f, 0.03f);
-        SliceUi& ui = demo_.ui();
-        ui.begin_panel(renderer, 360.0f);
-        ui.title("Chargement");
-        ui.progress(progress);
-        ui.text(label, SliceUi::Tone::Dim);
-        ui.end_panel();
+        moteur::UiModel& model = demo_.ui().model();
+        model.set("loading.progress", progress);
+        model.set("loading.step", demo_.tr(label));  // the steps' labels are message identifiers
     }
 
     void failed(const std::string& error) override {
@@ -1004,6 +967,7 @@ protected:
     }
 
 private:
+    static constexpr const char* kDocument = "ui/loading.ui";
     StatesDemo& demo_;
 };
 
@@ -1017,17 +981,16 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo, std::shared_pt
         std::vector<moteur::Asset<moteur::Skeleton>> skeletons;
         std::vector<moteur::Asset<moteur::ClipLibrary>> clips;
         moteur::Asset<moteur::AnimationSet> animation_set;
-        std::vector<moteur::Asset<moteur::Sound>> sounds;
-        moteur::Asset<moteur::Music> ambience;
+        moteur::Asset<moteur::SoundBank> bank;
     };
     auto held = std::make_shared<Held>();
     moteur::Assets& assets = demo.app().assets();
     std::vector<moteur::LoadingState::Step> steps = {
         // Milestone 8, part 5: every file read and decoded on the job system's threads while the
         // screen keeps moving; the steps below then only create the GPU objects.
-        {"Lecture des fichiers",
+        {"loading-files",
          [&assets, held] {
-             held->font = assets.font(Demo3D::kFont, Demo3D::kFontPixelHeight);
+             held->font = assets.font(Demo3D::kFont);
              if (assets.exists(Demo3D::kBarrel)) {
                  assets.prefetch_model(Demo3D::kBarrel);
              }
@@ -1047,23 +1010,15 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo, std::shared_pt
                  }
                  assets.prefetch_model(Demo3D::kSword);
              }
-             if (assets.exists(Demo3D::kAmbience)) {
-                 for (const char* path : Demo3D::kSteps) {
-                     assets.prefetch_sound(path);
-                 }
-                 for (const char* path : Demo3D::kImpacts) {
-                     assets.prefetch_sound(path);
-                 }
-             }
          },
          [&assets] { return assets.prefetching() == 0; }},
-        {"Modèle du tonneau",
+        {"loading-barrel",
          [&assets, held] {
              if (assets.exists(Demo3D::kBarrel)) {
                  held->barrel = assets.model(Demo3D::kBarrel);
              }
          }},
-        {"Pavés et lampadaires",
+        {"loading-decor",
          [&assets, held] {
              for (const char* path : {Demo3D::kPavingA, Demo3D::kPavingB}) {
                  if (assets.exists(path)) {
@@ -1074,7 +1029,7 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo, std::shared_pt
                  held->prefabs.push_back(assets.prefab(Demo3D::kStreetLamp));
              }
          }},
-        {"Personnages animés",
+        {"loading-characters",
          [&assets, held] {
              if (!Demo3D::characters_available(assets)) {  // tools/models/fetch_test_characters.py
                  return;
@@ -1087,16 +1042,12 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo, std::shared_pt
              held->characters.push_back(assets.model(Demo3D::kSword));
              held->animation_set = assets.animation_set(Demo3D::kAnimationSet);
          }},
-        {"Sons",
-         [&assets, held] {
-             if (assets.exists(Demo3D::kAmbience)) {  // tools/audio/fetch_test_sounds.py
-                 for (const char* path : Demo3D::kSteps) {
-                     held->sounds.push_back(assets.sound(path));
-                 }
-                 for (const char* path : Demo3D::kImpacts) {
-                     held->sounds.push_back(assets.sound(path));
-                 }
-                 held->ambience = assets.music(Demo3D::kAmbience);
+        {"loading-sounds",
+         [&demo, held] {
+             // The bank's sounds (milestone 9 bis, part 7): loaded with the screens' events, held by
+             // them for the whole run; the bank is held here too, should the game be loaded alone.
+             if (moteur::AudioEvents* sound = demo.sound(); sound != nullptr && sound->bank() != nullptr) {
+                 held->bank = demo.app().assets().sound_bank(Demo3D::kBank);
              }
          }},
     };
@@ -1109,25 +1060,22 @@ std::unique_ptr<moteur::GameState> make_loading(StatesDemo& demo, std::shared_pt
 }
 
 // --- The title screen.
-class TitleState final : public moteur::GameState {
+class TitleState final : public Screen {
 public:
-    explicit TitleState(StatesDemo& demo) : demo_(demo) {}
+    explicit TitleState(StatesDemo& demo) : Screen(demo, "ui/title.ui", kLayerBase) {}
 
     const char* name() const override { return "title"; }
-    void enter() override {
-        demo_.app().audio().play_music(demo_.title_music());
-        std::vector<std::string> items = {"Jouer"};
-        if (!demo_.latest_slot().empty()) {
-            items.push_back("Continuer");
-        }
-        items.push_back("Charger");
-        items.push_back("Options");
-        items.push_back("Quitter");
-        menu_.set_items(items);
-    }
-    void uncovered() override { enter(); }  // back from "Charger"
+    bool transparent() const override { return false; }
+    bool blocking() const override { return false; }
 
-    void update(double) override {
+    void enter() override {
+        demo_.set_music("titre");
+        can_continue_ = !demo_.latest_slot().empty();
+        Screen::enter();
+    }
+    void uncovered() override { can_continue_ = !demo_.latest_slot().empty(); }  // back from "Charger"
+
+    void update(double dt) override {
         if (ticks_++ == 0) {
             demo_.measure();  // the previous game is gone and its assets collected by now
         }
@@ -1140,45 +1088,36 @@ public:
             } else if (ticks_ >= kTitleTicks) {
                 play();
             }
-        } else if (const int chosen = menu_.update(demo_); chosen >= 0) {
-            choose(chosen);
+            return;
         }
+        Screen::update(dt);
     }
 
-    void render(moteur::Renderer& renderer, double) override {
-        renderer.set_clear_color(0.06f, 0.05f, 0.09f);
-        SliceUi& ui = demo_.ui();
-        ui.begin_panel(renderer, 440.0f);
-        ui.title("Tranche jouable");
-        ui.text("Titre, chargement, la carte avec un héros, pause.", SliceUi::Tone::Dim);
-        ui.text("Flèches et Entrée, croix et A de la manette, ou la souris.", SliceUi::Tone::Dim);
-        if (!demo_.error().empty()) {
-            ui.text("Échec : " + demo_.error(), SliceUi::Tone::Error);
-        }
-        ui.space();
-        menu_.draw(ui);
-        ui.end_panel();
+    void render(moteur::Renderer& renderer, double) override { renderer.set_clear_color(0.06f, 0.05f, 0.09f); }
+
+protected:
+    void refresh() override {
+        moteur::UiModel& m = model();
+        m.set("title.has_error", !demo_.error().empty());
+        m.set("title.error", demo_.error().empty() ? std::string() : demo_.tr("title-error", {{"error", demo_.error()}}));
+        m.set("title.can_continue", can_continue_);
     }
 
-private:
-    void choose(int item) {
-        const std::string& chosen = menu_.item(item);
-        if (chosen == "Jouer") {
+    void action(const std::string& name, int) override {
+        if (name == "play") {
             play();
-        } else if (chosen == "Continuer") {
+        } else if (name == "continue") {
             demo_.load_game(demo_.latest_slot());
-        } else if (chosen == "Charger") {
-            if (!stack()->has_pending()) {
-                stack()->push(std::make_unique<SlotsState>(demo_, false));
-            }
-        } else if (chosen == "Options") {
-            if (!stack()->has_pending()) {
-                stack()->push(make_options(demo_));
-            }
-        } else {
+        } else if (name == "load") {
+            push(std::make_unique<SlotsState>(demo_, false));
+        } else if (name == "options") {
+            push(make_options(demo_));
+        } else if (name == "quit") {
             demo_.finish();
         }
     }
+
+private:
     void play() {
         if (!stack()->has_pending()) {
             demo_.set_error({});
@@ -1186,14 +1125,34 @@ private:
         }
     }
 
-    StatesDemo& demo_;
     int ticks_ = 0;
     bool finished_ = false;
-    Menu menu_{{"Jouer", "Charger", "Quitter"}};
+    bool can_continue_ = false;
 };
 
 std::unique_ptr<moteur::GameState> make_title(StatesDemo& demo) {
     return std::make_unique<TitleState>(demo);
+}
+
+// The screens of the tour of the interface, in turn, with their depth on the stack: 1 over the
+// title, 2 over the options.
+struct TourScreen {
+    const char* name;  // the capture's name
+    int depth;
+    std::function<std::unique_ptr<moteur::GameState>(StatesDemo&)> make;
+};
+
+const std::vector<TourScreen>& tour_screens() {
+    static const std::vector<TourScreen> screens = {
+        {"title", 0, nullptr},
+        {"options", 1, [](StatesDemo& demo) { return make_options(demo); }},
+        {"options_display", 2, [](StatesDemo& demo) { return std::make_unique<DisplayOptionsState>(demo); }},
+        {"options_audio", 2, [](StatesDemo& demo) { return std::make_unique<AudioOptionsState>(demo); }},
+        {"options_controls", 2, [](StatesDemo& demo) { return std::make_unique<ControlsOptionsState>(demo); }},
+        {"options_language", 2, [](StatesDemo& demo) { return std::make_unique<LanguageOptionsState>(demo); }},
+        {"load", 1, [](StatesDemo& demo) { return std::make_unique<SlotsState>(demo, false); }},
+    };
+    return screens;
 }
 
 }  // namespace
@@ -1237,12 +1196,11 @@ StatesDemo::StatesDemo(moteur::Application& app, const Options& options, bool st
                       });
     options_.demo.hero = true;  // the game of the slice
     Demo3D::declare_actions(app);  // the menus' actions, before the demo exists
-    ui_ = std::make_unique<SliceUi>(app);
-    if (app.assets().exists("audio/music/the_field_of_dreams.mp3")) {  // tools/audio/fetch_test_sounds.py
-        title_music_ = app.assets().music("audio/music/the_field_of_dreams.mp3");
-        game_music_ = app.assets().music("audio/music/town_theme.mp3");
-        click_ = app.assets().sound("audio/kenney_interface/click_001.ogg");
-        confirm_ = app.assets().sound("audio/kenney_interface/confirmation_001.ogg");
+    ui_scale_ = &variables.add_int("ui.scale", 100, 75, 200, "taille de l'interface, en pour cent", moteur::Variable::Archive);
+    ui_ = std::make_unique<moteur::Ui>(app, Demo3D::kFont);  // the shipped fonts (no Chinese)
+    if (app.assets().exists(Demo3D::kAmbience) && app.assets().exists(Demo3D::kBank)) {  // tools/audio/fetch_test_sounds.py
+        sound_ = std::make_unique<moteur::AudioEvents>(app.audio(), app.assets());
+        sound_->load(Demo3D::kBank);
     }
     stack_.push(make_title(*this));
     stack_.apply_pending();
@@ -1261,11 +1219,48 @@ StatesDemo::~StatesDemo() {
         tools->forget(stack_);
     }
 #endif
-    app_.audio().stop_music(0.5f);
+    if (sound_) {
+        sound_->stop_all();
+    }
 }
 
 void StatesDemo::on_event(const SDL_Event& event) {
+    ui_->on_event(event);
     stack_.on_event(event);
+}
+
+void StatesDemo::tour_tick() {
+    constexpr int kHold = 30;  // ticks on each screen: its transitions (0.12 s) are long over
+    if (++tour_ticks_ < kHold || stack_.has_pending()) {
+        return;
+    }
+    tour_ticks_ = 0;
+    const std::vector<TourScreen>& screens = tour_screens();
+    tour_problems_ = std::max(tour_problems_, 0);
+    if (tour_step_ >= static_cast<int>(screens.size())) {
+        // The last capture was taken with the previous frame.
+        std::cout << "ui tour: " << screens.size() << " screens, " << tour_problems_ << " problems\n";
+        app_.report_value("ui_problems", tour_problems_);
+        finish();
+        return;
+    }
+    // The screen on show: captured with the next frame, its problems counted (once each).
+    const TourScreen& shown = screens[static_cast<std::size_t>(tour_step_)];
+    tour_capture_ = options_.ui_tour + "/" + shown.name + ".png";
+    for (const std::string& problem : ui_->problems()) {
+        if (std::find(tour_seen_.begin(), tour_seen_.end(), problem) == tour_seen_.end()) {
+            tour_seen_.push_back(problem);
+            std::cout << "ui tour: " << shown.name << ": " << problem << '\n';
+            ++tour_problems_;
+        }
+    }
+    if (++tour_step_ < static_cast<int>(screens.size())) {
+        const TourScreen& next = screens[static_cast<std::size_t>(tour_step_)];
+        for (int depth = shown.depth; depth >= next.depth; --depth) {
+            stack_.pop();
+        }
+        stack_.push(next.make(*this));
+    }
 }
 
 void StatesDemo::update(double dt) {
@@ -1273,7 +1268,40 @@ void StatesDemo::update(double dt) {
     if (options_.run_seconds > 0.0 && elapsed_ >= options_.run_seconds) {
         finish();
     }
+    ui_seconds_ += dt;
+    // The interface first: its events are those of this tick, read by the states.
+    ui_->tick(moteur::UiInput::from_actions(app_.input()));
+    events_ = ui_->take_events();
     stack_.update(dt);
+    if (!options_.ui_tour.empty()) {
+        tour_tick();
+    }
+    // The menus' sounds, once the states have handled the events (a volume heard as it is now).
+    for (const moteur::UiEvent& event : events_) {
+        if (event.kind == moteur::UiEvent::Kind::Focus || event.kind == moteur::UiEvent::Kind::Change) {
+            play_click();
+        } else if (event.kind == moteur::UiEvent::Kind::Activate) {
+            play_confirm();
+        }
+    }
+}
+
+std::vector<moteur::UiEvent> StatesDemo::events(std::string_view document) const {
+    std::vector<moteur::UiEvent> out;
+    for (const moteur::UiEvent& event : events_) {
+        if (event.document == document) {
+            out.push_back(event);
+        }
+    }
+    return out;
+}
+
+int StatesDemo::ui_scale_percent() const {
+    return ui_scale_->as_int();
+}
+
+void StatesDemo::set_ui_scale_percent(int percent) {
+    ui_scale_->set_int(percent);
 }
 
 void StatesDemo::render(moteur::Renderer& renderer, double alpha) {
@@ -1282,6 +1310,24 @@ void StatesDemo::render(moteur::Renderer& renderer, double alpha) {
         pending_thumbnail_.clear();
     }
     stack_.render(renderer, alpha);
+    // The screen's density (a window moved to a Retina screen keeps its interface's size) times the
+    // player's choice. The interface's clock is the ticks' (transitions in step with a replay).
+    float density = app_.to_pixels({1.0f, 0.0f}).x - app_.to_pixels({0.0f, 0.0f}).x;
+    density = density > 0.0f ? density : 1.0f;
+    ui_->set_scale(density * static_cast<float>(ui_scale_->as_int()) / 100.0f);
+    ui_->render(renderer, ui_seconds_);
+    ui_seconds_ = 0.0;
+    if (sound_) {
+        // The events after the frame's listener (the game's camera): real time for their fades.
+        const Uint64 now = SDL_GetTicksNS();
+        const float dt = sound_clock_ == 0 ? 0.0f : static_cast<float>(static_cast<double>(now - sound_clock_) * 1e-9);
+        sound_clock_ = now;
+        sound_->update(std::min(dt, 0.1f));
+    }
+    if (!tour_capture_.empty()) {
+        renderer.request_capture(tour_capture_);
+        tour_capture_.clear();
+    }
 }
 
 bool StatesDemo::save_game(const std::string& slot, const std::string& thumbnail, std::string& error) {
@@ -1324,7 +1370,7 @@ void StatesDemo::load_game(const std::string& slot) {
     bool from_backup = false;
     std::optional<moteur::SaveGame> game = slots_.read(slot, error, nullptr, &from_backup);
     if (!game) {
-        set_error("sauvegarde « " + slot_label(slot) + " » illisible : " + error);
+        set_error(tr("save-unreadable", {{"slot", slot_label(*this, slot)}, {"error", error}}));
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Save: %s", error_.c_str());
         stack_.reset(make_title(*this));
         return;
@@ -1419,20 +1465,25 @@ void StatesDemo::loading_done() {
 }
 
 void StatesDemo::play_click() {
-    if (click_) {
-        moteur::PlaySound options;
-        options.group = moteur::SoundGroup::Interface;
-        options.volume = 0.5f;
-        app_.audio().play(click_, options);
+    if (sound_) {
+        sound_->play("interface/clic");
     }
 }
 
 void StatesDemo::play_confirm() {
-    if (confirm_) {
-        moteur::PlaySound options;
-        options.group = moteur::SoundGroup::Interface;
-        options.volume = 0.6f;
-        app_.audio().play(confirm_, options);
+    if (sound_) {
+        sound_->play("interface/validation");
+    }
+}
+
+void StatesDemo::set_music(std::string_view section) {
+    if (!sound_) {
+        return;
+    }
+    if (music_ == moteur::kNoEvent || !sound_->playing(music_)) {
+        music_ = sound_->play("musique/tranche", {.labels = {{"section", std::string(section)}}});
+    } else {
+        sound_->set_parameter(music_, "section", section);
     }
 }
 

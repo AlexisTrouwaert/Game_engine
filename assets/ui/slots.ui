@@ -1,0 +1,22 @@
+<!-- The save slots: to save into (over the pause) or to load from (over the title). -->
+<ui back-action="back">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 640">
+        <label class="title" text="{$slots.title}"/>
+        <scroll style="max-height: 400; gap: 6">
+            <repeat source="slots">
+                <button class="card" action="slot">
+                    <image src="{$item.thumbnail}"/>
+                    <column>
+                        <label text="{$item.name}"/>
+                        <label class="dim" text="{$item.line1}"/>
+                        <label class="dim" text="{$item.line2}"/>
+                    </column>
+                </button>
+            </repeat>
+        </scroll>
+        <button action="back" text="{common-back}" style="width: 160"/>
+        <label text="{$slots.status}"/>
+        <label class="dim" text="{slots-help}"/>
+    </panel>
+</ui>

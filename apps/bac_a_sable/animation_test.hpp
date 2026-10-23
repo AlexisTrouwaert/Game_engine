@@ -9,6 +9,8 @@
 
 #include "moteur/animator.hpp"
 #include "moteur/application.hpp"
+#include "moteur/audio_events.hpp"
+#include "moteur/fixed_timestep.hpp"
 #include "moteur/camera3d.hpp"
 #include "moteur/environment.hpp"
 #include "moteur/mesh.hpp"
@@ -140,8 +142,7 @@ private:
     std::vector<moteur::AnimatorEvent> events_;  // of the last tick
     std::vector<std::string> event_log_;         // the latest, newest first
     std::int64_t tick_ = 0;
-    std::vector<moteur::Asset<moteur::Sound>> steps_;
-    std::vector<moteur::Asset<moteur::Sound>> impacts_;
+    std::unique_ptr<moteur::AudioEvents> sound_;  // the slice's bank (milestone 9 bis, part 7); null: listed only
     int selected_ = 0;
     bool playing_ = true;
     float speed_ = 1.0f;

@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/packing.hpp>
 
 #include "moteur/mesh.hpp"
 #include "moteur/mesh_batcher.hpp"
@@ -292,4 +293,81 @@ TEST_CASE("MeshBatcher: an alpha-tested material keeps its texture and cutoff in
     batcher.build(draws, view_of_everything(), moteur::MeshBatcher::Pass::Main);
     CHECK(moteur::MeshBatcher::make_instance(draws[0]).normal_matrix[0].w == 0.5f);
     CHECK(moteur::MeshBatcher::make_instance(draws[3]).normal_matrix[0].w == 0.0f);
+}
+
+TEST_CASE("MeshBatcher: transparent draws are left to their own pass, sorted from the farthest") {
+    const moteur::Mesh ghost = make_mesh(10);
+    const moteur::Mesh wall = make_mesh(4);
+    std::vector<moteur::MeshDraw> draws;
+    draws.push_back(make_draw(wall, {0, 0, 0}));
+    for (const float x : {2.0f, 8.0f, 5.0f, 8.0f}) {  // two at the same distance: recording order
+        moteur::MeshDraw draw = make_draw(ghost, {x, 0, 0}, {1, 1, 1, 0.5f});
+        draw.material.blend = true;
+        draw.material.casts_shadow = false;
+        draws.push_back(draw);
+    }
+    draws[4].pick_id = 7;  // to tell the two at 8 m apart
+
+    moteur::MeshBatcher batcher;
+    batcher.build(draws, view_of_everything(), moteur::MeshBatcher::Pass::Main);
+    CHECK(batcher.visible() == 1);  // the wall only
+    batcher.build(draws, view_of_everything(), moteur::MeshBatcher::Pass::Shadow);
+    CHECK(batcher.visible() == 1);
+
+    batcher.build_transparent(draws, view_of_everything(), glm::vec3(0.0f));
+    CHECK(batcher.submitted() == 4);
+    REQUIRE(batcher.visible_draws().size() == 4);
+    CHECK(batcher.visible_draws()[0] == 2);  // 8 m, recorded first
+    CHECK(batcher.visible_draws()[1] == 4);  // 8 m
+    CHECK(batcher.visible_draws()[2] == 3);  // 5 m
+    CHECK(batcher.visible_draws()[3] == 1);  // 2 m
+    // Consecutive draws of the same mesh and textures share a batch: here all of them.
+    REQUIRE(batcher.batches().size() == 1);
+    CHECK(batcher.batches()[0].count == 4);
+    CHECK(batcher.instances()[1].normal_matrix[1].w == 7.0f);
+    // Seen from the other side, the order turns round.
+    batcher.build_transparent(draws, view_of_everything(), glm::vec3(20.0f, 0.0f, 0.0f));
+    CHECK(batcher.visible_draws()[0] == 1);
+    CHECK(batcher.visible_draws()[3] == 4);
+    // Outside the view: not drawn, still counted.
+    batcher.build_transparent(draws, view_of_the_middle(), glm::vec3(0.0f));
+    CHECK(batcher.submitted() == 4);
+    CHECK(batcher.visible() == 4);  // all within 10 m of the middle
+}
+
+TEST_CASE("MeshBatcher: the effects travel with each instance, a dissolving shadow is cut out") {
+    const moteur::Mesh body = make_mesh(12);
+    std::vector<moteur::MeshDraw> draws;
+    draws.push_back(make_draw(body, {0, 0, 0}));
+    moteur::MeshDraw dying = make_draw(body, {1, 0, 0});
+    dying.effects.dissolve = 0.4f;
+    dying.effects.dissolve_edge = {6.0f, 2.0f, 0.5f};
+    dying.effects.flash = {2.0f, 0.4f, 0.0f, 0.5f};
+    dying.material.uv_scroll = {0.25f, -1.0f};
+    dying.material.emissive_pulse = 2.0f;
+    draws.push_back(dying);
+
+    const moteur::MeshInstance instance = moteur::MeshBatcher::make_instance(dying);
+    const glm::vec4 flash = glm::unpackUnorm4x8(instance.effects.x);
+    CHECK(flash.r * 4.0f == doctest::Approx(2.0f).epsilon(0.01));
+    CHECK(flash.g * 4.0f == doctest::Approx(0.4f).epsilon(0.02));
+    CHECK(flash.a == doctest::Approx(0.5f).epsilon(0.01));
+    const glm::vec4 edge = glm::unpackUnorm4x8(instance.effects.y);
+    CHECK(edge.r * edge.a * 16.0f == doctest::Approx(6.0f).epsilon(0.01));
+    CHECK(edge.b * edge.a * 16.0f == doctest::Approx(0.5f).epsilon(0.02));
+    CHECK(glm::unpackHalf2x16(instance.effects.z).x == doctest::Approx(0.4f).epsilon(0.001));
+    CHECK(glm::unpackHalf2x16(instance.effects.z).y == 2.0f);
+    CHECK(glm::unpackHalf2x16(instance.effects.w) == glm::vec2(0.25f, -1.0f));
+    CHECK(glm::unpackHalf2x16(moteur::MeshBatcher::make_instance(draws[0]).effects.z) == glm::vec2(0.0f));
+
+    // In the scene, a dissolving object shares its batch (the effects are per instance); in the
+    // shadow pass it is cut out like an alpha-tested one.
+    moteur::MeshBatcher batcher;
+    batcher.build(draws, view_of_everything(), moteur::MeshBatcher::Pass::Main);
+    CHECK(batcher.batches().size() == 1);
+    batcher.build(draws, view_of_everything(), moteur::MeshBatcher::Pass::Shadow);
+    REQUIRE(batcher.batches().size() == 2);
+    CHECK_FALSE(batcher.batches()[0].masked);
+    CHECK(batcher.batches()[1].masked);
+    CHECK(glm::unpackHalf2x16(batcher.instances()[batcher.batches()[1].first_instance].effects.z).x == doctest::Approx(0.4f).epsilon(0.001));
 }

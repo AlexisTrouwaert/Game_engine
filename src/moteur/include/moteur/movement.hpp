@@ -105,6 +105,10 @@ struct Mover {
     NavPolyRef nav_poly = 0;
     bool avoid = false;
     ///@}
+    /// Root motion (milestone 9 bis, part 3): metres on the plane (x, z) to travel in the next tick
+    /// on top of its own way, through the same collisions (a dash stops at a wall); the game sets it
+    /// from Animator::take_root_motion(), move_movers() uses it up. Not saved: set again each tick.
+    glm::vec2 root_motion{0.0f};
 
     void go_to(glm::vec3 point);     ///< plans a path (again) to the point: ToPoint, at the next plan_paths()
     void go_to(glm::vec2 point) { go_to(glm::vec3(point.x, 0.0f, point.y)); }  ///< on the plane (x, z), height 0

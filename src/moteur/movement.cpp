@@ -266,6 +266,8 @@ void move_movers(entt::registry& registry, const NavGrid& grid, float dt, std::s
                 break;
             }
         }
+        wanted += mover.root_motion;  // the animation's own move, with the same walls
+        mover.root_motion = glm::vec2(0.0f);
         if (wanted == glm::vec2(0.0f)) {
             return;
         }
@@ -513,6 +515,8 @@ void move_movers(entt::registry& registry, const CollisionScene& scene, float dt
             wanted = avoid_neighbours(registry, entity, start, wanted, dt, radius, {position.y, position.y + height},
                                       *nav.neighbours, nav.avoidance_horizon, near);
         }
+        wanted += mover.root_motion;  // the animation's own move, with the same collisions
+        mover.root_motion = glm::vec2(0.0f);
         // Even standing still, a character in the air keeps falling.
         if (wanted == glm::vec2(0.0f) && mover.grounded) {
             return;

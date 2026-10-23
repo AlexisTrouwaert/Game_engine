@@ -39,6 +39,19 @@ struct PlaySound {
     int priority = 0;               ///< higher keeps its voice when there are too many
     bool loop = false;              ///< until stop(): ambiences, a burning torch
     float fade_in = 0.0f;           ///< seconds
+    // Milestone 9 bis, part 7 (what the events use):
+    int bus = -1;  ///< a bus of Audio::add_bus() (then `group` only names it in the debug panel); -1: the group's
+    std::optional<Attenuation> attenuation;  ///< its own distances; none: Audio::attenuation
+    bool filtered = false;  ///< a low-pass filter on the voice (Audio::set_lowpass(): occlusion, automation)
+    float lowpass = 0.0f;   ///< its cutoff in Hz when `filtered`; 0: open
+    std::uint64_t start_at = 0;  ///< the engine's time (Audio::time_frames()) to start at, sample exact; 0: now
+};
+
+/// The settings of a bus's reverberation (Audio::set_bus_reverb()): see ReverbDescription.
+struct ReverbSettings {
+    float room = 0.5f;     ///< 0 to 1: how long it rings
+    float damping = 0.5f;  ///< 0 to 1: how fast the highs die
+    float wet = 0.0f;      ///< 0 to 1: how much of it is heard (0: dry)
 };
 
 /// A sound started by Audio::play() or Audio::play_stream(); 0 is none. Stays valid (and harmless)
@@ -223,6 +236,40 @@ public:
     /// Restarts AudioStats::mix_peak, AudioStats::peak and AudioStats::limiter_gain.
     void reset_peak();
 
+    // --- Buses (milestone 9 bis, part 7: the mixer under the events) ---
+    // The four groups are the base buses 0 to 3 ("music", "effects", "ambience", "interface"):
+    // their volume is the player's slider times their own mix volume (snapshots). Other buses are
+    // made under them, a tree of miniaudio sound groups.
+
+    /// A bus `name` under `parent` (a bus index); returns its index. The same name again returns
+    /// the existing bus. Throws std::invalid_argument for a parent out of range.
+    int add_bus(const std::string& name, int parent);
+    /// The bus `name` ("effects", "effects/pas"...), or -1.
+    int find_bus(std::string_view name) const;
+    int bus_count() const;  ///< the base buses and those added
+    const std::string& bus_name(int bus) const;  ///< "" out of range
+    /// The bus's own gain (1: as is), times the player's slider for a base bus; changes at once
+    /// (the caller fades it: AudioEvents' snapshots).
+    void set_bus_volume(int bus, float volume);
+    float bus_volume(int bus) const;  ///< as set; 1 out of range
+    /// Pauses a bus (and everything under it); with the player's pause of a base group.
+    void set_bus_paused(int bus, bool paused);
+    /// A reverberation on a base bus (inserted at the first call); `wet` 0: dry.
+    void set_bus_reverb(int bus, const ReverbSettings& settings);
+
+    /// A voice's low-pass cutoff in Hz (played with PlaySound::filtered); 0: open.
+    void set_lowpass(SoundId sound, float hz);
+    /// A voice's or stream's pitch (2: an octave higher).
+    void set_pitch(SoundId sound, float pitch);
+    /// Stops a sound at the engine's time `frame` (Audio::time_frames()), fading out over
+    /// `fade_seconds` before it: music transitions on the bar.
+    void stop_at(SoundId sound, std::uint64_t frame, float fade_seconds);
+    /// The engine's clock, in frames at sample_rate() (what PlaySound::start_at counts).
+    std::uint64_t time_frames() const;
+    int sample_rate() const;  ///< the mixing rate, Hz (0 without engine)
+    /// Where a stream is in its file, in seconds (its own clock: music bars); none if not playing.
+    std::optional<double> stream_seconds(SoundId sound) const;
+
     /// One sound playing (effects, ambiences, interface; streams and music apart), for the debug panel.
     struct ActiveSound {
         std::string name;                        ///< the Sound's name
@@ -255,7 +302,10 @@ private:
     void refused(const Request& request, const char* reason);
     void apply_placement(Voice& voice);
     void apply_placement(MusicVoice& stream);
-    std::unique_ptr<MusicVoice> open_stream(const Asset<Music>& music, SoundGroup group);
+    std::unique_ptr<MusicVoice> open_stream(const Asset<Music>& music, SoundGroup group, int bus = -1);
+    struct Bus;
+    void* bus_node(SoundGroup group, int bus);  ///< the ma_sound_group a voice plays into
+    void apply_bus(int bus);
     void apply_master();
     void apply_group(SoundGroup group);
     void watch_device();
@@ -267,6 +317,7 @@ private:
     std::vector<std::unique_ptr<MusicVoice>> fading_musics_;
     std::vector<std::unique_ptr<MusicVoice>> streams_;
     std::array<Group, kSoundGroupCount> groups_{};
+    std::vector<std::unique_ptr<Bus>> buses_;  ///< the base ones first (see add_bus())
     float master_ = 1.0f;
     bool mute_in_background_ = true;
     bool focused_ = true;

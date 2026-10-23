@@ -207,6 +207,13 @@ public:
     /// The pick id of the draws that follow, until the next call (World::submit() gives each
     /// entity's); cleared every frame. See MeshDraw::pick_id.
     void set_pick_id(std::uint32_t id) { pick_id_ = id; }
+    /// The dissolve and flash of the draws that follow (milestone 9 bis, part 2), until the next call
+    /// (null: none; World::submit() gives each entity's MaterialEffects); cleared every frame.
+    void set_effects(const MaterialEffects* effects) { effects_ = effects != nullptr ? *effects : MaterialEffects{}; }
+    /// The clock of the materials' animations (Material::uv_scroll, emissive_pulse), in seconds:
+    /// the game's time (its ticks), so that captures and replays see the same frames. Kept; 0 by
+    /// default (still).
+    void set_time(double seconds) { time_ = seconds; }
     /// For the billboards: the fog texture (a stand-in when there is none) and its two uniform rows.
     /// The texture and the sampler stay owned by the MeshRenderer: valid until the next
     /// set_fog_cells() of a new size.
@@ -279,6 +286,9 @@ public:
     std::size_t queued() const { return draws_.size(); }
     /// True when this frame has something to draw (draws and a camera): the "scene" pass runs then.
     bool has_work() const { return has_camera_ && !draws_.empty(); }
+    /// True when this frame has transparent draws in view (Material::blend): drawn by
+    /// render_transparent(), in the pass that blends over the opaque scene.
+    bool has_transparent() const { return has_work() && !transparent_batcher_.batches().empty(); }
 
 private:
     friend class Renderer;  ///< drives render() and clear() at the right moments, reads the atlas layout
@@ -288,6 +298,9 @@ private:
     /// first), and uploads the instances.
     void prepare(SDL_GPUCommandBuffer* commands, RenderStats& stats);
     void render(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass, RenderStats& stats);
+    /// The transparent draws, sorted from the farthest, in the blended pass that follows the scene
+    /// (one color target, the depth of the opaque surfaces tested, not written).
+    void render_transparent(SDL_GPUCommandBuffer* commands, SDL_GPURenderPass* pass, RenderStats& stats);
     /// The "shadow" pass, before the scene: whether it runs this frame, the depth texture it draws
     /// into (created or resized by prepare()), and the draws themselves.
     bool wants_shadows() const { return has_work() && shadow_options_.enabled && sun_intensity_ > 0.0f; }
@@ -325,6 +338,7 @@ private:
     void create_scene_pipelines(SDL_GPUSampleCount samples);
     void clear() {
         pick_id_ = 0;
+        effects_ = {};
         draws_.clear();
         lights_.clear();
         point_jobs_.clear();
@@ -335,6 +349,16 @@ private:
         palette_rows_.clear();
     }
 
+    /// Transparent materials (milestone 9 bis, part 2): blended, depth tested not written, one color
+    /// target (mesh_transparent.frag.hlsl). [skinned][double sided].
+    GpuGraphicsPipeline transparent_[2][2];
+    GpuShader transparent_fragment_shader_;
+    MeshBatcher transparent_batcher_;
+    std::size_t transparent_instance_base_ = 0;  ///< where its instances start in the instance buffer
+    MaterialEffects effects_;  ///< see set_effects()
+    double time_ = 0.0;        ///< see set_time()
+    /// The fragment uniforms of the scene, pushed again for the transparent draws.
+    std::vector<std::uint8_t> frame_uniforms_;
     GpuGraphicsPipeline single_sided_;
     GpuGraphicsPipeline double_sided_;
     GpuGraphicsPipeline wireframe_single_sided_;

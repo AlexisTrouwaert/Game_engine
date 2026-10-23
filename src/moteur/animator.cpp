@@ -107,12 +107,21 @@ Animator Animator::create(Asset<Skeleton> skeleton, Asset<ClipLibrary> clips, As
                                  skeleton->name() + "': " + why);
     }
     Animator animator;
-    if (set && !set->upper_mask().empty()) {
-        try {
-            animator.layers_[1].mask = mask_weights(skeleton->data(), *set->mask(set->upper_mask()));
-        } catch (const std::runtime_error& e) {
-            throw std::runtime_error("Animator: animation set '" + set->source() + "', skeleton '" + skeleton->name() +
-                                     "': " + e.what());
+    // The layers of the set (milestone 9 bis, part 3); without a set, the whole body and the upper body.
+    animator.layers_.resize(set ? set->layers().size() : 2);
+    if (set) {
+        animator.max_motions_ = static_cast<std::size_t>(set->max_motions());
+        for (std::size_t i = 0; i < set->layers().size(); ++i) {
+            const LayerSettings& settings = set->layers()[i];
+            animator.layers_[i].additive = settings.additive;
+            if (!settings.mask.empty()) {
+                try {
+                    animator.layers_[i].mask = mask_weights(skeleton->data(), *set->mask(settings.mask));
+                } catch (const std::runtime_error& e) {
+                    throw std::runtime_error("Animator: animation set '" + set->source() + "', skeleton '" + skeleton->name() +
+                                             "': " + e.what());
+                }
+            }
         }
     }
     animator.layers_[0].weight = animator.layers_[0].previous_weight = kWeightOne;
@@ -183,11 +192,50 @@ Animator::Motion Animator::make_motion(const std::string& name, const PlayOption
         for (const ClipEvent& event : set->clip(name).events) {
             // A loop's end is its start; a clip played once may have an event on its very end.
             const int tick = event_tick(event, *motion.clip, cycle);
-            marks.push_back({options.loop ? tick % cycle : tick, {event.name, name, -1, event.always}});
+            const bool window = event.end >= 0.0f;
+            marks.push_back({options.loop ? tick % cycle : tick,
+                             {event.name, name, -1, event.always, window ? AnimatorEvent::Phase::Begin : AnimatorEvent::Phase::Instant}});
+            if (window) {
+                ClipEvent end = event;
+                end.time = event.end;
+                const int end_tick = event_tick(end, *motion.clip, cycle);
+                marks.push_back({options.loop ? end_tick % cycle : end_tick, {event.name, name, -1, event.always, AnimatorEvent::Phase::End}});
+            }
         }
         set_marks(motion, std::move(marks));
+        bind_clip_data(motion, options.loop);
     }
     return motion;
+}
+
+void Animator::bind_clip_data(Motion& motion, bool loop) const {
+    static_cast<void>(loop);
+    motion.windows.clear();
+    motion.root_joint = -1;
+    motion.root_track = nullptr;
+    motion.root_scale = 0;
+    if (!set || motion.clip == nullptr) {
+        return;
+    }
+    const ClipSettings& settings = set->clip(motion.clip->name());
+    const int cycle = motion.clip->duration_ticks();
+    for (const ClipEvent& event : settings.events) {
+        if (event.end >= 0.0f) {
+            ClipEvent end = event;
+            end.time = event.end;
+            motion.windows.push_back({event.name, event_tick(event, *motion.clip, cycle), event_tick(end, *motion.clip, cycle), event.always});
+        }
+    }
+    if (settings.root_motion > 0.0f) {
+        const int joint = skeleton->data().find(set->root_joint());
+        if (joint < 0) {
+            throw std::runtime_error("Animation set '" + set->source() + "': clip '" + motion.clip->name() +
+                                     "' has root motion, but the skeleton has no root joint '" + set->root_joint() + "'");
+        }
+        motion.root_joint = joint;
+        motion.root_track = &clips->root_track(*skeleton, *motion.clip, joint);
+        motion.root_scale = thousandths(settings.root_motion);
+    }
 }
 
 int Animator::event_tick(const ClipEvent& event, const SkeletalClip& clip, int cycle) const {
@@ -242,7 +290,7 @@ void Animator::pace(Motion& motion) const {
 }
 
 bool Animator::play(const std::string& name, const PlayOptions& options) {
-    if (options.layer < 0 || options.layer >= kLayers) {
+    if (options.layer < 0 || options.layer >= layer_count()) {
         throw std::invalid_argument("Animator: no layer " + std::to_string(options.layer));
     }
     if (!options.restart && playing(name, options.layer)) {
@@ -272,7 +320,7 @@ bool Animator::play(const std::string& name, const PlayOptions& options) {
         motion.fade_from = 0;
         motion.fade_to = kWeightOne;
         motion.fade_ticks = fade;
-        if (layer.motions.size() + 1 > kMaxMotions) {
+        if (layer.motions.size() + 1 > max_motions_) {
             const auto faintest = std::min_element(layer.motions.begin(), layer.motions.end(),
                                                    [](const Motion& a, const Motion& b) { return a.weight < b.weight; });
             layer.motions.erase(faintest);
@@ -417,6 +465,15 @@ void Animator::advance(int ticks, std::vector<AnimatorEvent>* events, entt::enti
             motion.continuous = true;
             motion.fade_elapsed = std::min(motion.fade_ticks, motion.fade_elapsed + ticks);
             motion.weight = faded(motion.fade_from, motion.fade_to, motion.fade_elapsed, motion.fade_ticks);
+            if (motion.root_track != nullptr && !layer.additive) {
+                // Root motion: the curve's move over this tick, by the motion's weight (and the
+                // layer's), in whole millimetres.
+                const glm::ivec3 moved = root_position(motion, motion.clock.time()) - root_position(motion, motion.previous_time);
+                const std::int64_t weight = index == 0 ? motion.weight : std::int64_t{motion.weight} * layer.weight / kWeightOne;
+                const std::int64_t factor = weight * motion.root_scale;  // millionths
+                root_motion_ += glm::ivec3(static_cast<int>(moved.x * factor / (std::int64_t{kWeightOne} * kWeightOne)), 0,
+                                           static_cast<int>(moved.z * factor / (std::int64_t{kWeightOne} * kWeightOne)));
+            }
             if (crossed.empty()) {
                 continue;
             }
@@ -434,7 +491,7 @@ void Animator::advance(int ticks, std::vector<AnimatorEvent>* events, entt::enti
                 }
                 last_event_ = {event.name, event.clip, ticks_};
                 if (events != nullptr) {
-                    events->push_back({entity, event.name, event.clip, motion.name, static_cast<int>(index), weight});
+                    events->push_back({entity, event.name, event.clip, motion.name, static_cast<int>(index), weight, event.phase});
                 }
             }
         }
@@ -470,21 +527,46 @@ void Animator::advance(int ticks, std::vector<AnimatorEvent>* events, entt::enti
 
 void Animator::pose(float alpha, PoseRequest& out) const {
     out.inputs.clear();
-    out.base_weights.clear();
     alpha = std::clamp(alpha, 0.0f, 1.0f);
-    const Layer& upper = layers_[1];
-    const float u = upper.motions.empty()
-                        ? 0.0f
-                        : (static_cast<float>(upper.previous_weight) +
-                           static_cast<float>(upper.weight - upper.previous_weight) * alpha) /
-                              static_cast<float>(kWeightOne);
     const std::size_t joints = skeleton ? static_cast<std::size_t>(skeleton->joint_count()) : 0;
-    if (u > 0.0f) {
-        // Where the upper layer takes over, the whole-body layer gives way.
-        out.base_weights.resize(joints);
-        for (std::size_t j = 0; j < joints; ++j) {
-            const float m = upper.mask.empty() ? 1.0f : upper.mask[j];
-            out.base_weights[j] = 1.0f - u * m;
+    const std::size_t count = layers_.size();
+    // Each layer's own weight at alpha (layer 0: one).
+    const auto weight_of = [&](std::size_t i) {
+        const Layer& layer = layers_[i];
+        if (i == 0) {
+            return 1.0f;
+        }
+        if (layer.motions.empty()) {
+            return 0.0f;
+        }
+        return (static_cast<float>(layer.previous_weight) + static_cast<float>(layer.weight - layer.previous_weight) * alpha) /
+               static_cast<float>(kWeightOne);
+    };
+    // What each replacing layer counts joint by joint: its weight times its mask, times what the
+    // replacing layers above it leave (from the top down). One layer alone needs no weights.
+    out.layer_weights.resize(count);
+    bool overridden = false;
+    for (std::size_t i = 1; i < count; ++i) {
+        overridden = overridden || (!layers_[i].additive && weight_of(i) > 0.0f);
+    }
+    for (std::vector<float>& weights : out.layer_weights) {
+        weights.clear();
+    }
+    if (overridden) {
+        std::vector<float> left(joints, 1.0f);
+        for (std::size_t i = count; i-- > 0;) {
+            const Layer& layer = layers_[i];
+            if (layer.additive) {
+                continue;
+            }
+            const float u = weight_of(i);
+            std::vector<float>& weights = out.layer_weights[i];
+            weights.resize(joints);
+            for (std::size_t j = 0; j < joints; ++j) {
+                const float cover = i == 0 ? 1.0f : u * (layer.mask.empty() ? 1.0f : layer.mask[j]);
+                weights[j] = cover * left[j];
+                left[j] *= 1.0f - cover;
+            }
         }
     }
     const double move = static_cast<double>(previous_move_speed_) +
@@ -505,7 +587,10 @@ void Animator::pose(float alpha, PoseRequest& out) const {
             }
             const float ratio = motion.ratio(alpha);
             if (!motion.blend_space()) {
-                out.inputs.push_back({motion.clip, ratio, weight, joint_weights});
+                PoseInput input{motion.clip, ratio, weight, joint_weights};
+                input.additive = layer.additive;
+                input.root_joint = motion.root_track != nullptr ? motion.root_joint : -1;
+                out.inputs.push_back(input);
                 continue;
             }
             const Neighbours n = neighbours(motion.points, move);
@@ -515,7 +600,9 @@ void Animator::pose(float alpha, PoseRequest& out) const {
                 }
                 const BlendPoint& point = motion.points[i];
                 const float phase = std::fmod(ratio + point.phase, 1.0f);
-                out.inputs.push_back({point.clip, phase, weight * static_cast<float>(share), joint_weights});
+                PoseInput input{point.clip, phase, weight * static_cast<float>(share), joint_weights};
+                input.additive = layer.additive;
+                out.inputs.push_back(input);
             };
             add_point(n.first, n.first == n.second ? 1.0 : 1.0 - n.t);
             if (n.first != n.second) {
@@ -523,8 +610,56 @@ void Animator::pose(float alpha, PoseRequest& out) const {
             }
         }
     };
-    add_layer(layers_[0], 1.0f, out.base_weights);
-    add_layer(upper, u, upper.mask);
+    for (std::size_t i = 0; i < count; ++i) {
+        const Layer& layer = layers_[i];
+        if (layer.additive) {
+            add_layer(layer, weight_of(i), layer.mask);  // over the blend, by its own weight
+        } else if (overridden) {
+            add_layer(layer, 1.0f, out.layer_weights[i]);  // the weights carry the layer's share
+        } else if (i == 0) {
+            add_layer(layer, 1.0f, {});
+        }
+    }
+}
+
+glm::ivec3 Animator::root_position(const Motion& motion, std::int64_t time) {
+    // Where the curve is at `time` (thousandths of a tick, not wrapped): whole cycles, then the
+    // point between two ticks of the curve, in integers.
+    const std::vector<glm::ivec3>& track = *motion.root_track;
+    const std::int64_t cycle = motion.clock.cycle_length();
+    if (motion.clock.once()) {
+        time = std::min(time, cycle);
+    }
+    const std::int64_t cycles = time / cycle;
+    const std::int64_t within = time - cycles * cycle;
+    const auto tick = static_cast<std::size_t>(within / ClipClock::kOne);
+    const std::int64_t fraction = within % ClipClock::kOne;
+    const glm::ivec3& a = track[std::min(tick, track.size() - 1)];
+    const glm::ivec3& b = track[std::min(tick + 1, track.size() - 1)];
+    const auto lerp = [fraction](int from, int to) {
+        return static_cast<int>(from + (static_cast<std::int64_t>(to) - from) * fraction / ClipClock::kOne);
+    };
+    const glm::ivec3& lap = track.back();
+    return glm::ivec3(static_cast<int>(cycles * lap.x + lerp(a.x, b.x)), 0, static_cast<int>(cycles * lap.z + lerp(a.z, b.z)));
+}
+
+bool Animator::in_window(const std::string& name) const {
+    for (std::size_t index = 0; index < layers_.size(); ++index) {
+        const Layer& layer = layers_[index];
+        for (const Motion& motion : layer.motions) {
+            const int weight = index == 0 ? motion.weight : motion.weight * layer.weight / kWeightOne;
+            for (const Window& window : motion.windows) {
+                if (window.name != name || weight <= 0 || (weight < kEventWeight && !window.always)) {
+                    continue;
+                }
+                const std::int64_t at = motion.clock.cycle_time();
+                if (at >= std::int64_t{window.begin} * ClipClock::kOne && at < std::int64_t{window.end} * ClipClock::kOne) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 void advance_animators(entt::registry& registry, int ticks, std::vector<AnimatorEvent>* events) {

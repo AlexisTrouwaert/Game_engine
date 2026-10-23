@@ -92,8 +92,9 @@ TEST_CASE("input sources have a text form that reads back") {
     for (const char* text : {"Q", "key:NoSuchKey", "mouse:side", "wheel:left", "pad:z", "pad:leftx", "joystick:a", ""}) {
         CHECK_FALSE_MESSAGE(moteur::parse_input_source(text).has_value(), text);
     }
-    CHECK(moteur::input_source_label(*moteur::parse_input_source("mouse:right")) == "Clic droit");
-    CHECK(moteur::input_source_label(*moteur::parse_input_source("wheel:down")) == "Molette bas");
+    // Without strings, the engine's English labels (the game's languages: test_localization.cpp).
+    CHECK(moteur::input_source_label(*moteur::parse_input_source("mouse:right")) == "Right click");
+    CHECK(moteur::input_source_label(*moteur::parse_input_source("wheel:down")) == "Wheel down");
 }
 
 TEST_CASE("a tap between two ticks is seen once, by the next tick") {
@@ -212,7 +213,7 @@ TEST_CASE("profiles change the bindings, and a change never leaves an action hel
     CHECK(f.input.sources(f.move_to).empty());
     f.input.process_event(mouse(SDL_BUTTON_RIGHT, true));
     CHECK(f.input.down(f.skill));
-    CHECK(f.input.describe(f.skill) == "Clic droit");
+    CHECK(f.input.describe(f.skill) == "Right click");
     CHECK_THROWS_AS(f.input.set_profile("nope"), std::invalid_argument);
 }
 

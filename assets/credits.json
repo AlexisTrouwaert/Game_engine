@@ -1,5 +1,25 @@
 {
   "version": 1,
+  "fonts": [
+    {
+      "name": "Noto Sans Arabic (police de repli)",
+      "authors": "Google, The Noto Project Authors",
+      "license": "SIL Open Font License 1.1",
+      "source": "Google Fonts",
+      "url": "https://github.com/notofonts/arabic",
+      "file": "assets/fonts/noto/NotoSansArabic.ttf",
+      "license_file": "assets/fonts/noto/OFL_NotoSansArabic.txt"
+    },
+    {
+      "name": "Noto Sans SC (police de repli, chinois simplifié)",
+      "authors": "Google, Adobe, The Noto Project Authors",
+      "license": "SIL Open Font License 1.1",
+      "source": "Google Fonts",
+      "url": "https://github.com/notofonts/noto-cjk",
+      "file": "assets/fonts/noto/NotoSansSC.ttf",
+      "license_file": "assets/fonts/noto/OFL_NotoSansSC.txt"
+    }
+  ],
   "environments": [
     {
       "name": "Studio Small 09",
@@ -142,6 +162,14 @@
       "source": "Poly Haven",
       "url": "https://polyhaven.com/a/cobblestone_01",
       "file": "assets/models/sols/sol_paves_humides_b_8m.glb"
+    },
+    {
+      "name": "Fantôme (voile transparent, yeux lumineux)",
+      "authors": "Moteur (tools/models/make_ghost.py, Blender)",
+      "license": "CC0",
+      "source": "fait pour le moteur",
+      "url": "",
+      "file": "assets/models/fantome/fantome.glb"
     }
   ],
   "sounds": [

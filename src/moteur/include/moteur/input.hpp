@@ -13,6 +13,8 @@
 
 namespace moteur {
 
+class Localization;
+
 /// An action the game declares ("move", "skill_1"...): its index in Input, in the order of
 /// declaration (0, 1, 2...). Valid until Input::clear_actions().
 using ActionId = int;
@@ -55,9 +57,10 @@ std::optional<InputSource> parse_input_source(std::string_view text);
 /// input_source_label().
 std::string input_source_text(const InputSource& source);
 /// What to show the player: a key as printed on their keyboard (the A of an AZERTY keyboard for
-/// "key:Q"), "Clic gauche", "Molette haut", "Manette A"... The labels are in French; gamepad
-/// buttons are named as on an Xbox pad, by position.
-std::string input_source_label(const InputSource& source);
+/// "key:Q"), "Left click", "Wheel up", "Pad A"... in the language of `localization` (the engine's
+/// `input-*` messages, `locales/<language>/moteur.ftl`; English without one). Gamepad buttons are
+/// named as on an Xbox pad, by position.
+std::string input_source_label(const InputSource& source, const Localization* localization = nullptr);
 
 /// A direction of an axis action, for rebinding its keys (Input::set_axis_sources()).
 enum class AxisDirection { Up, Down, Left, Right };
@@ -121,6 +124,9 @@ InputRecording input_recording_from_json(std::string_view json_text, const std::
 /// std::out_of_range for an id that is not an action (except while muted, when they read idle).
 class Input {
 public:
+    /// The strings of describe() and the labels (the Application gives its own); null: English.
+    void set_localization(const Localization* localization) { localization_ = localization; }
+
     /// No action, no binding, no gamepad open (they are opened as SDL announces them).
     Input();
     /// Closes the gamepads it opened.
@@ -318,6 +324,7 @@ private:
     std::map<std::string, Profile> defaults_;  ///< the profiles of the defaults file
     std::map<std::string, Profile> user_;      ///< the player's changes (same shape, sparse)
     std::string profile_;
+    const Localization* localization_ = nullptr;
     std::string user_profile_;                 ///< the profile the player chose, if any
 
     std::vector<std::vector<InputSource>> bound_buttons_;  ///< by action, for the current profile

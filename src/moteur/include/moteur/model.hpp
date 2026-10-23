@@ -34,9 +34,9 @@ struct ModelMaterial {
     /// Linear RGB, multiplied with the texture; KHR_materials_emissive_strength is applied to it.
     glm::vec3 emissive{0.0f};
     bool double_sided = false;    ///< no back-face culling
-    /// See Material::alpha_cutoff: 0 for OPAQUE; glTF's cutoff for MASK (1/512 when the file says 0).
-    /// BLEND is not supported: drawn opaque, with a log.
+    /// See Material::alpha_cutoff: 0 for OPAQUE and BLEND; glTF's cutoff for MASK (1/512 when the file says 0).
     float alpha_cutoff = 0.0f;
+    bool blend = false;           ///< glTF alphaMode BLEND (see Material::blend)
     int base_color_image = -1;          ///< an sRGB image
     int metallic_roughness_image = -1;  ///< a data image (linear)
     int normal_image = -1;              ///< a normal map
@@ -174,6 +174,7 @@ struct Model {
     std::vector<SkinData> skins;  ///< copied from ModelData::skins
     std::size_t joint_count = 0;  ///< of its skeleton; 0 when it has none
     std::vector<Material> materials;  ///< their textures point into `textures`
+    std::vector<std::string> material_names;  ///< ModelMaterial::name of each (ModelComponent::materials replaces by name)
     /// One per ModelData::images: created by the model, or given by the TextureSource (shared).
     std::vector<std::shared_ptr<Texture>> textures;
     /// One per texture: true for a texture this model created (an image inside it), false for one

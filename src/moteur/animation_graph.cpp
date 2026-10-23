@@ -170,8 +170,8 @@ AnimationGraph read_graph(const nlohmann::json& j) {
         }
     }
     const nlohmann::json& layers = j.at("layers");
-    if (!layers.is_array() || layers.empty() || layers.size() > 2) {
-        fail("layers", "one or two layers (the whole body, the upper body)");
+    if (!layers.is_array() || layers.empty() || layers.size() > 8) {
+        fail("layers", "one to eight layers, the animator's in order (the whole body first)");
     }
     for (std::size_t li = 0; li < layers.size(); ++li) {
         const nlohmann::json& lj = layers[li];

@@ -1,0 +1,26 @@
+<!-- The controls: the layout, then each action rebound for the device in use. -->
+<ui class="shade" back-action="back">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 620">
+        <label class="title" text="{options-controls-title}"/>
+        <label class="dim" text="{$controls.device}"/>
+        <row class="setting">
+            <label text="{controls-layout-label}"/>
+            <select bind="controls.profile" source="profiles" action="profile" autofocus="true"/>
+        </row>
+        <scroll style="max-height: 320; gap: 3">
+            <repeat source="controls">
+                <button class="binding" action="rebind">
+                    <label text="{$item.label}"/>
+                    <label class="keys" text="{$item.keys}"/>
+                </button>
+            </repeat>
+        </scroll>
+        <row class="buttons">
+            <button action="reset" text="{controls-reset}"/>
+            <button action="back" text="{common-back}"/>
+        </row>
+        <label class="accent" text="{$controls.message}"/>
+        <label class="dim" text="{controls-help}"/>
+    </panel>
+</ui>

@@ -20,6 +20,11 @@ struct ClipEvent {
     std::string name;   ///< not empty; what AnimatorEvent::name carries
     /// Fires whatever the clip's weight (as long as it weighs something), not only from half of it.
     bool always = false;
+    /// Milestone 9 bis, part 3: a window (key "end", seconds, after `time`): the event fires at
+    /// `time` (AnimatorEvent::Phase::Begin) and at `end` (Phase::End), and Animator::in_window()
+    /// tells whether a clip is inside it (a blow that deals damage, a dodge that cannot be hit).
+    /// Negative: an instant.
+    float end = -1.0f;
 };
 
 /// What the file says about one clip (an entry of "clips"). A clip the file does not name has
@@ -29,6 +34,20 @@ struct ClipSettings {
     int fade_ticks = -1;        ///< crossfade into this clip; -1: the file's default
     float phase = 0.0f;         ///< [0, 1): where this clip starts in a blend space's cycle
     std::vector<ClipEvent> events;  ///< sorted by time
+    /// Milestone 9 bis, part 3: root motion (key "root_motion": true, or a number that scales it):
+    /// the set's root joint moves the character (Animator::take_root_motion()) instead of moving in
+    /// the pose, which stays in place. 0: none.
+    float root_motion = 0.0f;
+};
+
+/// A layer of the Animator (an entry of "layers"; milestone 9 bis, part 3). Without "layers":
+/// layer 0 (the whole body) and layer 1 (the "upper_mask", over it).
+struct LayerSettings {
+    std::string name;  ///< for the debug tools and the graph's layers (which follow the same order)
+    std::string mask;  ///< a mask of "masks": the joints it moves; empty: the whole body
+    /// Its clips are added to what the layers below make (their difference from their first pose),
+    /// instead of replacing it: a blow taken while running, without stopping the run.
+    bool additive = false;
 };
 
 /// A blend space (an entry of "blend_spaces"): clips placed on the move-speed axis.
@@ -79,6 +98,10 @@ struct MaskData {
 ///     "upper_body": { "joint": "spine", "ramp": 2 }  // spine and below it, over 3 joints
 ///   },
 ///   "upper_mask": "upper_body",           // the mask of layer 1
+///   "layers": [                           // or, instead (milestone 9 bis, part 3), the layers:
+///     { "name": "corps" }, { "name": "haut", "mask": "upper_body" }, { "name": "reactions", "additive": true } ],
+///   "max_motions": 4,                     // per layer, while crossfading
+///   "root_joint": "root",                 // for the clips with "root_motion": true
 ///   "attach_points": {                    // where objects go on the character (part 8)
 ///     "right_hand": { "joint": "handslot.r", "position": [0, 0.033, 0], "rotation": [0, 180, 0] }
 ///   },
@@ -102,6 +125,7 @@ struct MaskData {
 class AnimationSet {
 public:
     static constexpr int kVersion = 1;  ///< the only "version" read
+    static constexpr int kMaxLayers = 8;  ///< key "layers": at most this many
 
     /// Parses the text of an animation set file. `source` names it in messages (and is kept: see
     /// source()). Throws std::runtime_error naming `source`: invalid JSON, a missing or wrong
@@ -132,6 +156,15 @@ public:
     const MaskData* mask(const std::string& name) const;
     /// The name of the mask of layer 1 (key "upper_mask"); empty: layer 1 moves the whole body.
     const std::string& upper_mask() const { return upper_mask_; }
+    /// The Animator's layers (key "layers", at most Animator::kMaxLayers, the first one not additive
+    /// and without mask); without the key, the whole body and the upper body (upper_mask()).
+    const std::vector<LayerSettings>& layers() const { return layers_; }
+    /// The motions a layer keeps at most while it crossfades (key "max_motions", 1 to 16; 4 by
+    /// default): beyond, the faintest one goes.
+    int max_motions() const { return max_motions_; }
+    /// The joint whose horizontal motion is the character's (key "root_joint"; "root" by default),
+    /// for the clips with root motion.
+    const std::string& root_joint() const { return root_joint_; }
     /// Every attach point, by name.
     const std::map<std::string, AttachPoint>& attach_points() const { return attach_points_; }
     /// The attach point `name`, null if none. Owned by the set.
@@ -146,6 +179,9 @@ private:
     std::map<std::string, BlendSpaceData> blend_spaces_;
     std::map<std::string, MaskData> masks_;
     std::string upper_mask_;
+    std::vector<LayerSettings> layers_;
+    int max_motions_ = 4;
+    std::string root_joint_ = "root";
     std::map<std::string, AttachPoint> attach_points_;
     AnimationGraph graph_;
 };

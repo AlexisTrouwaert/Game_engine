@@ -34,6 +34,7 @@
 #include "moteur/environment.hpp"
 #include "moteur/fixed_timestep.hpp"
 #include "moteur/font.hpp"
+#include "moteur/localization.hpp"
 #include "moteur/image.hpp"
 #include "moteur/mesh.hpp"
 #include "moteur/billboard_renderer.hpp"
@@ -41,6 +42,7 @@
 #include "moteur/mesh_renderer.hpp"
 #include "moteur/model.hpp"
 #include "moteur/paths.hpp"
+#include "moteur/sound_bank.hpp"
 #include "moteur/sprite_renderer.hpp"
 #include "moteur/texture_atlas.hpp"
 #include "moteur/tilemap.hpp"
@@ -54,6 +56,7 @@
 #include "animation_test.hpp"
 #include "sandbox_data.hpp"
 #include "level3d_test.hpp"
+#include "materials_test.hpp"
 #include "level_stream_test.hpp"
 #include "world_test.hpp"
 #include "level_editor.hpp"
@@ -70,7 +73,14 @@ constexpr float kTileHeight = 32.0f;
 constexpr float kCameraSpeed = 600.0f;  // screen pixels per second, whatever the zoom
 constexpr float kMaxZoom = 8.0f;
 
-constexpr float kFontPixelHeight = 20.0f;  // rasterized once at this physical pixel size
+constexpr const char* kFont = "fonts/interface.font.json";  // Inter, then Noto (Arabic, Chinese)
+constexpr float kFontSize = 16.5f;  // em, pixels (the old 20-pixel line)
+
+moteur::TextStyle text_style() {
+    moteur::TextStyle style;
+    style.size = kFontSize;
+    return style;
+}
 
 // A color picked by eye (as on a screen, sRGB) turned into the linear value the 3D lighting works with.
 glm::vec4 screen_color(float r, float g, float b) {
@@ -161,7 +171,7 @@ public:
         app.renderer().sprites().set_batching(options.batching);
 
         if (options.render3d) {
-            font_ = app.assets().font("fonts/Inter-Regular.ttf", kFontPixelHeight);
+            font_ = app.assets().font(kFont);
             cube_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_cube(), "cube");
             tile_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_plane(), "tile");
             sphere_mesh_ = moteur::Mesh::create(app.renderer(), moteur::make_sphere(0.5f, 32, 16), "sphere");
@@ -207,11 +217,11 @@ public:
         }
 
         if (options.text) {
-            font_ = app.assets().font("fonts/Inter-Regular.ttf", kFontPixelHeight);
+            font_ = app.assets().font(kFont);
             // Printed so an external check can compare against the actual pixels on screen.
-            const glm::vec2 sentence_size = font_->measure("Où étaient les œufs d'été ? « Ici. »");
+            const glm::vec2 sentence_size = font_->measure("Où étaient les œufs d'été ? « Ici. »", text_style());
             std::cout << "measured sentence: " << sentence_size.x << " " << sentence_size.y << '\n';
-            moteur::TextOptions wrapped;
+            moteur::TextStyle wrapped = text_style();
             wrapped.max_width = 420.0f;
             const glm::vec2 paragraph_size = font_->measure(
                 "Ce moteur dessine maintenant du texte : chaque glyphe est rasterisé une fois dans "
@@ -219,7 +229,7 @@ public:
                 "même batch.",
                 wrapped);
             std::cout << "measured paragraph: " << paragraph_size.x << " " << paragraph_size.y
-                      << " (" << static_cast<int>(paragraph_size.y / font_->line_height()) << " lines)\n";
+                      << " (" << static_cast<int>(paragraph_size.y / font_->line_height(kFontSize)) << " lines)\n";
             return;
         }
 
@@ -258,7 +268,7 @@ public:
                 bac_a_sable::AnimationLibrary::load(moteur::asset_path("animations.json")));
             animations_->check_regions(*test_atlas_);
             const bac_a_sable::AnimationClip& walk = animations_->clip("walk");
-            font_ = app.assets().font("fonts/Inter-Regular.ttf", kFontPixelHeight);
+            font_ = app.assets().font(kFont);
 
             // The map: a ground layer of two alternating kinds, and a layer of walls that the
             // creatures cannot cross. Walls have no art yet: the game draws them as tinted boxes.
@@ -725,7 +735,7 @@ private:
         const float ui = app_.to_pixels({1.0f, 0.0f}).x - app_.to_pixels({0.0f, 0.0f}).x;
         const glm::vec2 bar(64.0f * ui, 7.0f * ui);
         moteur::SpriteRenderer& screen = renderer.screen_sprites();
-        moteur::TextOptions name_style;
+        moteur::TextStyle name_style = text_style();
         name_style.align = moteur::TextAlign::Center;
         name_style.max_width = 200.0f;
         name_style.color = {1.0f, 0.95f, 0.85f, 0.9f};
@@ -753,11 +763,11 @@ private:
             fill.depth = 1.1f;
             screen.draw(white_texture_, corner, {std::round(bar.x * health), bar.y}, fill);
             font_->draw(screen, creature.name,
-                        glm::vec2(head->x - name_style.max_width * 0.5f, corner.y - font_->line_height() - 2.0f * ui),
+                        glm::vec2(head->x - name_style.max_width * 0.5f, corner.y - font_->line_height(kFontSize) - 2.0f * ui),
                         name_style);
         }
         // Damage, rising and fading. Its age is advanced by the fraction of tick already elapsed.
-        moteur::TextOptions number_style;
+        moteur::TextStyle number_style = text_style();
         number_style.align = moteur::TextAlign::Center;
         number_style.max_width = 100.0f;
         for (const FloatingNumber& number : floating_numbers_) {
@@ -1024,7 +1034,7 @@ private:
         // The glTF models, in a row behind the other objects, one per 4 m slot, each standing on a
         // cell centre so that a 1 m cube exactly covers a cell. Their own origin is kept: that is
         // what the check is about. Only models larger than a slot are scaled down, and say so.
-        moteur::TextOptions label;
+        moteur::TextStyle label = text_style();
         label.align = moteur::TextAlign::Center;
         label.max_width = 300.0f;
         for (std::size_t k = 0; k < models_.size(); ++k) {
@@ -1056,7 +1066,7 @@ private:
             if (const auto pixel = camera.world_to_screen(slot + glm::vec3(0.0f, top + 0.3f, 0.0f))) {
                 const float lines = static_cast<float>(std::count(caption.begin(), caption.end(), '\n') + 1);
                 font_->draw(renderer.screen_sprites(), caption,
-                            *pixel - glm::vec2(150.0f, lines * font_->line_height()), label);
+                            *pixel - glm::vec2(150.0f, lines * font_->line_height(kFontSize)), label);
             }
         }
 
@@ -1077,12 +1087,12 @@ private:
         // What is being compared, in window pixels over the scene.
         const bool ortho = camera3d_.projection() == moteur::Projection::Orthographic;
         moteur::SpriteRenderer& screen = renderer.screen_sprites();
-        moteur::TextOptions title;
+        moteur::TextStyle title = text_style();
         title.color = {0.95f, 0.95f, 1.0f, 1.0f};
         const glm::vec2 corner(20.0f, 40.0f);
-        const float line = font_->line_height();
+        const float line = font_->line_height(kFontSize);
         font_->draw(screen, ortho ? "Projection orthographique" : "Projection perspective", corner, title);
-        moteur::TextOptions detail;
+        moteur::TextStyle detail = text_style();
         detail.color = {0.7f, 0.75f, 0.85f, 1.0f};
         char text[160];
         if (ortho) {
@@ -1358,43 +1368,111 @@ public:
 
 private:
 
-    // A French sentence (accents, guillemets), a word-wrapped paragraph, the three alignments
-    // side by side, and a live FPS counter: everything text-related in one screen.
+    // The text system on one screen (milestone 9 bis, part 4): a title with outline and shadow,
+    // one sentence from 10 to 200 pixels, the weights of the variable font, an Arabic word in a
+    // French sentence and an Arabic paragraph (bidirectional text, joined letters), Chinese found
+    // in the fallback font, inline markup, a wrapped paragraph and the alignments, an FPS counter.
     void render_text(moteur::Renderer& renderer) {
-        moteur::SpriteRenderer& sprites = renderer.sprites();
+        moteur::SpriteRenderer& sprites = renderer.screen_sprites();
         const moteur::Font& font = *font_;
+        const float right = view_size_.x - 40.0f;
 
-        moteur::TextOptions basic;
-        font.draw(sprites, "Où étaient les œufs d'été ? « Ici. »", {40.0f, 40.0f}, basic);
+        moteur::TextStyle title = text_style();
+        title.size = 54.0f;
+        title.weight = 800.0f;
+        title.color = {1.0f, 0.86f, 0.45f, 1.0f};
+        title.outline_width = 3.0f;
+        title.outline_color = {0.25f, 0.08f, 0.02f, 1.0f};
+        title.shadow = moteur::TextShadow{{4.0f, 5.0f}, 4.0f, {0.0f, 0.0f, 0.0f, 0.7f}};
+        font.draw(sprites, "Les Terres Brûlées", {40.0f, 24.0f}, title);
 
-        moteur::TextOptions wrapped;
+        // The same sentence at every size: sharp from 10 to 200 pixels.
+        float y = 110.0f;
+        for (const float size : {10.0f, 13.0f, 16.0f, 24.0f, 36.0f}) {
+            moteur::TextStyle sized = text_style();
+            sized.size = size;
+            font.draw(sprites, "Où étaient les œufs d'été ? « Ici. » " + std::to_string(static_cast<int>(size)) + " px",
+                      {40.0f, y}, sized);
+            y += font.line_height(size) + 4.0f;
+        }
+        moteur::TextStyle huge = text_style();
+        huge.size = 200.0f;
+        huge.color = {0.85f, 0.9f, 1.0f, 1.0f};
+        font.draw(sprites, "Aé", {right - font.measure("Aé", huge).x, 90.0f}, huge);
+
+        // The weights of Inter (a variable font): real instances, not a dilation.
+        moteur::TextStyle weights = text_style();
+        weights.size = 22.0f;
+        float x = 40.0f;
+        for (const float weight : {100.0f, 300.0f, 400.0f, 600.0f, 800.0f, 900.0f}) {
+            weights.weight = weight;
+            const std::string label = "Graisse " + std::to_string(static_cast<int>(weight));
+            font.draw(sprites, label, {x, y + 6.0f}, weights);
+            x += font.measure(label, weights).x + 24.0f;
+        }
+        y += font.line_height(22.0f) + 18.0f;
+
+        // Bidirectional text: an Arabic word inside French, then an Arabic paragraph (right to
+        // left, aligned at its start: on the right), numbers kept left to right inside it.
+        moteur::TextStyle mixed = text_style();
+        mixed.size = 24.0f;
+        font.draw(sprites, "Le mot \u0633\u0644\u0627\u0645 veut dire « paix », \u0645\u0631\u062D\u0628\u0627 « bonjour ».",
+                  {40.0f, y}, mixed);
+        y += font.line_height(24.0f) + 6.0f;
+        moteur::TextStyle arabic = mixed;
+        arabic.max_width = 560.0f;
+        arabic.color = {0.75f, 1.0f, 0.8f, 1.0f};
+        font.draw(sprites,
+                  "\u0645\u0631\u062D\u0628\u0627 \u0628\u0643\u0645 \u0641\u064A \u0627\u0644\u0644\u0639\u0628\u0629 "
+                  "\u0631\u0642\u0645 2026 \u0645\u0639 Inter \u0648 Noto.",
+                  {40.0f, y}, arabic);
+        y += font.line_height(24.0f) + 6.0f;
+
+        // Chinese: not in Inter, found in the fallback font of the stack.
+        moteur::TextStyle chinese = mixed;
+        chinese.color = {1.0f, 0.75f, 0.75f, 1.0f};
+        font.draw(sprites, "Repli : \u4E2D\u6587\u6587\u672C\uFF0C\u4F60\u597D\u4E16\u754C\u3002", {40.0f, y}, chinese);
+        y += font.line_height(24.0f) + 10.0f;
+
+        // Inline markup: an item's tooltip.
+        moteur::TextStyle tooltip = text_style();
+        tooltip.size = 20.0f;
+        tooltip.markup = true;
+        tooltip.outline_width = 1.5f;
+        font.draw(sprites,
+                  "<b><color=#ffb347>Épée du Veilleur</color></b>  <i>légendaire</i>\n"
+                  "<color=#8fd3ff>+12</color> force, <color=#8fd3ff>+8 %</color> vitesse d'attaque\n"
+                  "<size=0.8><color=#a0a0a0>« Elle ne dort jamais. »</color></size>",
+                  {40.0f, y}, tooltip);
+        y += 3.0f * font.line_height(20.0f) + 14.0f;
+
+        // A wrapped paragraph and the three alignments side by side.
+        moteur::TextStyle wrapped = text_style();
         wrapped.color = {1.0f, 0.85f, 0.55f, 1.0f};
         wrapped.max_width = 420.0f;
         font.draw(sprites,
-                 "Ce moteur dessine maintenant du texte : chaque glyphe est rasterisé une fois dans "
-                 "un atlas, puis dessiné comme n'importe quel autre sprite, trié et regroupé par le "
-                 "même batch.",
-                 {40.0f, 90.0f}, wrapped);
-
-        // The same 300-pixel box, once per alignment, so the three results sit side by side.
-        constexpr float box_x = 40.0f;
-        constexpr float box_y = 260.0f;
+                  "Ce moteur dessine maintenant son texte avec des champs de distance : chaque glyphe "
+                  "est généré une fois dans un atlas, puis dessiné net à toutes les tailles, avec "
+                  "crénage, ligatures et coupure des lignes selon les règles d'Unicode.",
+                  {40.0f, y}, wrapped);
         constexpr float box_width = 300.0f;
-        moteur::TextOptions aligned;
+        const float box_x = 500.0f;
+        moteur::TextStyle aligned = text_style();
         aligned.max_width = box_width;
         aligned.color = {0.6f, 0.85f, 1.0f, 1.0f};
-        font.draw(sprites, "Gauche", {box_x, box_y}, aligned);
+        aligned.align = moteur::TextAlign::Left;
+        font.draw(sprites, "Gauche", {box_x, y}, aligned);
         aligned.align = moteur::TextAlign::Center;
         aligned.color = {0.6f, 1.0f, 0.7f, 1.0f};
-        font.draw(sprites, "Centre", {box_x, box_y + font.line_height()}, aligned);
+        font.draw(sprites, "Centre", {box_x, y + font.line_height(kFontSize)}, aligned);
         aligned.align = moteur::TextAlign::Right;
         aligned.color = {1.0f, 0.7f, 0.7f, 1.0f};
-        font.draw(sprites, "Droite", {box_x, box_y + 2.0f * font.line_height()}, aligned);
+        font.draw(sprites, "Droite", {box_x, y + 2.0f * font.line_height(kFontSize)}, aligned);
 
         // A simplified counter (frames per simulated second), just to show that text can be
         // redrawn every frame without a visible cost. The window title gives the exact FPS.
         update_fps_counter();
-        moteur::TextOptions fps_options;
+        moteur::TextStyle fps_options = text_style();
         fps_options.color = {0.6f, 1.0f, 0.6f, 1.0f};
         fps_options.align = moteur::TextAlign::Right;
         fps_options.max_width = 160.0f;
@@ -1478,14 +1556,14 @@ private:
         const std::string line3 = std::to_string(steps_) + " pas (événements d'animation)";
         // Interface text: in window pixels, drawn over the world, whatever the camera and its zoom.
         moteur::SpriteRenderer& screen = renderer.screen_sprites();
-        moteur::TextOptions stats_options;
+        moteur::TextStyle stats_options = text_style();
         stats_options.color = {0.6f, 1.0f, 0.6f, 1.0f};
         stats_options.align = moteur::TextAlign::Right;
         stats_options.max_width = 360.0f;
         const glm::vec2 stats_anchor(view_size_.x - 400.0f, 20.0f);
         font_->draw(screen, line1, stats_anchor, stats_options);
-        font_->draw(screen, line2, stats_anchor + glm::vec2(0.0f, font_->line_height()), stats_options);
-        font_->draw(screen, line3, stats_anchor + glm::vec2(0.0f, 2.0f * font_->line_height()), stats_options);
+        font_->draw(screen, line2, stats_anchor + glm::vec2(0.0f, font_->line_height(kFontSize)), stats_options);
+        font_->draw(screen, line3, stats_anchor + glm::vec2(0.0f, 2.0f * font_->line_height(kFontSize)), stats_options);
     }
 
     // Every sprite of the test atlas in a grid, each at its pivot, then the walking character in
@@ -2194,6 +2272,7 @@ int main(int argc, char** argv) {
     bool import_assets = false;       // --import-assets: import every model whose prepared form is out of date, exit
     std::vector<std::string> migrate_map;  // --migrate-map MAP OUTPUT RULES: a map of version 1 or 2 into a level, exit
     std::string compiled_data;        // --compiled-data DIR: read the tables from their binary form
+    bool materials_test = false;    // --materials: the "Materials" test (milestone 9 bis, part 2)
     bool world_standalone = false;  // --world-auto or --world-crowd N: the "Monde" test without the menu
     bool level3d_standalone = false;  // --level3d-auto: the "Level 3D" test without the menu
     int level3d_crowd = 0;            // --level3d-crowd N
@@ -2219,6 +2298,7 @@ int main(int argc, char** argv) {
     AnimCompare::Options anim_compare_options;
     bool states = false;  // --states: the game states test; --states-cycles N: with its autopilot
     int states_cycles = 0;
+    std::string ui_tour;  // --ui-tour DIR: the slice's menus captured there, their problems counted
     bool audio_test = false;   // --audio: the audio test; --audio-burst: with a burst of 200 sounds at the start
     bool audio_burst = false;
     // Debug views (milestone 3, part 12).
@@ -2231,6 +2311,7 @@ int main(int argc, char** argv) {
     bool hot_reload = true;
     std::string record_input;  // --record-input FILE: what the scene read from the input, tick by tick
     std::string replay_input;  // --replay-input FILE: that recording played back instead of the real input
+    std::string language;      // --language CODE: the texts in this language (the checks: fr), whatever the player chose
     bool prefer_ktx2 = true;        // --no-ktx2: models use their PNG / JPEG images, not their KTX2 ones
     bool block_compression = true;  // --no-bc: KTX2 textures become RGBA8 instead of BC7 / BC5
     for (int i = 1; i < argc; ++i) {
@@ -2327,6 +2408,9 @@ int main(int argc, char** argv) {
             audio_burst = true;
         } else if (arg == "--states") {
             states = true;
+        } else if (arg == "--ui-tour" && has_one) {  // each menu of the slice captured into a folder, checked
+            states = true;
+            ui_tour = argv[++i];
         } else if (arg == "--states-cycles" && has_one) {
             states = true;
             states_cycles = std::max(0, std::atoi(argv[i + 1]));
@@ -2405,6 +2489,8 @@ int main(int argc, char** argv) {
             no_audio = true;
         } else if (arg == "--no-vsync") {
             vsync = false;
+        } else if (arg == "--language" && has_one) {
+            language = argv[++i];
         } else if (arg == "--tick-rate" && has_one) {
             tick_rate = std::clamp(std::atoi(argv[i + 1]), 1, 1000);
             ++i;
@@ -2464,6 +2550,8 @@ int main(int argc, char** argv) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 world_map = argv[++i];
             }
+        } else if (arg == "--materials") {
+            materials_test = true;
         } else if (arg == "--world-auto") {  // the "Monde" test alone: the hero walks to "but", monsters
             world_standalone = true;
             world_options.autopilot = true;
@@ -2607,6 +2695,44 @@ int main(int argc, char** argv) {
             std::cout << issues.text();
             std::cout << (ok ? "data valid" : "data invalid") << ": " << issues.errors() << " error(s), "
                       << issues.warnings() << " warning(s)\n";
+            if (check_data) {
+                // The strings (milestone 9 bis, part 5): errors fail the check, the rest is listed.
+                moteur::Localization strings;
+                if (strings.load(moteur::asset_path("locales"))) {
+                    const std::vector<moteur::LocalizationIssue> found = strings.check();
+                    const std::vector<std::string> errors = moteur::Localization::describe(found, true);
+                    for (const std::string& line : errors) {
+                        std::cout << "error: " << line << '\n';
+                    }
+                    for (const std::string& line : moteur::Localization::describe(found, false)) {
+                        std::cout << "warning: " << line << '\n';
+                    }
+                    std::cout << "strings: " << strings.languages().size() << " language(s), "
+                              << strings.message_ids(strings.base_language()).size() << " message(s), "
+                              << errors.size() << " error(s)\n";
+                    ok = ok && errors.empty();
+                }
+                // The screens (milestone 9 bis, part 6).
+                const std::vector<std::string> screens =
+                    moteur::check_ui_files({moteur::asset_path("")}, strings.languages().empty() ? nullptr : &strings);
+                for (const std::string& line : screens) {
+                    std::cout << "error: " << line << '\n';
+                }
+                std::cout << "screens: " << screens.size() << " error(s)\n";
+                ok = ok && screens.empty();
+                // The sound banks (milestone 9 bis, part 7).
+                std::vector<std::string> bank_errors, bank_warnings;
+                const int banks = moteur::check_sound_banks({moteur::asset_path("")}, bank_errors, bank_warnings);
+                for (const std::string& line : bank_errors) {
+                    std::cout << "error: " << line << '\n';
+                }
+                for (const std::string& line : bank_warnings) {
+                    std::cout << "warning: " << line << '\n';
+                }
+                std::cout << "sound banks: " << banks << ", " << bank_errors.size() << " error(s), " << bank_warnings.size()
+                          << " warning(s)\n";
+                ok = ok && bank_errors.empty();
+            }
             return ok ? 0 : 1;
         }
 
@@ -2617,6 +2743,7 @@ int main(int argc, char** argv) {
         config.replay_input_path = replay_input;
         config.vsync = vsync;
         config.tick_rate = tick_rate;
+        config.language = language;
         config.report_performance = report;
         config.report_json_path = report_json;
         config.audio = !no_audio;
@@ -2681,6 +2808,7 @@ int main(int argc, char** argv) {
                 states_options.demo.map_size = options.map_size;
             }
             states_options.cycles = states_cycles;
+            states_options.ui_tour = ui_tour;
             states_options.run_seconds = options.run_seconds;
             states_options.capture_path = options.capture_path;
             // With --freeze-after, the game freezes after that many of its ticks and captures itself
@@ -2692,6 +2820,9 @@ int main(int argc, char** argv) {
             StatesDemo game(app, states_options, true);
             app.run(game);
             game.report();
+            if (!ui_tour.empty() && game.ui_problems() != 0) {
+                return 1;  // problems found, or the tour did not end
+            }
             return 0;
         }
         if (editor_standalone) {
@@ -2723,6 +2854,15 @@ int main(int argc, char** argv) {
             level_options.freeze_after_ticks = options.freeze_after_ticks;
             Level3DTest level(app, level_options, true);
             app.run(level);
+            return 0;
+        }
+        if (materials_test) {
+            MaterialsTest::Options materials_options;
+            materials_options.run_seconds = options.run_seconds;
+            materials_options.capture_path = options.capture_path;
+            materials_options.freeze_after_ticks = options.freeze_after_ticks;
+            MaterialsTest scene(app, materials_options, true);
+            app.run(scene);
             return 0;
         }
         if (world_standalone) {

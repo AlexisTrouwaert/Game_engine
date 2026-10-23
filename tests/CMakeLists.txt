@@ -14,10 +14,12 @@ add_executable(moteur_tests
     test_picking.cpp
     test_level.cpp
     test_level_edit.cpp
+    test_localization.cpp
     test_anti_aliasing.cpp
     test_archive.cpp
     test_atlas_builder.cpp
     test_audio.cpp
+    test_audio_events.cpp
     test_billboard_batcher.cpp
     test_camera3d.cpp
     test_color.cpp
@@ -40,6 +42,8 @@ add_executable(moteur_tests
     test_jobs.cpp
     test_mesh.cpp
     test_mesh_batcher.cpp
+    test_material.cpp
+    test_root_motion.cpp
     test_mesh_optimize.cpp
     test_model.cpp
     test_model_import.cpp
@@ -63,8 +67,10 @@ add_executable(moteur_tests
     test_sprite_batcher.cpp
     test_sprite_region.cpp
     test_state_stack.cpp
-    test_text_layout.cpp
+    test_text.cpp
     test_tilemap.cpp
+    test_ui.cpp
+    test_unicode.cpp
     test_user_paths.cpp
     test_utf8.cpp
     test_world.cpp
@@ -80,9 +86,11 @@ endif()
 
 find_package(Ktx CONFIG REQUIRED)
 find_package(ozz-animation CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
 
 target_link_libraries(moteur_tests PRIVATE moteur doctest::doctest KTX::ktx  # KTX: builds test files
-                      ozz::animation_offline)                          # ozz: checks the library itself
+                      ozz::animation_offline                           # ozz: checks the library itself
+                      zstd::libzstd)                                   # zstd: the Unicode conformance tests
 
 # Tests that read files of the source tree (the skinned reference model, the downloaded test characters).
 target_compile_definitions(moteur_tests PRIVATE MOTEUR_SOURCE_ASSETS="${PROJECT_SOURCE_DIR}/assets/"

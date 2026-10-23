@@ -1,0 +1,5 @@
+{
+  "_note": "The slice's fonts: Inter, and Noto Sans Arabic for right-to-left text (the Chinese fallback of interface.font.json is not shipped).",
+  "faces": ["Inter-Regular.ttf", "noto/NotoSansArabic.ttf"],
+  "prepare": "latin"
+}

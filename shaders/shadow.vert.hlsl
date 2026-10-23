@@ -21,10 +21,12 @@
 #define UV_INPUT TEXCOORD7
 #define BASE_COLOR_INPUT TEXCOORD8
 #define CUTOFF_INPUT TEXCOORD9
+#define EFFECTS_INPUT TEXCOORD10
 #elif defined(MASKED)
 #define UV_INPUT TEXCOORD4
 #define BASE_COLOR_INPUT TEXCOORD5
 #define CUTOFF_INPUT TEXCOORD6
+#define EFFECTS_INPUT TEXCOORD7
 #endif
 
 cbuffer Frame : register(b0, space1) {
@@ -45,6 +47,7 @@ struct Input {
     float2 uv : UV_INPUT;
     float4 base_color : BASE_COLOR_INPUT;  // a: the material's alpha factor
     float4 normal0 : CUTOFF_INPUT;         // w: the alpha cutoff
+    uint4 effects : EFFECTS_INPUT;         // MeshInstance::effects: z, the dissolve (milestone 9 bis, part 2)
 #endif
 };
 
@@ -52,6 +55,8 @@ struct Input {
 struct Output {
     float2 uv : TEXCOORD0;
     nointerpolation float2 alpha : TEXCOORD1;  // x: alpha factor, y: cutoff
+    float3 local : TEXCOORD2;                  // the point relative to the instance's place (the dissolve's pattern)
+    nointerpolation float dissolve : TEXCOORD3;
     float4 position : SV_Position;
 };
 #endif
@@ -68,9 +73,12 @@ float4 world_position_of(Input input) {
 #ifdef MASKED
 Output main(Input input) {
     Output output;
-    output.position = mul(light_view_projection, world_position_of(input));
+    const float4 world_position = world_position_of(input);
+    output.position = mul(light_view_projection, world_position);
     output.uv = input.uv;
     output.alpha = float2(input.base_color.a, input.normal0.w);
+    output.local = world_position.xyz - float3(input.world0.w, input.world1.w, input.world2.w);
+    output.dissolve = f16tof32(input.effects.z);
     return output;
 }
 #else

@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "moteur/audio_reverb.hpp"
 #include "moteur/camera3d.hpp"
 
 namespace moteur {
@@ -45,6 +46,25 @@ const char* sound_group_name(SoundGroup group) {
 }
 
 // --- miniaudio's objects
+
+namespace {
+
+// A bus's reverberation, as a miniaudio node (one input, one output): the engine's Reverb.
+struct ReverbNode {
+    ma_node_base base;  // first: miniaudio sees the node through it
+    std::unique_ptr<audio::Reverb> reverb;
+
+    static void process(ma_node* node, const float** in, ma_uint32* frames_in, float** out, ma_uint32* frames_out) {
+        auto* self = reinterpret_cast<ReverbNode*>(node);
+        const ma_uint32 frames = std::min(*frames_in, *frames_out);
+        self->reverb->process(in[0], out[0], frames);
+        *frames_out = frames;
+    }
+};
+
+ma_node_vtable reverb_vtable = {&ReverbNode::process, nullptr, 1, 1, 0};
+
+}  // namespace
 
 struct Audio::Engine {
     ma_engine engine;  // first: the device's user data points to it, and so to this Engine
@@ -127,8 +147,11 @@ struct Audio::Voice {
     std::shared_ptr<const std::vector<float>> samples;  // alive while the audio thread reads them
     ma_audio_buffer_ref buffer{};
     ma_sound sound{};
+    ma_lpf_node filter{};  // PlaySound::filtered: between the sound and its bus
     bool buffer_initialized = false;
     bool sound_initialized = false;
+    bool filter_initialized = false;
+    float cutoff = 0.0f;   // the filter's, Hz (0: open)
     PlaySound options;
     float volume = 1.0f;  // with its random variation
     std::uintptr_t key = 0;
@@ -139,6 +162,9 @@ struct Audio::Voice {
     ~Voice() {
         if (sound_initialized) {
             ma_sound_uninit(&sound);
+        }
+        if (filter_initialized) {
+            ma_lpf_node_uninit(&filter, nullptr);
         }
         if (buffer_initialized) {
             ma_audio_buffer_ref_uninit(&buffer);
@@ -164,6 +190,29 @@ struct Audio::MusicVoice {
         }
         if (decoder_initialized) {
             ma_decoder_uninit(&decoder);
+        }
+    }
+};
+
+// A bus: a sound group (the base ones are the Engine's groups), its mix volume and pause, and a
+// reverberation inserted after it.
+struct Audio::Bus {
+    std::string name;
+    int parent = -1;
+    float volume = 1.0f;
+    bool paused = false;
+    ma_sound_group own{};       // an added bus's group
+    ma_sound_group* group = nullptr;
+    bool own_initialized = false;
+    ReverbNode reverb{};
+    bool reverb_initialized = false;
+
+    ~Bus() {
+        if (own_initialized) {
+            ma_sound_group_uninit(&own);
+        }
+        if (reverb_initialized) {
+            ma_node_uninit(&reverb, nullptr);
         }
     }
 };
@@ -198,6 +247,12 @@ Audio::Audio(const AudioConfig& config) : engine_(std::make_unique<Engine>()) {
         ma_sound_group_init(&e.engine, 0, nullptr, &group);
     }
     e.groups_initialized = true;
+    for (int i = 0; i < kSoundGroupCount; ++i) {
+        auto bus = std::make_unique<Bus>();
+        bus->name = sound_group_name(static_cast<SoundGroup>(i));
+        bus->group = &e.groups[static_cast<std::size_t>(i)];
+        buses_.push_back(std::move(bus));
+    }
     if (e.has_device) {
         const AudioStats s = stats();
         SDL_Log("Audio: %s, %d Hz, %d channels, %.1f ms of buffer", s.device_name.c_str(), e.sample_rate, e.channels,
@@ -212,7 +267,193 @@ Audio::~Audio() {
     music_.reset();
     fading_musics_.clear();
     streams_.clear();
+    // Children before their parents, then the base buses' reverbs, before the groups.
+    while (!buses_.empty()) {
+        buses_.pop_back();
+    }
     engine_.reset();
+}
+
+// --- Buses
+
+int Audio::add_bus(const std::string& name, int parent) {
+    if (const int found = find_bus(name); found >= 0) {
+        return found;
+    }
+    if (parent < 0 || parent >= static_cast<int>(buses_.size())) {
+        throw std::invalid_argument("Audio: no bus " + std::to_string(parent) + " to put '" + name + "' under");
+    }
+    auto bus = std::make_unique<Bus>();
+    bus->name = name;
+    bus->parent = parent;
+    if (engine_->initialized) {
+        if (ma_sound_group_init(&engine_->engine, 0, buses_[static_cast<std::size_t>(parent)]->group, &bus->own) == MA_SUCCESS) {
+            bus->own_initialized = true;
+            bus->group = &bus->own;
+        }
+    }
+    buses_.push_back(std::move(bus));
+    return static_cast<int>(buses_.size()) - 1;
+}
+
+int Audio::find_bus(std::string_view name) const {
+    for (std::size_t i = 0; i < buses_.size(); ++i) {
+        if (buses_[i]->name == name) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+int Audio::bus_count() const {
+    return static_cast<int>(buses_.size());
+}
+
+const std::string& Audio::bus_name(int bus) const {
+    static const std::string none;
+    return bus >= 0 && bus < bus_count() ? buses_[static_cast<std::size_t>(bus)]->name : none;
+}
+
+void Audio::set_bus_volume(int bus, float volume) {
+    if (bus < 0 || bus >= bus_count()) {
+        return;
+    }
+    buses_[static_cast<std::size_t>(bus)]->volume = std::max(0.0f, volume);
+    apply_bus(bus);
+}
+
+float Audio::bus_volume(int bus) const {
+    return bus >= 0 && bus < bus_count() ? buses_[static_cast<std::size_t>(bus)]->volume : 1.0f;
+}
+
+void Audio::set_bus_paused(int bus, bool paused) {
+    if (bus < 0 || bus >= bus_count()) {
+        return;
+    }
+    buses_[static_cast<std::size_t>(bus)]->paused = paused;
+    apply_bus(bus);
+}
+
+void Audio::apply_bus(int index) {
+    if (!engine_->initialized) {
+        return;
+    }
+    if (index < kSoundGroupCount) {
+        apply_group(static_cast<SoundGroup>(index));  // the player's slider and pause with the mix's
+        return;
+    }
+    Bus& bus = *buses_[static_cast<std::size_t>(index)];
+    if (bus.group == nullptr) {
+        return;
+    }
+    ma_sound_group_set_volume(bus.group, bus.volume);
+    if (bus.paused) {
+        ma_sound_group_stop(bus.group);
+    } else {
+        ma_sound_group_start(bus.group);
+    }
+}
+
+void Audio::set_bus_reverb(int index, const ReverbSettings& settings) {
+    Engine& e = *engine_;
+    if (!e.initialized || index < 0 || index >= kSoundGroupCount) {
+        return;
+    }
+    Bus& bus = *buses_[static_cast<std::size_t>(index)];
+    if (!bus.reverb_initialized) {
+        if (settings.wet <= 0.0f) {
+            return;  // nothing to hear: no node yet
+        }
+        // Inserted after the group: group -> reverb -> the engine's endpoint.
+        bus.reverb.reverb = std::make_unique<audio::Reverb>(e.channels, e.sample_rate);
+        const auto channels = static_cast<ma_uint32>(e.channels);
+        ma_node_config config = ma_node_config_init();
+        config.vtable = &reverb_vtable;
+        config.pInputChannels = &channels;
+        config.pOutputChannels = &channels;
+        if (ma_node_init(ma_engine_get_node_graph(&e.engine), &config, nullptr, &bus.reverb) != MA_SUCCESS) {
+            bus.reverb.reverb.reset();
+            return;
+        }
+        bus.reverb_initialized = true;
+        ma_node_attach_output_bus(&bus.reverb, 0, ma_engine_get_endpoint(&e.engine), 0);
+        ma_node_attach_output_bus(bus.group, 0, &bus.reverb, 0);
+    }
+    bus.reverb.reverb->set(settings.room, settings.damping, settings.wet);
+}
+
+void* Audio::bus_node(SoundGroup group, int bus) {
+    if (bus >= 0 && bus < bus_count() && buses_[static_cast<std::size_t>(bus)]->group != nullptr) {
+        return buses_[static_cast<std::size_t>(bus)]->group;
+    }
+    return &engine_->groups[static_cast<std::size_t>(group)];
+}
+
+void Audio::set_lowpass(SoundId sound, float hz) {
+    for (auto& voice : voices_) {
+        if (voice->id != sound || !voice->filter_initialized) {
+            continue;
+        }
+        // Small changes are not worth a new filter (it costs a reinit on the main thread).
+        const float open = static_cast<float>(engine_->sample_rate) * 0.45f;
+        const float cutoff = hz > 0.0f ? std::min(hz, open) : open;
+        if (std::fabs(cutoff - voice->cutoff) <= voice->cutoff * 0.05f) {
+            continue;
+        }
+        voice->cutoff = cutoff;
+        const ma_lpf_config config = ma_lpf_config_init(ma_format_f32, static_cast<ma_uint32>(engine_->channels),
+                                                        static_cast<ma_uint32>(engine_->sample_rate), cutoff, 2);
+        ma_lpf_node_reinit(&config, &voice->filter);
+    }
+}
+
+void Audio::set_pitch(SoundId sound, float pitch) {
+    for (auto& voice : voices_) {
+        if (voice->id == sound) {
+            ma_sound_set_pitch(&voice->sound, std::max(0.05f, pitch));
+        }
+    }
+    for (auto& stream : streams_) {
+        if (stream->id == sound) {
+            ma_sound_set_pitch(&stream->sound, std::max(0.05f, pitch));
+        }
+    }
+}
+
+void Audio::stop_at(SoundId sound, std::uint64_t frame, float fade_seconds) {
+    const auto fade = static_cast<ma_uint64>(std::max(0.0f, fade_seconds) * static_cast<float>(engine_->sample_rate));
+    for (auto& stream : streams_) {
+        if (stream->id == sound && !stream->stopping) {
+            ma_sound_set_stop_time_with_fade_in_pcm_frames(&stream->sound, frame, fade);
+            stream->stopping = true;
+        }
+    }
+    for (auto& voice : voices_) {
+        if (voice->id == sound && !voice->stopping) {
+            ma_sound_set_stop_time_with_fade_in_pcm_frames(&voice->sound, frame, fade);
+            voice->stopping = true;
+        }
+    }
+}
+
+std::uint64_t Audio::time_frames() const {
+    return engine_->initialized ? ma_engine_get_time_in_pcm_frames(&engine_->engine) : 0;
+}
+
+int Audio::sample_rate() const {
+    return engine_->sample_rate;
+}
+
+std::optional<double> Audio::stream_seconds(SoundId sound) const {
+    for (const auto& stream : streams_) {
+        if (stream->id == sound && stream->sound_initialized) {
+            float seconds = 0.0f;
+            if (ma_sound_get_cursor_in_seconds(&stream->sound, &seconds) == MA_SUCCESS) {
+                return static_cast<double>(seconds);
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 // --- Effects
@@ -342,7 +583,7 @@ float Audio::random_between(float low, float high) {
 float Audio::loudness(const PlaySound& options, float volume) const {
     float gain = volume;
     if (options.position) {
-        gain *= place_sound(listener_, *options.position, attenuation).gain;
+        gain *= place_sound(listener_, *options.position, options.attenuation.value_or(attenuation)).gain;
     }
     return gain;
 }
@@ -350,7 +591,7 @@ float Audio::loudness(const PlaySound& options, float volume) const {
 void Audio::apply_placement(Voice& voice) {
     Placement placement;
     if (voice.options.position) {
-        placement = place_sound(listener_, *voice.options.position, attenuation);
+        placement = place_sound(listener_, *voice.options.position, voice.options.attenuation.value_or(attenuation));
     }
     voice.loudness = voice.volume * placement.gain;
     ma_sound_set_volume(&voice.sound, voice.loudness);
@@ -360,7 +601,7 @@ void Audio::apply_placement(Voice& voice) {
 void Audio::apply_placement(MusicVoice& stream) {
     Placement placement;
     if (stream.options.position) {
-        placement = place_sound(listener_, *stream.options.position, attenuation);
+        placement = place_sound(listener_, *stream.options.position, stream.options.attenuation.value_or(attenuation));
     }
     ma_sound_set_volume(&stream.sound, std::max(stream.options.volume, 0.0f) * placement.gain);
     ma_sound_set_pan(&stream.sound, placement.pan);
@@ -385,14 +626,33 @@ void Audio::start(Request& request, float) {
     }
     voice->buffer_initialized = true;
     voice->buffer.sampleRate = static_cast<ma_uint32>(sound.sample_rate);  // resampled to the engine's rate
-    ma_sound_group* group = &e.groups[static_cast<std::size_t>(o.group)];
-    const ma_result result = ma_sound_init_from_data_source(&e.engine, &voice->buffer, MA_SOUND_FLAG_NO_SPATIALIZATION,
-                                                            group, &voice->sound);
+    auto* group = static_cast<ma_sound_group*>(bus_node(o.group, o.bus));
+    ma_node* into = group;
+    if (o.filtered) {
+        // A low-pass between the sound and its bus (occlusion, automations).
+        const float open = static_cast<float>(e.sample_rate) * 0.45f;
+        voice->cutoff = o.lowpass > 0.0f ? std::min(o.lowpass, open) : open;
+        const ma_lpf_node_config config = ma_lpf_node_config_init(static_cast<ma_uint32>(e.channels),
+                                                                  static_cast<ma_uint32>(e.sample_rate), voice->cutoff, 2);
+        if (ma_lpf_node_init(ma_engine_get_node_graph(&e.engine), &config, nullptr, &voice->filter) == MA_SUCCESS) {
+            voice->filter_initialized = true;
+            ma_node_attach_output_bus(&voice->filter, 0, group, 0);
+            into = &voice->filter;
+        }
+    }
+    ma_sound_config config = ma_sound_config_init_2(&e.engine);
+    config.pDataSource = &voice->buffer;
+    config.flags = MA_SOUND_FLAG_NO_SPATIALIZATION;
+    config.pInitialAttachment = into;
+    const ma_result result = ma_sound_init_ex(&e.engine, &config, &voice->sound);
     if (result != MA_SUCCESS) {
         SDL_Log("Audio: cannot play '%s': %s", sound.name.c_str(), ma_result_description(result));
         return;
     }
     voice->sound_initialized = true;
+    if (o.start_at > 0) {
+        ma_sound_set_start_time_in_pcm_frames(&voice->sound, o.start_at);
+    }
     ma_sound_set_pitch(&voice->sound, std::max(0.05f, o.pitch * (1.0f + random_between(-o.pitch_variation, o.pitch_variation))));
     ma_sound_set_looping(&voice->sound, o.loop ? MA_TRUE : MA_FALSE);
     apply_placement(*voice);
@@ -429,7 +689,7 @@ void Audio::play_music(const Asset<Music>& music, float crossfade_seconds, float
     music_ = std::move(voice);
 }
 
-std::unique_ptr<Audio::MusicVoice> Audio::open_stream(const Asset<Music>& music, SoundGroup group) {
+std::unique_ptr<Audio::MusicVoice> Audio::open_stream(const Asset<Music>& music, SoundGroup group, int bus) {
     auto voice = std::make_unique<MusicVoice>();
     voice->asset = music;
     voice->bytes = music->bytes;
@@ -441,7 +701,7 @@ std::unique_ptr<Audio::MusicVoice> Audio::open_stream(const Asset<Music>& music,
     voice->decoder_initialized = true;
     Engine& e = *engine_;
     const ma_result result = ma_sound_init_from_data_source(&e.engine, &voice->decoder, MA_SOUND_FLAG_NO_SPATIALIZATION,
-                                                            &e.groups[static_cast<std::size_t>(group)], &voice->sound);
+                                                            static_cast<ma_sound_group*>(bus_node(group, bus)), &voice->sound);
     if (result != MA_SUCCESS) {
         SDL_Log("Audio: cannot play '%s': %s", music->name.c_str(), ma_result_description(result));
         return nullptr;
@@ -454,9 +714,12 @@ SoundId Audio::play_stream(const Asset<Music>& stream, const PlaySound& options)
     if (!engine_->initialized || !stream || !stream->bytes || stream->bytes->empty()) {
         return kNoSound;
     }
-    std::unique_ptr<MusicVoice> voice = open_stream(stream, options.group);
+    std::unique_ptr<MusicVoice> voice = open_stream(stream, options.group, options.bus);
     if (!voice) {
         return kNoSound;
+    }
+    if (options.start_at > 0) {
+        ma_sound_set_start_time_in_pcm_frames(&voice->sound, options.start_at);
     }
     voice->id = next_id_++;
     voice->options = options;
@@ -507,8 +770,9 @@ void Audio::apply_group(SoundGroup group) {
     }
     const Group& g = groups_[static_cast<std::size_t>(group)];
     ma_sound_group* node = &engine_->groups[static_cast<std::size_t>(group)];
-    ma_sound_group_set_volume(node, slider_gain(g.slider));
-    if (g.paused) {
+    const Bus* mix = static_cast<std::size_t>(group) < buses_.size() ? buses_[static_cast<std::size_t>(group)].get() : nullptr;
+    ma_sound_group_set_volume(node, slider_gain(g.slider) * (mix != nullptr ? mix->volume : 1.0f));
+    if (g.paused || (mix != nullptr && mix->paused)) {
         ma_sound_group_stop(node);
     } else {
         ma_sound_group_start(node);
@@ -644,14 +908,20 @@ void Audio::update() {
     watch_device();
 
     // Ended voices go (their sound handle with them: the asset can be collected).
-    std::erase_if(voices_, [](const std::unique_ptr<Voice>& voice) {
-        return !voice->sound_initialized || !ma_sound_is_playing(&voice->sound) || ma_sound_at_end(&voice->sound);
+    const ma_uint64 now = ma_engine_get_time_in_pcm_frames(&engine_->engine);
+    const auto waiting = [now](const ma_sound& sound) {
+        // Scheduled to start later (PlaySound::start_at): not playing yet, not ended.
+        return ma_node_get_state_time(&sound, ma_node_state_started) > now;
+    };
+    std::erase_if(voices_, [&](const std::unique_ptr<Voice>& voice) {
+        return !voice->sound_initialized ||
+               ((!ma_sound_is_playing(&voice->sound) && !waiting(voice->sound)) || ma_sound_at_end(&voice->sound));
     });
     std::erase_if(fading_musics_, [](const std::unique_ptr<MusicVoice>& music) {
         return !ma_sound_is_playing(&music->sound);
     });
-    std::erase_if(streams_, [](const std::unique_ptr<MusicVoice>& stream) {
-        return !ma_sound_is_playing(&stream->sound) || ma_sound_at_end(&stream->sound);
+    std::erase_if(streams_, [&](const std::unique_ptr<MusicVoice>& stream) {
+        return (!ma_sound_is_playing(&stream->sound) && !waiting(stream->sound)) || ma_sound_at_end(&stream->sound);
     });
 
     // The listener may have moved, and so may the sources.

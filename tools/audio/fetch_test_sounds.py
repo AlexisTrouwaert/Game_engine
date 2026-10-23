@@ -1,4 +1,4 @@
-"""Downloads the test sounds and musics into assets/audio/ (about 11 MB), not kept in Git.
+"""Downloads the test sounds and musics into assets/audio/ (about 12 MB), not kept in Git.
 
     python tools/audio/fetch_test_sounds.py
 
@@ -6,8 +6,9 @@ All are under CC0 (public domain, no attribution required); their authors are cr
 assets/credits.json and in the "About" window of the sandbox. Keep this list and that file in
 step.
 
-- Kenney (https://kenney.nl): "Impact Sounds" (footsteps on stone, metal impacts) and "Interface
-  Sounds" (clicks), OGG Vorbis. Only a few files of each pack are kept, with the pack's License.txt.
+- Kenney (https://kenney.nl): "Impact Sounds" (the whole pack: footsteps on five grounds, impacts of
+  metal, wood, glass...) and "Interface Sounds" (a few clicks), OGG Vorbis, with each pack's
+  License.txt.
 - OpenGameArt (https://opengameart.org): two musics and an ambience (MP3, as published) and a
   burning fire (WAV), used as a sound placed in the world.
 
@@ -24,13 +25,23 @@ import zipfile
 
 USER_AGENT = {"User-Agent": "moteur-engine-test-assets/1.0"}
 
+# The families of Kenney's "Impact Sounds" (each one five takes, _000 to _004).
+IMPACT_FAMILIES = [
+    "footstep_carpet", "footstep_concrete", "footstep_grass", "footstep_snow", "footstep_wood",
+    "impactBell_heavy", "impactGeneric_light", "impactGlass_heavy", "impactGlass_light", "impactGlass_medium",
+    "impactMetal_heavy", "impactMetal_light", "impactMetal_medium", "impactMining", "impactPlank_medium",
+    "impactPlate_heavy", "impactPlate_light", "impactPlate_medium", "impactPunch_heavy", "impactPunch_medium",
+    "impactSoft_heavy", "impactSoft_medium", "impactTin_medium", "impactWood_heavy", "impactWood_light",
+    "impactWood_medium",
+]
+
 # (url, sha256, {file in the zip: destination under assets/audio/}) for the zips,
 # (url, sha256, destination) for single files.
 PACKS = [
     ("https://kenney.nl/media/pages/assets/impact-sounds/87b4ddecda-1677589768/kenney_impact-sounds.zip",
      "029d734af1582474edf3a694d1b0cebc97c1c152f2f39fa34d4c2bafc5de77f8",
-     {**{f"Audio/footstep_concrete_00{i}.ogg": f"kenney_impact/footstep_concrete_00{i}.ogg" for i in range(5)},
-      **{f"Audio/impactMetal_light_00{i}.ogg": f"kenney_impact/impactMetal_light_00{i}.ogg" for i in range(5)},
+     # The whole pack (milestone 9 bis, part 7: the events choose among them): 26 families of 5.
+     {**{f"Audio/{family}_00{i}.ogg": f"kenney_impact/{family}_00{i}.ogg" for family in IMPACT_FAMILIES for i in range(5)},
       "License.txt": "kenney_impact/License.txt"}),
     ("https://kenney.nl/media/pages/assets/interface-sounds/fa43c1dd4d-1677589452/kenney_interface-sounds.zip",
      "f2193d072726d6758a5f7871b2dcc54dcce0d5c35c6f0a62f92549b327c81232",

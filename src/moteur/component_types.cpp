@@ -79,6 +79,7 @@ void ComponentTypes::add_engine_components() {
     add<Collider>("collider", upgrade_from_array({"radius", "layer", "mask", "push_weight", "blocked_by_walls"}));
     add<Mover>("mover", upgrade_mover);
     add<ModelComponent>("model");
+    add<MaterialEffects>("material_effects");
     add<LightHalo>("halo");
     add<StaticCollision>("static_collision");
     add<Selectable>("selectable");

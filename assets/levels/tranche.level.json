@@ -11763,6 +11763,20 @@
       ]
     },
     {
+      "name": "fantome",
+      "position": [
+        -2.3,
+        0.35,
+        24.0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
       "name": "tour_01",
       "position": [
         0,

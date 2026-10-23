@@ -17,6 +17,10 @@
     "zstd",
     "recastnavigation",
     {
+      "name": "harfbuzz",
+      "default-features": false
+    },
+    {
       "name": "ktx",
       "features": ["tools"]
     },
@@ -34,6 +38,15 @@
     }
   ],
   "features": {
+    "mac-shaders": {
+      "description": "macOS: the shaders compiled on the Mac itself (option MOTEUR_MAC_SHADERCROSS) instead of the MSL generated on Windows; needs the LunarG Vulkan SDK (its DXC). Not tried yet.",
+      "dependencies": [
+        {
+          "name": "sdl3-shadercross-macos",
+          "platform": "osx"
+        }
+      ]
+    },
     "tracy": {
       "description": "Tracy profiler (option MOTEUR_TRACY): the engine's zones are also sent to Tracy",
       "dependencies": [

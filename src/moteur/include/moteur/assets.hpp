@@ -22,6 +22,7 @@
 #include "moteur/prefab.hpp"
 #include "moteur/reflection_io.hpp"
 #include "moteur/sound.hpp"
+#include "moteur/sound_bank.hpp"
 #include "moteur/texture_atlas.hpp"
 
 namespace moteur {
@@ -29,6 +30,7 @@ namespace moteur {
 /// The kinds of asset the manager caches, in the order of Assets::stats() and Assets::infos().
 enum class AssetType : std::size_t {
     Texture, Model, Environment, Font, Atlas, Sound, Music, Skeleton, Clips, AnimationSet, Map, Effect, Prefab,
+    Material, SoundBank,
     Count
 };
 
@@ -98,8 +100,12 @@ public:
     /// shipped game has only that form, in its archives.
     Asset<Model> model(std::string_view path);
     Asset<Environment> environment(std::string_view path);  ///< an equirectangular .hdr
-    /// A TrueType font rasterized at `pixel_height` pixels: each size is a font of its own.
-    Asset<Font> font(std::string_view path, float pixel_height);
+    /// A font file (.ttf, .otf) or a font stack (.font.json, see Font::load()): any size, given
+    /// when drawing. The fonts of the assets share one library (font files read once, one glyph
+    /// atlas: font_library()). Reloaded when the stack or one of its files changes.
+    Asset<Font> font(std::string_view path);
+    /// The library the fonts share (made on first use).
+    const std::shared_ptr<FontLibrary>& font_library();
     Asset<TextureAtlas> atlas(std::string_view path);  ///< the .json of an atlas
     /// A short sound, decoded into memory (WAV, OGG, FLAC, MP3); a failed one beeps instead.
     Asset<Sound> sound(std::string_view path);
@@ -128,6 +134,13 @@ public:
     /// valid (with every problem), or for a cycle of prefabs. Reloaded with the files it is made from
     /// (its own, its bases', its nested prefabs'): what is already instantiated keeps its entities.
     Asset<Prefab> prefab(std::string_view path);
+    /// A material file (a `.material.json`, see parse_material()), its textures loaded through this
+    /// manager and held. Throws if it cannot be read or is not valid. Reloaded in place: the
+    /// entities that use it take the new values at the next frame.
+    Asset<Material> material(std::string_view path);
+    /// A sound bank (a `.bank.json`, see moteur::SoundBank; milestone 9 bis, part 7). Throws if it
+    /// cannot be read or is not valid. Reloaded in place: AudioEvents takes it at its next update.
+    Asset<moteur::SoundBank> sound_bank(std::string_view path);
 
     /// Imports every model of `registry` whose prepared form in `cache` (see set_import_cache(); `root`
     /// is the program's assets folder, both ending with a separator) is missing or out of date, in parallel on
@@ -280,6 +293,7 @@ private:
     AssetCache<Model> models_;
     AssetCache<Environment> environments_;
     AssetCache<Font> fonts_;
+    std::shared_ptr<FontLibrary> font_library_;
     AssetCache<TextureAtlas> atlases_;
     AssetCache<Sound> sounds_;
     AssetCache<Music> musics_;
@@ -289,6 +303,8 @@ private:
     AssetCache<MapData> maps_;
     AssetCache<ParticleEffect> effects_;
     AssetCache<Prefab> prefabs_;
+    AssetCache<Material> materials_;
+    AssetCache<moteur::SoundBank> sound_banks_;
     std::vector<std::string> prefabs_loading_;  ///< the prefabs being loaded now, to refuse a cycle
     std::unique_ptr<Watcher> watcher_;
     std::vector<std::unique_ptr<Watcher>> mounted_watchers_;  ///< mounted asset folders, reloaded in place

@@ -1,5 +1,10 @@
 // 3D mesh, fragment stage: physically based shading, the glTF metal / roughness model.
 //
+// With TRANSPARENT defined (mesh_transparent.frag.hlsl; milestone 9 bis, part 2): a blended
+// material, drawn after the opaque scene: one output, premultiplied by the surface's alpha (its
+// emitted light too).
+//
+// The material's effects (material_effects.hlsli): dissolve, flash, uv scroll, emissive pulse.
 // SDL_GPU resource layout for a fragment shader: textures and samplers live in space2, uniform
 // buffers in space3. Outputs: linear HDR radiance (tone mapped later, see tonemap.frag.hlsl), and
 // the distance of the surface along the view, in metres (milestone 7: the soft particles read it).
@@ -49,9 +54,11 @@ cbuffer Frame : register(b0, space3) {
     float4 cutout;      // xyz: the point kept visible (the hero); w: radius (m) of the dithered hole, 0 off
     float4 view_forward;  // xyz: the direction the camera looks (unit)
     float4 ceiling;       // x: height above the cutout's focus that is cut away (0: off); y: radius (m)
+    float4 time;          // x: seconds, the game's clock (uv scroll, emissive pulse)
 };
 
 #include "alpha_test.hlsli"
+#include "material_effects.hlsli"
 
 static const float PI = 3.14159265;
 
@@ -67,6 +74,7 @@ struct Input {
     float joint_weight : TEXCOORD7;                 // weights view (see mesh.vert.hlsl)
     nointerpolation float3 origin : TEXCOORD8;      // the instance's place (see mesh.vert.hlsl)
     nointerpolation float alpha_cutoff : TEXCOORD9; // 0: opaque material (see alpha_test.hlsli)
+    nointerpolation uint4 effects : TEXCOORD10;     // packed (MeshInstance::effects, material_effects.hlsli)
     float4 position : SV_Position;                  // pixel of the target (the cutout's dithering)
     bool front : SV_IsFrontFace;
 };
@@ -235,7 +243,12 @@ void cut_out(Input input) {
 }
 
 float4 shade(Input input) {
+#ifndef TRANSPARENT
     cut_out(input);
+#endif
+    // The dissolve first: what it removed is not shaded. Its pattern follows the object.
+    const float edge = dissolve(input.world_position - input.origin, effects_dissolve(input.effects));
+    input.uv += effects_uv_scroll(input.effects) * time.x;
     const float4 base_color = input.base_color * base_color_texture.Sample(base_color_sampler, input.uv);
     alpha_test(base_color.a, input.alpha_cutoff);
     const float4 metal_rough = metallic_roughness_texture.Sample(metallic_roughness_sampler, input.uv);
@@ -317,12 +330,34 @@ float4 shade(Input input) {
     const float occlusion = lerp(1.0, occlusion_texture.Sample(occlusion_sampler, input.uv).r, input.factors.w);
     color += ambient * occlusion * environment.x;
 
-    color += input.emissive.rgb * emissive_texture.Sample(emissive_sampler, input.uv).rgb;
+    // A hit: the lit surface pulled towards the flash's color (stored / 4, see MeshInstance::colors).
+    const float4 flash = effects_flash(input.effects);
+    color = lerp(color, flash.rgb, flash.a);
+
+    float3 emitted = input.emissive.rgb * emissive_texture.Sample(emissive_sampler, input.uv).rgb;
+    const float pulse = effects_emissive_pulse(input.effects);
+    if (pulse > 0.0) {
+        emitted *= 0.7 + 0.3 * sin(time.x * pulse * 2.0 * PI);  // between 40 % and 100 %
+    }
+    emitted += effects_dissolve_edge(input.effects) * edge;
+#ifdef TRANSPARENT
+    // Premultiplied: the surface's light, reflected and its own, by its alpha (a ghost thins out
+    // where its veil does; a glow that ignores the alpha is a particle's work).
+    color = (color + emitted) * base_color.a;
+    return float4(apply_fog(color, input.world_position - geometric_normal * 0.3), base_color.a);
+#else
+    color += emitted;
     // Read a little inside the surface: a wall's face lies exactly on the edge between its cell and
     // the next one (outside the map at the border), which would flicker between the two.
     return float4(apply_fog(color, input.world_position - geometric_normal * 0.3), 1.0);
+#endif
 }
 
+#ifdef TRANSPARENT
+float4 main(Input input) : SV_Target0 {
+    return shade(input);
+}
+#else
 struct Output {
     float4 color : SV_Target0;
     float depth : SV_Target1;  // metres along the view: the same measure as billboard.frag.hlsl's
@@ -334,3 +369,4 @@ Output main(Input input) {
     output.depth = dot(input.world_position - eye.xyz, view_forward.xyz);
     return output;
 }
+#endif

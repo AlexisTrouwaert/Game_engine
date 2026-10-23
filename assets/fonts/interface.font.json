@@ -1,0 +1,4 @@
+{
+  "faces": ["Inter-Regular.ttf", "noto/NotoSansArabic.ttf", "noto/NotoSansSC.ttf"],
+  "prepare": "latin"
+}

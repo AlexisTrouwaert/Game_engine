@@ -10,7 +10,7 @@ struct type_ToneMapping
     float4 outline;
 };
 
-constant bool _62 = {};
+constant bool _61 = {};
 
 struct main0_out
 {
@@ -25,128 +25,128 @@ struct main0_in
 fragment main0_out main0(main0_in in [[stage_in]], constant type_ToneMapping& ToneMapping [[buffer(0)]], texture2d<float> scene [[texture(0)]], texture2d<uint> ids [[texture(1)]], sampler scene_sampler [[sampler(0)]])
 {
     main0_out out = {};
-    float4 _70 = scene.sample(scene_sampler, in.in_var_TEXCOORD0);
-    float3 _74 = _70.xyz * ToneMapping.settings.x;
-    float3 _122;
+    float4 _69 = scene.sample(scene_sampler, in.in_var_TEXCOORD0);
+    float3 _73 = _69.xyz * ToneMapping.settings.x;
+    float3 _121;
     if (ToneMapping.settings.y > 0.5)
     {
-        _122 = fast::clamp(_74, float3(0.0), float3(1.0));
+        _121 = fast::clamp(_73, float3(0.0), float3(1.0));
     }
     else
     {
-        float3 _82 = precise::max(_74, float3(0.0));
-        float3 _121;
+        float3 _81 = precise::max(_73, float3(0.0));
+        float3 _120;
         do
         {
-            float _89 = precise::min(_82.x, precise::min(_82.y, _82.z));
-            float _97;
-            if (_89 < 0.07999999821186065673828125)
+            float _88 = precise::min(_81.x, precise::min(_81.y, _81.z));
+            float _96;
+            if (_88 < 0.07999999821186065673828125)
             {
-                _97 = _89 - ((6.25 * _89) * _89);
+                _96 = _88 - ((6.25 * _88) * _88);
             }
             else
             {
-                _97 = 0.039999999105930328369140625;
+                _96 = 0.039999999105930328369140625;
             }
-            float3 _99 = _82 - float3(_97);
-            float _104 = precise::max(_99.x, precise::max(_99.y, _99.z));
-            if (_104 < 0.7599999904632568359375)
+            float3 _98 = _81 - float3(_96);
+            float _103 = precise::max(_98.x, precise::max(_98.y, _98.z));
+            if (_103 < 0.7599999904632568359375)
             {
-                _121 = _99;
+                _120 = _98;
                 break;
             }
-            float _110 = 1.0 - (0.0576000027358531951904296875 / (_104 + (-0.519999980926513671875)));
-            _121 = mix(_99 * (_110 / _104), float3(_110), float3(1.0 - (1.0 / ((0.1500000059604644775390625 * (_104 - _110)) + 1.0))));
+            float _109 = 1.0 - (0.0576000027358531951904296875 / (_103 + (-0.519999980926513671875)));
+            _120 = mix(_98 * (_109 / _103), float3(_109), float3(1.0 - (1.0 / ((0.1500000059604644775390625 * (_103 - _109)) + 1.0))));
             break;
         } while(false);
-        _122 = _121;
+        _121 = _120;
     }
-    bool _188;
+    bool _187;
     do
     {
         if (ToneMapping.outline.x < 0.5)
         {
-            _188 = false;
+            _187 = false;
             break;
         }
-        uint _131 = uint(ToneMapping.outline.x + 0.5);
-        int2 _136 = int2(in.in_var_TEXCOORD0 * ToneMapping.outline.zw);
-        if (ids.read(uint2(int3(_136, 0).xy), 0).x == _131)
+        uint _130 = uint(ToneMapping.outline.x + 0.5);
+        int2 _135 = int2(in.in_var_TEXCOORD0 * ToneMapping.outline.zw);
+        if (ids.read(uint2(int3(_135, 0).xy), 0).x == _130)
         {
-            _188 = false;
+            _187 = false;
             break;
         }
-        int _149 = int(ToneMapping.outline.y);
-        int _150 = -_149;
-        bool _153;
-        bool _158;
-        bool _185;
-        bool _186;
-        bool _152 = false;
-        int _155 = _150;
+        int _148 = int(ToneMapping.outline.y);
+        int _149 = -_148;
+        bool _152;
         bool _157;
+        bool _184;
+        bool _185;
+        bool _151 = false;
+        int _154 = _149;
+        bool _156;
         for (;;)
         {
-            if (_155 <= _149)
+            if (_154 <= _148)
             {
-                int _163 = _150;
+                int _162 = _149;
                 for (;;)
                 {
-                    if (_163 <= _149)
+                    if (_162 <= _148)
                     {
-                        if (ids.read(uint2(int3(clamp(_136 + int2(_163, _155), int2(0), int2(ToneMapping.outline.zw) - int2(1)), 0).xy), 0).x == _131)
+                        if (ids.read(uint2(int3(clamp(_135 + int2(_162, _154), int2(0), int2(ToneMapping.outline.zw) - int2(1)), 0).xy), 0).x == _130)
                         {
-                            _158 = true;
-                            _153 = true;
+                            _157 = true;
+                            _152 = true;
                             break;
                         }
-                        _163++;
+                        _162++;
                         continue;
                     }
                     else
                     {
-                        _158 = _157;
-                        _153 = _152;
+                        _157 = _156;
+                        _152 = _151;
                         break;
                     }
                 }
-                if (_153)
+                if (_152)
                 {
-                    _185 = _158;
-                    _186 = _153;
+                    _184 = _157;
+                    _185 = _152;
                     break;
                 }
-                _152 = _153;
-                _155++;
-                _157 = _158;
+                _151 = _152;
+                _154++;
+                _156 = _157;
                 continue;
             }
             else
             {
-                _185 = _157;
-                _186 = _152;
+                _184 = _156;
+                _185 = _151;
                 break;
             }
         }
-        if (_186)
+        if (_185)
         {
-            _188 = _185;
+            _187 = _184;
             break;
         }
-        _188 = false;
+        _187 = false;
         break;
     } while(false);
-    float3 _198;
-    if (_188)
+    float3 _197;
+    if (_187)
     {
-        _198 = mix(_122, ToneMapping.outline_color.xyz, float3(ToneMapping.outline_color.w));
+        _197 = mix(_121, ToneMapping.outline_color.xyz, float3(ToneMapping.outline_color.w));
     }
     else
     {
-        _198 = _122;
+        _197 = _121;
     }
-    float3 _199 = fast::clamp(_198, float3(0.0), float3(1.0));
-    out.out_var_SV_Target0 = float4(mix((powr(_199, float3(0.4166666567325592041015625)) * 1.05499994754791259765625) - float3(0.054999999701976776123046875), _199 * 12.9200000762939453125, step(_199, float3(0.003130800090730190277099609375))), 1.0);
+    float3 _198 = fast::clamp(_197, float3(0.0), float3(1.0));
+    out.out_var_SV_Target0 = float4(mix((powr(_198, float3(0.4166666567325592041015625)) * 1.05499994754791259765625) - float3(0.054999999701976776123046875), _198 * 12.9200000762939453125, step(_198, float3(0.003130800090730190277099609375))), 1.0);
     return out;
 }
 

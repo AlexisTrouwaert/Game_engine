@@ -193,7 +193,31 @@ Application::Application(const ApplicationConfig& config) : config_(config) {
         data_ = std::make_unique<DataTables>();
         assets_->add_file_listener([this](const std::string& key) { data_->reload_file(assets_->root(), key); });
         add_console_commands();
+        // The texts (milestone 9 bis, part 5).
+        localization_ = std::make_unique<Localization>();
+        language_ = &console_->variables().add_text("language", "", "the language of the texts (empty: the system's)",
+                                                    Variable::Archive);
+        if (localization_->load(asset_path("locales"))) {
+            std::string language = config_.language;
+            if (language.empty()) {
+                language = language_->as_text();
+            }
+            if (language.empty() || !localization_->set_language(language)) {
+                localization_->set_language(localization_->preferred_language());
+            }
+            SDL_Log("Localization: %zu language(s), base %s, now %s", localization_->languages().size(),
+                    localization_->base_language().c_str(), localization_->language().c_str());
+            localize_fatal_messages();
+            assets_->add_file_listener([this](const std::string& key) {
+                if (key.rfind("locales/", 0) == 0) {
+                    const std::string language = localization_->language();
+                    localization_->load(asset_path("locales"));
+                    localization_->set_language(language);
+                }
+            });
+        }
         input_ = std::make_unique<Input>();
+        input_->set_localization(localization_.get());
         AudioConfig audio_config;
         audio_config.device = config_.audio;
         audio_ = std::make_unique<Audio>(audio_config);
@@ -317,8 +341,44 @@ std::string Application::variables_path() const {
     return directory.empty() ? std::string() : directory + "variables.cfg";
 }
 
+bool Application::set_language(std::string_view language) {
+    if (!localization_->set_language(language)) {
+        return false;
+    }
+    std::string error;
+    language_->set_text(language, error);
+    localize_fatal_messages();
+    return true;
+}
+
+void Application::localize_fatal_messages() {
+    // `{ $report }` given "{report}": the reporter puts the path there.
+    if (localization_->has("moteur-crash-message")) {
+        set_crash_message(localization_->format("moteur-crash-message", {{"report", "{report}"}}));
+    }
+    if (localization_->has("moteur-gpu-lost-message")) {
+        gpu_lost_message_ = localization_->format("moteur-gpu-lost-message", {{"report", "{report}"}});
+    }
+}
+
 void Application::add_console_commands() {
     Console& c = *console_;
+    c.add("language", "[code]", "shows or changes the language of the texts (qps: the pseudo-localization)",
+          Console::Kind::Tool, [this](const Console::Args& args, Console& out) {
+              if (args.empty()) {
+                  std::string list;
+                  for (const LanguageInfo& info : localization_->languages()) {
+                      list += " " + info.code;
+                  }
+                  out.print("language: " + localization_->language() + " (offered:" + list + ", qps)");
+                  return;
+              }
+              if (args[0] == kPseudoLanguage ? localization_->set_language(args[0]) : set_language(args[0])) {
+                  out.print("language: " + localization_->language());
+              } else {
+                  out.error("no language '" + args[0] + "'");
+              }
+          });
     c.add("quit", "", "quits the program", Console::Kind::Tool, [this](const Console::Args&, Console&) { quit(); });
     c.add("crash", "[acces|abort|exception|assertion|gpu|frame]",
           "crashes on purpose (checks the crash reports; frame: a GPU failure inside a frame, which must not end the game)",
@@ -810,7 +870,8 @@ void Application::run(Game& game) {
         }
         if (renderer_->device_lost()) {
             // Nothing can be drawn any more: the report, the player's message, a clean end.
-            report_fatal_error("GPU device lost: " + renderer_->device_lost_reason(), config_.gpu_lost_message);
+            report_fatal_error("GPU device lost: " + renderer_->device_lost_reason(),
+                               gpu_lost_message_.empty() ? config_.gpu_lost_message : gpu_lost_message_);
             ended_on_error_ = true;
             running_ = false;
             break;

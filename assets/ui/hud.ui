@@ -1,0 +1,14 @@
+<!-- In game: the figures and the help (top left), the health bars over the creatures and the
+     words of the blows (world labels, made from the templates). -->
+<ui modal="false" style="align-items: start; justify-content: start">
+    <style src="ui/tranche.uss"/>
+    <column class="hud">
+        <label class="headline" text="{$hud.world}"/>
+        <label text="{$hud.scene}"/>
+        <label text="{$hud.lights}"/>
+        <label text="{$hud.move}"/>
+        <label text="{$hud.actions}"/>
+    </column>
+    <template id="health"><bar class="health" value="{$item.value}"/></template>
+    <template id="flash"><label class="flash" text="{$item.text}"/></template>
+</ui>

@@ -1,0 +1,73 @@
+/* The look of the slice's interface (milestone 9 bis, part 6). Sizes in points (times the
+   interface's scale), colors as the sprites use them. */
+
+ui {
+    --text: #eeeef5;
+    --dim: #9ea6b8;
+    --accent: #f2bf4d;
+    --error: #ff7366;
+    --panel: #12121a;
+    --focus-text: #140f0a;
+    color: var(--text);
+    font-size: 16.5;
+    align-items: center;
+    justify-content: center;
+}
+
+ui.shade { background: rgba(0, 0, 0, 0.6); }
+ui.opaque { background: #0f0d17; }
+
+.panel {
+    background: var(--panel);
+    padding: 22;
+    gap: 6;
+    border-radius: 10;
+    border: 1 rgba(255, 255, 255, 0.07);
+}
+
+.title { font-size: 25; margin: 0 0 6 0; }
+.dim { color: var(--dim); }
+.error { color: var(--error); }
+.accent { color: #ffd95a; }
+.gap { height: 8; }
+
+button, select {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 6;
+    transition: background 0.12s ease-out, color 0.12s ease-out;
+}
+button:hover, select:hover { background: rgba(255, 255, 255, 0.16); }
+button:focus, select:focus { background: rgba(242, 191, 77, 0.95); color: var(--focus-text); }
+
+.setting { flex-direction: row; align-items: center; gap: 12; }
+.setting > label { width: 210; }
+.setting > select, .setting > slider { flex-grow: 1; }
+.setting > .value { width: 56; text-align: end; }
+
+slider { fill-color: var(--accent); color: #d8d8e0; }
+slider:focus { color: var(--accent); }
+
+.buttons { flex-direction: row; gap: 8; margin: 6 0 0 0; }
+.buttons > button { flex: 1; }
+
+.binding { justify-content: space-between; padding: 2 12; min-height: 28; }
+.binding > .keys { color: var(--dim); }
+.binding:focus > .keys { color: var(--focus-text); }
+
+.card { flex-direction: row; justify-content: start; gap: 12; padding: 6; border-radius: 8; background: rgba(255, 255, 255, 0.06); }
+.card:focus { background: rgba(242, 191, 77, 0.35); color: var(--text); }
+.card image { width: 160; height: 90; background: rgba(0, 0, 0, 0.5); border-radius: 4; }
+.card column { gap: 2; flex-grow: 1; align-items: start; }
+.card label { text-align: start; }
+
+bar { fill-color: var(--accent); border-radius: 3; }
+
+/* In game. */
+.hud { position: absolute; left: 20; top: 40; gap: 0; align-items: start; }
+.hud > label { color: #ccd8e6; text-outline: 1 rgba(0, 0, 0, 0.55); }
+.hud > .headline { color: var(--text); }
+.health { position: absolute; width: 44; height: 5; background: rgba(0, 0, 0, 0.6); fill-color: #4cd964; border-radius: 2; }
+.health.hurt { fill-color: #f2a23a; }
+.health.low { fill-color: #ff4d4d; }
+.health.selected { fill-color: #f2d94d; }
+.flash { position: absolute; width: 200; text-align: center; color: #ffd94d; text-outline: 1.5 rgba(0, 0, 0, 0.8); }

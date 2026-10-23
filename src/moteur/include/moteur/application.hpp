@@ -12,6 +12,7 @@
 #include "moteur/assets.hpp"
 #include "moteur/audio.hpp"
 #include "moteur/console.hpp"
+#include "moteur/localization.hpp"
 #include "moteur/data_table.hpp"
 #include "moteur/debug_tools.hpp"
 #include "moteur/display.hpp"
@@ -132,6 +133,11 @@ struct ApplicationConfig {
     /// archives are there, the program's files are read from them only (set_archives_only()).
     /// A missing folder, or empty: none.
     std::string archives_directory = "archives";
+    /// The language of the texts (milestone 9 bis, part 5), whatever the player chose: the checks
+    /// and captures, which must not depend on the machine (`--language` of the programs). Empty: the
+    /// player's choice (the archived variable `language`), else the system's preference among the
+    /// languages offered (Localization::preferred_language()).
+    std::string language;
 };
 
 /// The import cache of a program in development: `.imported/` next to its assets source folder
@@ -268,6 +274,16 @@ public:
     void step(int ticks) { pending_steps_ += ticks; }
     /// The player's input, as actions (see Input).
     Input& input() { return *input_; }
+    /// The texts of the player in their language (see Localization): `assets/locales/` read at the
+    /// start (the engine's `moteur` strings and the game's resources listed in languages.json),
+    /// read again when one of their files changes (development).
+    ///@{
+    Localization& localization() { return *localization_; }
+    const Localization& localization() const { return *localization_; }
+    ///@}
+    /// Changes the language at once (the interface redoes its texts: Localization::generation())
+    /// and keeps the player's choice (variable `language`). false for a language not offered.
+    bool set_language(std::string_view language);
     /// Sound and music (see Audio). Its settings (volumes) are the player's: read from audio.json in
     /// preferences_directory() at the start, written back at the end if they changed.
     Audio& audio() { return *audio_; }
@@ -319,6 +335,12 @@ private:
     bool paused_ = false;
     int pending_steps_ = 0;
     bool swallow_text_ = false;  ///< the console's key was pressed: its character is not typed
+    std::unique_ptr<Localization> localization_;
+    /// The crash and GPU-lost messages in the player's language (`moteur-crash-message`,
+    /// `moteur-gpu-lost-message`), when the strings have them.
+    void localize_fatal_messages();
+    std::string gpu_lost_message_;
+    Variable* language_ = nullptr;  ///< "language": the player's choice (archived)
     std::unique_ptr<Input> input_;
     std::unique_ptr<Audio> audio_;  ///< after the assets: its voices hold sounds, released first
 #if !defined(MOTEUR_SHIPPING)

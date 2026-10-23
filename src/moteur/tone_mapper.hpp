@@ -39,7 +39,6 @@ public:
 private:
     GpuGraphicsPipeline pipeline_;
     GpuSampler sampler_;
-    GpuSampler id_sampler_;
     GpuTexture no_ids_;  ///< 1 x 1, 0: bound when there is no id pass
     SDL_GPUTexture* ids_ = nullptr;
     std::uint32_t outline_id_ = 0;

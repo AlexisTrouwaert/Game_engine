@@ -3,6 +3,7 @@ find_package(ozz-animation CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
+find_package(harfbuzz CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(mikktspace CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
@@ -46,6 +47,7 @@ add_library(moteur STATIC
     atlas_builder.cpp
     audio.cpp
     audio_rules.cpp
+    bidi.cpp
     billboard_batcher.cpp
     billboard_renderer.cpp
     camera3d.cpp
@@ -75,10 +77,14 @@ add_library(moteur STATIC
     level_bake.cpp
     level_streamer.cpp
     level_collision.cpp
+    locale.cpp
+    localization.cpp
     file_io.cpp
     font.cpp
+    font_face.cpp
     frame_stats.cpp
     geometry_pool.cpp
+    glyph_atlas.cpp
     gizmo.cpp
     image.cpp
     map_data.cpp
@@ -92,6 +98,7 @@ add_library(moteur STATIC
     model.cpp
     model_import.cpp
     movement.cpp
+    msdf.cpp
     nav_grid.cpp
     navigation.cpp
     particles.cpp
@@ -113,11 +120,19 @@ add_library(moteur STATIC
     sprite_region.cpp
     sprite_renderer.cpp
     state_stack.cpp
-    text_layout.cpp
     texture_atlas.cpp
     thumbnails.cpp
     tone_mapper.cpp
     tilemap.cpp
+    material.cpp
+    audio_events.cpp
+    audio_reverb.cpp
+    sound_bank.cpp
+    ui.cpp
+    ui_check.cpp
+    ui_markup.cpp
+    ui_style.cpp
+    unicode.cpp
     utf8.cpp
     variables.cpp
     visibility.cpp
@@ -158,7 +173,8 @@ target_include_directories(moteur SYSTEM PRIVATE ${STB_INCLUDE_DIRS} ${CGLTF_INC
 target_link_libraries(moteur PUBLIC SDL3::SDL3 glm::glm EnTT::EnTT nlohmann_json::nlohmann_json
                       PRIVATE Threads::Threads zstd::libzstd mikktspace::mikktspace KTX::ktx moteur_miniaudio
                               ozz::animation_offline ozz::animation
-                              RecastNavigation::Recast RecastNavigation::Detour RecastNavigation::DetourCrowd)
+                              RecastNavigation::Recast RecastNavigation::Detour RecastNavigation::DetourCrowd
+                              harfbuzz::harfbuzz)
 # glm's conversions between vector sizes are explicit (milestone 9, part 5): `vec2 v = some_vec3`
 # silently took (x, y) where (x, z) was meant; it must now be written out. Public: the games too.
 target_compile_definitions(moteur PUBLIC GLM_FORCE_EXPLICIT_CTOR)
@@ -187,7 +203,7 @@ moteur_enable_warnings(moteur)
 
 # The license texts every program of the engine carries (moteur_add_game); keep in step with
 # assets_moteur/credits_moteur.json.
-set(_licenses sdl3 glm stb nlohmann-json cgltf mikktspace entt ktx miniaudio ozz-animation zstd recastnavigation)
+set(_licenses sdl3 glm stb nlohmann-json cgltf mikktspace entt ktx miniaudio ozz-animation zstd recastnavigation harfbuzz)
 if(NOT MOTEUR_SHIPPING)  # development tools, not in the shipped game
     list(APPEND _licenses imgui efsw)
 endif()

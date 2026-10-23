@@ -1,0 +1,9 @@
+<!-- The loading screen: its progress and the step in progress. -->
+<ui class="opaque" modal="false">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 360">
+        <label class="title" text="{loading-title}"/>
+        <bar value="{$loading.progress}" style="height: 10; margin: 4 0"/>
+        <label class="dim" text="{$loading.step}"/>
+    </panel>
+</ui>

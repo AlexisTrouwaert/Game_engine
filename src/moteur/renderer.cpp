@@ -315,7 +315,9 @@ void Renderer::ensure_id_targets() {
         }
         return GpuTexture(device_, raw, texture_memory_bytes(info), texture_memory_kind(info));
     };
-    id_texture_ = create(kIdFormat, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER, "scene ids");
+    // Read by the tone mapping as a storage texture: an integer format cannot be sampled.
+    id_texture_ = create(kIdFormat, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ,
+                         "scene ids");
     id_depth_ = create(depth_format_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, "scene ids depth");
     id_width_ = scene_width_;
     id_height_ = scene_height_;
@@ -561,6 +563,30 @@ Texture Renderer::create_texture(const Image& straight_image, const TextureSetti
         SDL_GenerateMipmapsForGPUTexture(upload_commands(), raw);
     }
     return texture;
+}
+
+void Renderer::update_texture(const Texture& texture, int x, int y, int width, int height, const void* rgba) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    if (x < 0 || y < 0 || x + width > texture.width || y + height > texture.height || !texture.gpu) {
+        throw std::invalid_argument("update_texture: the rectangle is outside the texture");
+    }
+    const std::size_t size = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
+    const SDL_GPUTransferBufferLocation staged = stage_upload(rgba, size);
+    SDL_GPUTextureTransferInfo source = {};
+    source.transfer_buffer = staged.transfer_buffer;
+    source.offset = staged.offset;
+    source.pixels_per_row = static_cast<Uint32>(width);
+    source.rows_per_layer = static_cast<Uint32>(height);
+    SDL_GPUTextureRegion destination = {};
+    destination.texture = texture.gpu.get();
+    destination.x = static_cast<Uint32>(x);
+    destination.y = static_cast<Uint32>(y);
+    destination.w = static_cast<Uint32>(width);
+    destination.h = static_cast<Uint32>(height);
+    destination.d = 1;
+    SDL_UploadToGPUTexture(upload_pass(), &source, &destination, false);
 }
 
 GpuTexture Renderer::create_texture_levels(SDL_GPUTextureFormat format, int width, int height,
@@ -827,6 +853,7 @@ bool Renderer::begin_frame() {
     if (device_lost()) {
         return false;
     }
+    ++frame_index_;
     flush_uploads();  // what was created since the last frame, before anything else
     if (vertex_pool_) {
         vertex_pool_->begin_frame();
@@ -980,7 +1007,7 @@ void Renderer::end_frame() {
             // Two passes (milestone 7, soft particles): the opaque meshes, which also write their
             // distance along the view into a second target; then what is blended over them, which
             // reads it. Without anything blended, the first pass ends the scene by itself.
-            const bool blended = billboards_->has_work() || debug_lines_->has_work();
+            const bool blended = billboards_->has_work() || debug_lines_->has_work() || (meshes_ok && meshes_->has_transparent());
             SDL_GPUColorTargetInfo targets[2] = {};
             SDL_GPUColorTargetInfo& scene = targets[0];
             scene.texture = scene_texture_.get();
@@ -1038,6 +1065,9 @@ void Renderer::end_frame() {
                 depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
                 pass = SDL_BeginGPURenderPass(commands, &over, 1, &depth);
                 if (pass != nullptr) {
+                    if (meshes_ok) {
+                        meshes_->render_transparent(commands, pass, stats_);  // milestone 9 bis, part 2: before the particles
+                    }
                     if (billboards_ok) {
                         billboards_->render(commands, pass, stats_);  // after the opaque meshes, blended
                     }

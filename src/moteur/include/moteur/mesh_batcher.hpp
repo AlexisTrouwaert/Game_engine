@@ -29,11 +29,15 @@ struct MeshDraw {
     /// What the id pass writes for its pixels (milestone 9, part 7): the selectable entity it shows,
     /// as World::pick_id_of() makes it; 0: nothing to select (it still hides what is behind it).
     std::uint32_t pick_id = 0;
+    /// Dissolve and flash of this object (milestone 9 bis, part 2; MeshRenderer::set_effects()).
+    MaterialEffects effects;
 };
 
 /// What one instance sends to the GPU, laid out exactly as the per-instance vertex attributes of
-/// mesh.vert.hlsl (locations 4 to 12) and shadow.vert.hlsl (the world rows, locations 1 to 3) read it. Matrices are stored as rows
-/// and only the three first: the last row of an object's matrix is always (0, 0, 0, 1).
+/// mesh.vert.hlsl (locations 4 to 12, then the effects: 13, or 15 after a skinned vertex's joints
+/// and weights; SDL_GPU allows 16 attributes, a skinned mesh uses them all) and shadow.vert.hlsl (the world rows, locations 1 to 3) read it.
+/// Matrices are stored as rows and only the three first: the last row of an object's matrix is
+/// always (0, 0, 0, 1).
 struct MeshInstance {
     glm::vec4 world[3];          ///< rows of the object -> world matrix
     glm::vec4 normal_matrix[3];  ///< rows of its inverse transpose (xyz); [0].w: the alpha cutoff; [1].w: MeshDraw::pick_id (a whole float)
@@ -42,8 +46,13 @@ struct MeshInstance {
     /// rgb: linear emitted light; w: first palette matrix of a skinned draw (see skinning.hlsli), else
     /// -1 for a material that fades (Material::fades) and 0 otherwise.
     glm::vec4 emissive;
+    /// Milestone 9 bis, part 2, packed into one attribute: x the flash, RGBA8 (rgb its color / 4, so
+    /// up to 4 times white; a the amount); y the dissolve edge's glow, RGBA8 (rgb times a x 16);
+    /// z the dissolve and the material's emissive pulse (Hz), w its uv scroll (per second), as half
+    /// floats (packHalf2x16).
+    glm::uvec4 effects;
 };
-static_assert(sizeof(MeshInstance) == 144, "MeshInstance is uploaded as is: keep it tightly packed");
+static_assert(sizeof(MeshInstance) == 160, "MeshInstance is uploaded as is: keep it tightly packed");
 
 /// Draws that share their mesh, their textures and their faces (one or both sides): one instanced
 /// draw call. The colors and factors of the material travel with each instance, so they never split
@@ -54,7 +63,9 @@ struct MeshBatch {
     std::uint32_t first_instance = 0;  ///< in instances()
     std::uint32_t count = 0;           ///< instances, one per visible draw
     bool skinned = false;  ///< its draws have palettes (a skinned mesh drawn without one is a still mesh)
-    bool masked = false;   ///< alpha-tested material (Material::alpha_cutoff > 0)
+    /// Alpha-tested material (Material::alpha_cutoff > 0); in the shadow passes, also a dissolving
+    /// object (its shadow is cut out the same way).
+    bool masked = false;
     std::uint8_t lod = 0;  ///< the level of detail of its draws (Mesh::lods)
 };
 
@@ -85,6 +96,12 @@ public:
     void build(const std::vector<MeshDraw>& draws, const std::vector<std::uint32_t>& subset, const Frustum& frustum,
                Pass pass);
 
+    /// The transparent draws (Material::blend; build() leaves them out) whose box meets `frustum`,
+    /// sorted from the farthest to the nearest to `eye` (their boxes' centres; recording order
+    /// between equals), filled as Pass::Main fills them; consecutive draws that share a batch's key
+    /// make one batch. O(n log n).
+    void build_transparent(const std::vector<MeshDraw>& draws, const Frustum& frustum, glm::vec3 eye);
+
     /// The instances of every batch, batch after batch (MeshBatch::first_instance), ready to upload.
     const std::vector<MeshInstance>& instances() const { return instances_; }
     /// The batches of the last build(), in drawing order.
@@ -101,6 +118,8 @@ public:
     /// The instance data of one draw, as Pass::Main fills it (computes the inverse transpose of its
     /// 3 x 3 part).
     static MeshInstance make_instance(const MeshDraw& draw);
+    /// MeshInstance::effects of these effects and material values.
+    static glm::uvec4 pack_effects(const MaterialEffects& effects, float emissive_pulse, glm::vec2 uv_scroll);
 
 private:
     /// What a batch shares. Unused textures stay null in the shadow pass.
@@ -131,6 +150,7 @@ private:
     std::vector<std::uint32_t> first_draw_; ///< per group: its first draw (for the batch's material)
     std::vector<std::uint32_t> order_;      ///< per group: its place among the batches
     std::unordered_map<Key, std::uint32_t, KeyHash> groups_;
+    std::vector<std::pair<float, std::uint32_t>> sorted_;  ///< build_transparent(): distance squared, draw
 };
 
 }  // namespace moteur

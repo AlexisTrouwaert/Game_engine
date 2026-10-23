@@ -113,7 +113,7 @@ struct GraphLayer {
 /// above). Reach it through AnimationSet::graph().
 struct AnimationGraph {
     std::vector<GraphParameter> parameters;  ///< the "parameters" entries
-    std::vector<GraphLayer> layers;  ///< one or two (Animator::kLayers): the whole body, then the upper body
+    std::vector<GraphLayer> layers;  ///< one per Animator layer it drives, in order (AnimationSet::layers()), at most 8
     std::uint64_t id = 0;            ///< a fresh number for every graph read: who uses it sees a reload
 
     /// No layer: the set has no graph (a parsed graph always has one layer at least).

@@ -77,6 +77,6 @@ std::uint64_t prepared_model_stamp(const void* data, std::size_t size);
 
 /// The version of the `.mmdl` format, and of the importer: a change of either makes every imported
 /// model be imported again.
-inline constexpr std::uint32_t kPreparedModelVersion = 3;  // 2: the clips in their ozz form; 3: the collision geometry
+inline constexpr std::uint32_t kPreparedModelVersion = 4;  // 2: the clips in their ozz form; 3: the collision geometry; 4: BLEND materials
 
 }  // namespace moteur

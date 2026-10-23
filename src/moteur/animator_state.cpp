@@ -63,7 +63,7 @@ nlohmann::json Animator::save_state() const {
             j["marks"] = m.marks;
             nlohmann::json events = nlohmann::json::array();
             for (const MotionEvent& e : m.events) {
-                events.push_back({e.name, e.clip, e.point, e.always});
+                events.push_back({e.name, e.clip, e.point, e.always, static_cast<int>(e.phase)});
             }
             j["events"] = events;
             motions.push_back(std::move(j));
@@ -72,6 +72,7 @@ nlohmann::json Animator::save_state() const {
         layers.push_back(std::move(l));
     }
     state["layers"] = layers;
+    state["root_motion"] = {root_motion_.x, root_motion_.y, root_motion_.z};
     if (graph_.active) {
         // The graph: its parameters and the state of each layer, by name (the file may change).
         nlohmann::json values = nlohmann::json::object();
@@ -92,7 +93,8 @@ void Animator::load_state(const nlohmann::json& state) {
     std::int64_t previous_move_speed = 0;
     std::int64_t ticks = 0;
     LastEvent last_event;
-    std::array<Layer, kLayers> loaded = layers_;  // the masks come from create(): kept
+    std::vector<Layer> loaded = layers_;  // the masks and kinds come from create(): kept
+    glm::ivec3 root_motion(0);
     GraphRuntime graph_state;                     // no "graph": not started, as when it was saved
     try {
         speed = state.at("speed").get<std::int64_t>();
@@ -103,10 +105,12 @@ void Animator::load_state(const nlohmann::json& state) {
         const nlohmann::json& last = state.at("last_event");
         last_event = {last.at(0).get<std::string>(), last.at(1).get<std::string>(), last.at(2).get<std::int64_t>()};
         const nlohmann::json& layers = state.at("layers");
-        if (layers.size() != static_cast<std::size_t>(kLayers)) {
-            throw std::runtime_error("animation state: wrong number of layers");
+        // A state saved with fewer layers (a set that gained one since) leaves the others idle.
+        if (layers.size() > loaded.size()) {
+            throw std::runtime_error("animation state: " + std::to_string(layers.size()) + " layers for " +
+                                     std::to_string(loaded.size()));
         }
-        for (std::size_t i = 0; i < loaded.size(); ++i) {
+        for (std::size_t i = 0; i < layers.size(); ++i) {
             Layer& layer = loaded[i];
             const nlohmann::json& l = layers[i];
             const nlohmann::json& w = l.at("weights");
@@ -141,16 +145,23 @@ void Animator::load_state(const nlohmann::json& state) {
                 m.fade_setting = mw.at(6).get<int>();
                 m.marks = j.at("marks").get<std::vector<int>>();
                 for (const nlohmann::json& e : j.at("events")) {
-                    m.events.push_back({e.at(0).get<std::string>(), e.at(1).get<std::string>(), e.at(2).get<int>(), e.at(3).get<bool>()});
+                    m.events.push_back({e.at(0).get<std::string>(), e.at(1).get<std::string>(), e.at(2).get<int>(), e.at(3).get<bool>(),
+                                        static_cast<AnimatorEvent::Phase>(e.size() > 4 ? e.at(4).get<int>() : 0)});
                 }
+                bind_clip_data(m, !m.clock.once());  // root motion and windows, from the set
                 layer.motions.push_back(std::move(m));
             }
+        }
+        if (const auto saved = state.find("root_motion"); saved != state.end()) {
+            root_motion = {saved->at(0).get<int>(), saved->at(1).get<int>(), saved->at(2).get<int>()};
         }
         if (state.contains("graph") && set && !set->graph().empty()) {
             const AnimationGraph& graph = set->graph();
             const nlohmann::json& g = state.at("graph");
             graph_state.active = true;
             graph_state.id = graph.id;
+            graph_state.state.assign(loaded.size(), -1);
+            graph_state.state_names.assign(loaded.size(), std::string());
             for (const GraphParameter& p : graph.parameters) {
                 graph_state.names.push_back(p.name);
                 graph_state.values.push_back(g.at("values").value(p.name, 0.0));
@@ -173,6 +184,7 @@ void Animator::load_state(const nlohmann::json& state) {
     ticks_ = ticks;
     last_event_ = std::move(last_event);
     layers_ = std::move(loaded);
+    root_motion_ = root_motion;
     graph_ = std::move(graph_state);
 }
 

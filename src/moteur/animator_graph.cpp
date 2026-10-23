@@ -40,6 +40,8 @@ void Animator::start_graph() {
     graph_ = GraphRuntime{};
     graph_.active = true;
     graph_.id = graph.id;
+    graph_.state.assign(layers_.size(), -1);
+    graph_.state_names.assign(layers_.size(), std::string());
     for (const GraphParameter& p : graph.parameters) {
         graph_.names.push_back(p.name);
         graph_.values.push_back(0.0);
@@ -81,7 +83,9 @@ bool Animator::sync_graph() {
     }
     graph_.names = std::move(names);
     graph_.values = std::move(values);
-    for (std::size_t l = 0; l < static_cast<std::size_t>(kLayers); ++l) {
+    graph_.state.resize(layers_.size(), -1);
+    graph_.state_names.resize(layers_.size());
+    for (std::size_t l = 0; l < layers_.size(); ++l) {
         if (l >= graph.layers.size()) {
             graph_.state[l] = -1;
             graph_.state_names[l].clear();

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "base_color_texture": "textures/test/lave.png",
+  "roughness": 0.7,
+  "emissive": [1.0, 1.0, 1.0],
+  "emissive_strength": 4.0,
+  "emissive_texture": "textures/test/lave_emission.png",
+  "uv_scroll": [0.05, 0.02],
+  "emissive_pulse": 0.5
+}

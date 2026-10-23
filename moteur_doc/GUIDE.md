@@ -29,7 +29,7 @@ Les exemples à lire avec ce guide :
 
 - [`examples/jeu_minimal/`](../examples/jeu_minimal/) : le plus petit jeu (une fenêtre, un cube, une entrée, un son), construit **de l'extérieur** du moteur, comme l'ARPG ;
 - [`apps/tranche/main.cpp`](../apps/tranche/main.cpp) : la tranche jouable comme programme livré ;
-- [`apps/tranche/states_demo.cpp`](../apps/tranche/states_demo.cpp) (titre, chargement, pause, options, sauvegardes), [`slice_ui.cpp`](../apps/tranche/slice_ui.cpp) (son interface) et [`demo3d.cpp`](../apps/tranche/demo3d.cpp) (le monde, les déplacements, l'animation, le brouillard, la sauvegarde du monde) : un jeu complet sur le moteur.
+- [`apps/tranche/states_demo.cpp`](../apps/tranche/states_demo.cpp) (titre, chargement, pause, options, sauvegardes ; leurs écrans dans [`assets/ui/`](../assets/ui/)) et [`demo3d.cpp`](../apps/tranche/demo3d.cpp) (le monde, les déplacements, l'animation, le brouillard, la sauvegarde du monde) : un jeu complet sur le moteur.
 
 ---
 
@@ -475,7 +475,7 @@ Le préfabriqué est lu et vérifié **une fois** (ses composants lus par leur d
 | `environment(path)` | `.hdr` équirectangulaire | ciel gris |
 | `sound(path)` / `music(path)` | son court décodé / musique en flux | bip / silence |
 | `particle_effect(path)` | effet de particules (`.json`) | effet sans émetteur |
-| `font(path, taille)`, `atlas(path)`, `skeleton(path)`, `clips(path)`, `animation_set(path)`, `map(path)` | police, atlas, squelette, clips, description d'animation, carte | **exception** (pas de repli sensé) |
+| `font(path)`, `atlas(path)`, `skeleton(path)`, `clips(path)`, `animation_set(path)`, `map(path)` | police, atlas, squelette, clips, description d'animation, carte | **exception** (pas de repli sensé) |
 
 - Le résultat est une **poignée** `Asset<T>` (un `entt::resource`, un `shared_ptr` dessous) : `*asset`, `asset->`. Elle se garde dans un composant ; l'asset vit tant qu'une poignée existe.
 - **Chemins** : relatifs, séparateur `/` ou `\`, normalisés (`normalize_asset_path()`). Un chemin dont la **casse** diffère du disque est une erreur partout (un système de fichiers sensible à la casse, ou une archive, ne le trouverait pas).
@@ -664,14 +664,46 @@ Pas encore là : sommets quantifiés sur le GPU et imposteurs pour les foules lo
 
 - **Caméra** (`Camera3D`) : cible, angles (`set_angles(yaw, pitch)`), perspective ou orthographique, champ (30° retenu), hauteur visible ; `ground_point(pixel)` (le sol sous la souris), `screen_ray()`, `world_to_screen()`, `frustum()`, `follow(goal, dt, half_life)` ; `begin_update()` / `interpolated(alpha)` (chapitre 2).
 - **Éclairage** : `meshes.set_camera(view_projection, eye)` chaque image ; `set_sun(direction, couleur, intensité)` (ombres du soleil, `set_shadows(ShadowOptions)`) ; `set_environment(&environnement, intensité)` (un `.hdr` par `assets.environment()`, ou un ciel `Environment::create(renderer, make_sky(512, 256))`) ; jusqu'à **32 lumières ponctuelles** par image (`kMaxPointLights`), dont quelques-unes ombrées (`point_budget`, 4 par défaut). Les `LightSource` du monde sont données par `World::submit()`.
-- **Matériaux** (`Material`) : PBR métal / rugosité de glTF, couleurs linéaires ; alpha **testé** (`alphaMode` `MASK`, `alpha_cutoff`) dans la scène et les ombres ; `fades` pour les murs à estomper (5.7). Le mode `BLEND` (transparence) n'est **pas encore dessiné** (jalon 9).
+- **Matériaux** (`Material`) : PBR métal / rugosité de glTF, couleurs linéaires ; alpha **testé** (`alphaMode` `MASK`, `alpha_cutoff`) dans la scène et les ombres ; `fades` pour les murs à estomper (5.7).
+  - **Transparence** (jalon 9 bis, partie 2) : `alphaMode` `BLEND` de glTF ou `Material::blend` : dessinée après l'opaque, objet par objet du plus loin au plus proche (le centre des boîtes), éclairée, alpha prémultiplié (l'émission aussi), sans ombre ni découpe devant le héros ; deux objets transparents qui se croisent peuvent se trier mal (pas de transparence indépendante de l'ordre : jalon 10 si besoin).
+  - **Matériaux en données** : `assets.material("materials/x.material.json")` (FORMATS 24) ; un matériau d'un modèle remplacé par son nom : `ModelComponent::materials.push_back({"nom glTF", assets.material(...)})` (ou dans un préfabriqué : `"materials": [{"material": ..., "with": ...}]`). Animations du matériau : `uv_scroll`, `emissive_pulse`, sur l'horloge du jeu : `renderer.meshes().set_time(ticks / tick_rate())` à chaque image.
+  - **Effets par objet** : le composant `MaterialEffects` (`dissolve` de 0 à 1 avec un bord incandescent, ombre comprise ; `flash` = couleur + quantité, un coup), donné par `World::submit()` à tous les maillages de l'entité ; sauvegardé avec elle. Hors du monde : `meshes.set_effects(&effets)` avant les `draw()`. La tranche : un coup fait flasher sa cible, un mort se dissout après 1,5 s ; scène de test : `bac_a_sable --materials`.
 - **Dessin direct** (hors du monde) : `meshes.draw(model, matrice)`, `meshes.draw(mesh, matrice, materiau)`. Regroupement et instanciation automatiques, culling par boîte.
-- **Texte** : `Font` (`assets.font(path, taille)`), `font.draw(renderer.screen_sprites(), "texte UTF-8", coin, options)`, `font.measure(...)` avec exactement la même mise en page. Une police par taille ; jeu de caractères latin.
+- **Texte** (jalon 9 bis, partie 4) : `Font` est une **pile de polices** (`assets.font("fonts/interface.font.json")`, ou un `.ttf` seul) : la police principale puis les polices de repli, essayées pour chaque caractère (un caractère chinois absent d'Inter est pris dans Noto Sans SC). La **taille** n'appartient pas à la police : `TextStyle::size` (taille d'em, en pixels) à chaque dessin, toutes les tailles partageant les mêmes glyphes. `font.draw(renderer.screen_sprites(), "texte UTF-8", coin, style)`, `font.measure(texte, style)`, `font.layout(texte, style)` (le texte mis en page, en cache : lignes, glyphes, grappes) ; `line_height(taille)`, `ascent(taille)`.
+  - `TextStyle` : `size`, `color`, `weight` (100 à 900 : vraie graisse d'une police variable comme Inter, sinon dilatation dès 550), `italic` (penché), `outline_width` / `outline_color`, `shadow` (`TextShadow` : décalage, flou, couleur), `align` (`Start`, `End`, `Left`, `Center`, `Right` ; `Start` suit le sens du paragraphe), `max_width` (retour à la ligne), `line_spacing`, `direction` (`Auto` : selon le premier caractère fort ; forcé pour une interface en arabe), `language` (formes de langue OpenType), `markup` (balises en ligne), `depth`.
+  - **Balises** (`markup`) : `<b>`, `<i>`, `<color=#rrggbb[aa]>`, `<size=1.5>`, `<weight=600>`, `<icon=nom>` (une icône en ligne : `font.set_icons(fonction nom -> SpriteRegion)`) ; `&lt;`, `&gt;`, `&amp;`. Une balise inconnue reste visible comme texte.
+  - Derrière : mise en forme **HarfBuzz** (crénage, ligatures, liaison de l'arabe, écritures indiennes), algorithme **bidirectionnel** et **coupure des lignes** d'Unicode écrits dans le moteur (`moteur/bidi.hpp`, `moteur/unicode.hpp`, conformes aux tests officiels), glyphes en **champs de distance multicanaux** faits à la demande dans un atlas partagé (net de 10 à 200 pixels et plus, contour et ombre dans le shader). Une image fait au plus 48 glyphes manquants (sur les fils du `JobSystem`) ; les autres apparaissent aux images suivantes. `font.prepare(caractères)` les fait d'avance (un écran de chargement qui connaît ses textes) ; une pile fait d'office le latin à son chargement (`"prepare": "latin"`).
+  - `layout()` et `measure()` se font de n'importe quel fil ; `draw()` du fil de l'image. Le texte du joueur passe par la localisation, jamais en dur.
+- **Localisation** (jalon 9 bis, partie 5) : `app.localization().format("pause-resume")`, avec variables `format("loot", {{"count", 3}, {"name", "Gauvain"}})` ; les fichiers `assets/locales/<langue>/<ressource>.ftl` (syntaxe inspirée de Fluent : pluriels CLDR, termes et accords, `NUMBER()`, `DURATION()` ; FORMATS 22) et `assets/locales/languages.json` (langue de base, langues offertes, ressources). `app.set_language("en")` change tout de suite et garde le choix du joueur ; `localization().generation()` change alors : une interface refait ses textes. Un menu stocke des **identifiants** et les met en mots au dessin (la langue peut changer pendant qu'il est ouvert). Les noms des commandes (`Input::describe()`, `input_source_label(source, &localization)`) et les durées viennent des chaînes du moteur (`moteur.ftl`), le message de plantage et celui de la carte graphique perdue des messages `moteur-crash-message` et `moteur-gpu-lost-message` quand le jeu les donne. `moteur::format_number(langue, valeur, options)` et `plural_category()` (`moteur/locale.hpp`, données CLDR) servent aussi hors des fichiers. Console : `language [code]` (`qps` : pseudo-localisation, qui montre les textes restés en dur).
 - **Réglages du joueur** : résolution de rendu, anticrénelage (`AntiAliasing::None`, `Fxaa`, `Msaa2`, `Msaa4`), synchronisation, qualité des ombres passent par les réglages d'affichage (chapitre 8.5) ; `Renderer::set_render_scale()` et `set_anti_aliasing()` existent pour les outils.
 - **Captures** : `renderer.request_capture("image.png")` (aussi les vignettes de sauvegarde, avec une largeur maximale).
 - **Perte du GPU** : `device_lost()` ; l'`Application` écrit alors un rapport et termine proprement (chapitre 8.3).
 
-Il n'y a pas encore de **système d'interface** : la tranche dessine ses menus à la main (`apps/tranche/slice_ui.cpp`). L'interface maison (mode retenu, mise en page, texte SDF, localisation) est au jalon 9 (décision 2.3 de la [revue](REVUE_JALONS_1_A_7.md)). Décisions : [jalon 3](JALON_3_RENDU_3D.md).
+**Interface du jeu** (jalon 9 bis, partie 6 ; fichiers : FORMATS 23). Les écrans sont des documents `assets/ui/*.ui` stylés par des feuilles `.uss`, rechargés à chaud ; le code du jeu ne fait que remplir un **modèle** et lire des **événements**. Dear ImGui reste aux outils.
+
+```cpp
+moteur::Ui ui(app, "fonts/tranche.font.json");          // la police par défaut des écrans
+// Un état ouvre son écran en entrant, le ferme en sortant ; le calque le plus haut prend les entrées.
+moteur::UiDocument& pause = ui.open("ui/pause.ui", 10);
+ui.model().set("hero.health", 0.75);                      // ce que montre {$hero.health}
+// Le tick : la navigation (actions menu_* et pause du jeu : clavier, manette, souris, rejeux).
+ui.tick(moteur::UiInput::from_actions(app.input()));
+for (const moteur::UiEvent& e : ui.take_events()) {
+    if (e.action == "resume") stack.pop();                 // e.index : le rang dans une <repeat>
+}
+// L'image : mise en page de ce qui a changé, transitions, dessin dans screen_sprites().
+ui.set_scale(densite * choix_du_joueur);
+ui.render(renderer, secondes_ecoulees);
+```
+
+- **Un écran par état** : la tranche ouvre le document d'un état dans `enter()`, le ferme dans `exit()` (`Screen` de `states_demo.cpp`) ; les états du dessous restent dessinés (la pause assombrit le jeu, figé). Calques : titre 0, pause 10, menus 20, pages 30, dialogues 40.
+- **Modèle** : des chemins à points, nombres, textes, oui / non ; une valeur inchangée ne coûte rien (la tranche réécrit ses textes à chaque tick : un changement de langue ou de manette se voit aussitôt). Listes : `set_count("slots", n)` et `slots.N.champ`.
+- **Événements** : `Activate`, `Change` (déjà écrit dans le modèle), `Back`, `Focus` ; la tranche joue ses sons d'interface d'après eux.
+- **En jeu** : `hud.ui` est un document non modal ; les barres de vie et les mots des coups sont des **instances** de ses modèles (`hud->instance("health", entite)`, `set_screen_position()` au-dessus de la tête, `set_class("low", ...)`, `set_style("opacity: 0.4")`) gardées tant que le jeu les demande à chaque image. Toute l'interface (texte, barres, cadres arrondis) part en très peu d'appels de dessin (2 pour environ 150 barres et le HUD).
+- **Échelle** : densité de l'écran × taille choisie (variable archivée `ui.scale` de la tranche, 75 à 200 %, dans Options > Affichage).
+- **Vérifier** : `bac_a_sable --check-data` et la préparation du paquet lisent tous les écrans (`check_ui_files()` : balises, feuilles introuvables, propriétés inconnues, messages absents) ; `bac_a_sable --ui-tour DOSSIER` ouvre chaque menu de la tranche, le capture et compte les problèmes (lancé en français, anglais et pseudo-localisation par `check_references.py`).
+
+Décisions du rendu : [jalon 3](JALON_3_RENDU_3D.md).
 
 ### 5.2 Animation
 
@@ -684,7 +716,9 @@ Squelettes et clips glTF, lus par ozz-animation, skinning sur le GPU ([jalon 5](
 - **Attaches** : `BoneAttachment` (3.2), au dessin.
 - **Sauvegarde** : `save_state()` / `load_state()` (jamais la pose).
 
-Pas encore là : *root motion* et couches additives (jalon 9, points 5.1 et 5.2 de la [revue](REVUE_JALONS_1_A_7.md)).
+- **Couches** (jalon 9 bis, partie 3) : `"layers"` dans l'`AnimationSet` (jusqu'à 8) ; une couche masquée remplace les articulations de son masque, une couche **additive** ajoute la différence de ses clips avec leur première pose : `play("Hit_A", {.layer = 2, .loop = false})` secoue le personnage sans arrêter sa course (la tranche : couche `reactions`, état `touche` du graphe). Les couches du graphe suivent celles de l'animateur. `layer_count()`.
+- **Root motion** : un clip à `"root_motion"` déplace le personnage par la courbe de son articulation racine, en millimètres entiers par tick (`ClipLibrary::root_track()`), la pose restant sur place. Après `advance_animators()`, le jeu prend `animator.take_root_motion()` (repère du modèle), le tourne selon le personnage, le met à son échelle et le donne au `Mover` : `mover.root_motion += …` ; `move_movers()` le parcourt au tick suivant avec les **mêmes collisions** (une ruée s'arrête contre un mur). Sauvegardé avec l'animateur.
+- **Fenêtres d'événements** : un événement à `"end"` part à son début et à sa fin (`AnimatorEvent::phase`), et `animator.in_window("esquive")` dit si un clip est dedans (la tranche : pas de coup reçu pendant la ruée).
 
 ### 5.3 Audio
 
@@ -705,7 +739,28 @@ app.audio().play_music(assets.music("audio/music/ville.mp3"));
 - `play_stream()` pour une ambiance longue en boucle ; `stop(id, fondu)`, `set_position(id, ...)` pour un son qui suit.
 - La simulation ne lit jamais rien de l'audio.
 
-Pas encore là : les **événements sonores en données** (événements nommés, paramètres, bus, instantanés, outil de création ; API calquée sur FMOD Studio) : décision 4.1 de la [revue](REVUE_JALONS_1_A_7.md), jalon 9. Le jeu ne devrait donc pas multiplier les appels directs à des fichiers.
+**Le jeu passe par des événements** ([jalon 9 bis, partie 7](JALON_9BIS_PRESENTATION.md)) : `moteur::AudioEvents` (`audio_events.hpp`) lit une **banque** (`.bank.json`, FORMATS 25) et joue des événements nommés ; `Audio::play` direct reste au moteur et aux bancs d'essai.
+
+```cpp
+moteur::AudioEvents sons(app.audio(), app.assets());
+sons.load("audio/banks/tranche.bank.json");
+sons.set_global("sol", "dalle");                            // paramètre global : le sol sous le héros
+sons.play("personnage/pas", {.position = pied});            // le jeu de sons choisi par « sol »
+const moteur::EventId musique = sons.play("musique/tranche", {.labels = {{"section", "titre"}}});
+sons.set_parameter(musique, "section", "jeu");              // change à la mesure suivante
+sons.start_snapshot("pause");                               // la musique baisse, le monde se tait
+sons.set_reverb_zones({{"crypte", boite, 3.0f}});           // la réverbération du lieu
+sons.set_occlusion_test([&](glm::vec3 a, glm::vec3 b) { return collision.segment_clear(a, b) ? 0.0f : 1.0f; });
+// À chaque image, après set_listener() :
+sons.update(dt);
+```
+
+- **Bus** sous les quatre groupes, **VCA**, **instantanés** en fondu ; les curseurs du joueur restent les volumes des groupes.
+- **Limites d'instances** et vol (la plus ancienne, la plus lointaine, ou refus) ; priorité pour la limite de voix.
+- **Automations** : volume, hauteur et passe-bas suivent un paramètre ; **occlusion** : passe-bas et volume baissé quand le test dit qu'un mur sépare (lissé, testé toutes les 4 images).
+- **Réverbération** maison (Freeverb) sur les bus de base choisis, réglée par la zone de l'auditeur (fondu aux bords).
+- **Musique interactive** : sections programmées à l'échantillon près sur la mesure ou le temps, fondu enchaîné, couches en phase.
+- Présentation seulement : la logique ne lit jamais les événements ; un rejeu peut les rejouer sans en dépendre. Sans les sons (`tools/audio/fetch_test_sounds.py`), la tranche est muette.
 
 ### 5.4 Entrées
 

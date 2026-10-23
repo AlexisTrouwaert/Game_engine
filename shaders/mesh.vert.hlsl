@@ -11,6 +11,10 @@
 
 #ifdef SKINNED
 #include "skinning.hlsli"
+// The instance's effects (milestone 9 bis, part 2) come after the vertex's joints and weights.
+#define EFFECTS_INPUT TEXCOORD15
+#else
+#define EFFECTS_INPUT TEXCOORD13
 #endif
 
 cbuffer Frame : register(b0, space1) {
@@ -39,6 +43,7 @@ struct Input {
     uint4 joints : TEXCOORD13;       // in the palette
     float4 weights : TEXCOORD14;     // add up to 1
 #endif
+    uint4 effects : EFFECTS_INPUT;   // packed (MeshInstance::effects, material_effects.hlsli)
 };
 
 struct Output {
@@ -53,6 +58,7 @@ struct Output {
     float joint_weight : TEXCOORD7;  // weights view: the weight of debug.x; -1 for a mesh without skin
     nointerpolation float3 origin : TEXCOORD8;  // the instance's place: decides the cutout for the whole object
     nointerpolation float alpha_cutoff : TEXCOORD9;  // 0: opaque material
+    nointerpolation uint4 effects : TEXCOORD10;
     float4 position : SV_Position;
 };
 
@@ -88,5 +94,6 @@ Output main(Input input) {
     output.joint_weight = joint_weight;
     output.origin = float3(input.world0.w, input.world1.w, input.world2.w);
     output.alpha_cutoff = input.normal0.w;
+    output.effects = input.effects;
     return output;
 }

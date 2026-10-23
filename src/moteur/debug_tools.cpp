@@ -366,7 +366,7 @@ void ComponentInspectors::add_engine_components() {
     });
     add<Animator>("Animation", [](Animator& animator) {
         bool any = false;
-        for (int l = 0; l < Animator::kLayers; ++l) {
+        for (int l = 0; l < animator.layer_count(); ++l) {
             const Animator::Layer& layer = animator.layer(l);
             if (layer.motions.empty()) {
                 continue;
@@ -1014,7 +1014,7 @@ void DebugTools::draw_animation() {
             ImGui::TreePop();
         }
     }
-    for (int l = 0; l < Animator::kLayers; ++l) {
+    for (int l = 0; l < animator.layer_count(); ++l) {
         const Animator::Layer& layer = animator.layer(l);
         if (layer.motions.empty()) {
             continue;

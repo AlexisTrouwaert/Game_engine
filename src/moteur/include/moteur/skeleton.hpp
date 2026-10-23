@@ -120,6 +120,14 @@ public:
 
     /// The skeleton the clips were made for.
     const SkeletonData& skeleton() const { return skeleton_; }
+
+    /// Root motion (milestone 9 bis, part 2... 3): where `joint` of `clip` is, in model space, at
+    /// each tick of the clip (SkeletalClip::duration_ticks() + 1 points, the first at its start),
+    /// relative to its place at the start, in whole millimetres: the curve the game moves the
+    /// character along (Animator::take_root_motion()), the same on every run. Only the horizontal
+    /// plane (x and z; y stays 0): a jump's height stays in the pose. Computed once per clip and
+    /// joint, then kept (thread-safe). Throws std::invalid_argument for a joint out of range.
+    const std::vector<glm::ivec3>& root_track(const Skeleton& skeleton, const SkeletalClip& clip, int joint) const;
     /// Why the clips cannot play on `skeleton` (SkeletonData::mismatch()); empty if they can.
     std::string mismatch(const Skeleton& skeleton) const;
 
@@ -129,9 +137,11 @@ public:
     void replace_in_place(ClipLibrary&& fresh);
 
 private:
+    struct RootTracks;
     std::string source_;
     SkeletonData skeleton_;
     std::map<std::string, SkeletalClip> clips_;
+    std::shared_ptr<RootTracks> root_tracks_;  ///< root_track()'s cache
 };
 
 /// One clip of a blended pose: where it is (a ratio of its duration, as in PoseSampler::sample) and
@@ -144,6 +154,13 @@ struct PoseInput {
     float weight = 1.0f;  ///< >= 0, relative to the other inputs (normalized joint by joint)
     /// One weight per joint (empty: 1 everywhere). Not owned: must stay valid until the blend.
     std::span<const float> joint_weights;
+    /// Milestone 9 bis, part 3: an additive input adds the clip's difference from its first pose
+    /// (its start) on top of the blend of the other inputs, `weight` in [0, 1] giving how much
+    /// (not normalized with them): a blow taken over a run, a breath.
+    bool additive = false;
+    /// A joint kept in place (root motion: the game moves the character instead): its horizontal
+    /// translation (x and z) is the clip's at its start; -1: none.
+    int root_joint = -1;
 };
 
 /// Samples clips into a pose for one animated character, and keeps what makes that cheap from

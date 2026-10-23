@@ -10,8 +10,8 @@
 Texture2D<float4> scene : register(t0, space2);
 SamplerState scene_sampler : register(s0, space2);  // linear: also scales a reduced render size up
 // The id pass (milestone 9, part 7): the selectable entity under each pixel, for the outline.
+// A read-only storage texture (after the sampled ones): an integer format cannot be sampled.
 Texture2D<uint> ids : register(t1, space2);
-SamplerState ids_sampler : register(s1, space2);  // unused (Load), bound with the texture
 
 cbuffer ToneMapping : register(b0, space3) {
     float4 settings;  // x: exposure (multiplies the scene before tone mapping); y: 1 skips the tone

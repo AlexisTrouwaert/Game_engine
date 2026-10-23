@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "buses": {
+    "effects/pas": { "volume": 0.9 },
+    "effects/combat": {}
+  },
+  "reverbs": {
+    "rue": { "room": 0.45, "damping": 0.55, "wet": 0.12 },
+    "parvis": { "room": 0.9, "damping": 0.3, "wet": 0.4 }
+  },
+  "reverb_buses": ["effects"],
+  "snapshots": {
+    "pause": {
+      "fade": 0.3,
+      "buses": { "music": { "volume": 0.35 }, "effects": { "paused": true }, "ambience": { "paused": true } }
+    }
+  },
+  "vcas": { "combat": ["effects/combat"] },
+  "parameters": {
+    "sol": { "labels": ["pave", "dalle"], "default": "pave" }
+  },
+  "events": {
+    "personnage/pas": {
+      "bus": "effects/pas",
+      "sounds": {
+        "parameter": "sol",
+        "cases": {
+          "pave": ["audio/kenney_impact/footstep_concrete_000.ogg", "audio/kenney_impact/footstep_concrete_001.ogg",
+                   "audio/kenney_impact/footstep_concrete_002.ogg", "audio/kenney_impact/footstep_concrete_003.ogg",
+                   "audio/kenney_impact/footstep_concrete_004.ogg"],
+          "dalle": ["audio/kenney_impact/footstep_concrete_000.ogg", "audio/kenney_impact/footstep_concrete_002.ogg",
+                    "audio/kenney_impact/footstep_concrete_004.ogg", "audio/kenney_impact/impactGeneric_light_000.ogg",
+                    "audio/kenney_impact/impactGeneric_light_002.ogg"]
+        }
+      },
+      "order": "shuffle",
+      "volume": [0.5, 0.65],
+      "pitch": [0.94, 1.06],
+      "automation": [
+        { "parameter": "sol", "property": "pitch", "points": [[0, 0.92], [1, 1.12]] },
+        { "parameter": "sol", "property": "lowpass", "points": [[0, 5500], [1, 22000]] }
+      ],
+      "spatial": { "min": 2, "max": 22 },
+      "max_instances": 4,
+      "priority": 160
+    },
+    "combat/impact": {
+      "bus": "effects/combat",
+      "sounds": ["audio/kenney_impact/impactMetal_light_000.ogg", "audio/kenney_impact/impactMetal_light_001.ogg",
+                 "audio/kenney_impact/impactMetal_light_002.ogg", "audio/kenney_impact/impactMetal_light_003.ogg",
+                 "audio/kenney_impact/impactMetal_light_004.ogg", "audio/kenney_impact/impactMetal_medium_000.ogg",
+                 "audio/kenney_impact/impactMetal_medium_002.ogg"],
+      "order": "shuffle",
+      "volume": [0.85, 1.0],
+      "pitch": [0.92, 1.08],
+      "spatial": { "min": 3, "max": 30, "occlusion": true },
+      "max_instances": 6,
+      "steal": "quietest",
+      "priority": 64
+    },
+    "combat/coup_recu": {
+      "bus": "effects/combat",
+      "sounds": ["audio/kenney_impact/impactPunch_medium_000.ogg", "audio/kenney_impact/impactPunch_medium_001.ogg",
+                 "audio/kenney_impact/impactPunch_medium_002.ogg", "audio/kenney_impact/impactPunch_medium_003.ogg"],
+      "order": "shuffle",
+      "volume": [0.5, 0.6],
+      "pitch": [0.9, 1.05],
+      "spatial": { "min": 3, "max": 30 },
+      "max_instances": 3,
+      "priority": 32
+    },
+    "ambiance/tombes": {
+      "bus": "ambience",
+      "sounds": ["audio/ambience/forgotten_tombs.mp3"],
+      "stream": true,
+      "loop": true,
+      "volume": 0.5,
+      "fade_in": 1.5,
+      "fade_out": 0.5,
+      "max_instances": 1,
+      "steal": "none"
+    },
+    "musique/tranche": {
+      "bus": "music",
+      "parameters": { "section": { "labels": ["titre", "jeu"] } },
+      "fade_in": 1.5,
+      "fade_out": 1.5,
+      "max_instances": 1,
+      "steal": "oldest",
+      "music": {
+        "parameter": "section",
+        "quantize": "bar",
+        "crossfade": 1.5,
+        "sections": {
+          "titre": { "file": "audio/music/the_field_of_dreams.mp3", "tempo": 120, "beats_per_bar": 4 },
+          "jeu": { "file": "audio/music/town_theme.mp3", "tempo": 120, "beats_per_bar": 4 }
+        }
+      }
+    },
+    "interface/clic": {
+      "bus": "interface",
+      "sounds": ["audio/kenney_interface/click_001.ogg"],
+      "volume": 0.5,
+      "max_instances": 3
+    },
+    "interface/validation": {
+      "bus": "interface",
+      "sounds": ["audio/kenney_interface/confirmation_001.ogg"],
+      "volume": 0.6,
+      "max_instances": 2
+    }
+  }
+}

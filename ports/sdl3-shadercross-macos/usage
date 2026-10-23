@@ -1,0 +1,5 @@
+The shadercross tool for macOS (no library: the engine uses the tool at build time):
+
+  tools/sdl3-shadercross-macos/shadercross, with libdxcompiler.dylib next to it
+
+See cmake/Shaders.cmake (MOTEUR_MAC_SHADERCROSS).

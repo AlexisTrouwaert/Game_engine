@@ -1,0 +1,12 @@
+<!-- The options: a menu of their pages. -->
+<ui class="shade" back-action="back">
+    <style src="ui/tranche.uss"/>
+    <panel class="panel" style="width: 320">
+        <label class="title" text="{options-title}"/>
+        <button action="display" text="{options-display}" autofocus="true"/>
+        <button action="audio" text="{options-audio}"/>
+        <button action="controls" text="{options-controls}"/>
+        <button action="language" text="{options-language}"/>
+        <button action="back" text="{common-back}"/>
+    </panel>
+</ui>

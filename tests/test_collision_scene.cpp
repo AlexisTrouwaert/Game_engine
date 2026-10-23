@@ -365,3 +365,28 @@ TEST_CASE("level collision: the entities marked StaticCollision make the scene")
     REQUIRE(hit.has_value());
     CHECK(hit->distance == doctest::Approx(2.5f));
 }
+
+TEST_CASE("movement in 3D: root motion goes through the walls' collisions, the same on every run") {
+    // A dash of the animation (Mover::root_motion, milestone 9 bis, part 3) towards the wall at x = 5:
+    // it stops a radius before it, whatever was asked, and two runs end at the same place.
+    const moteur::CollisionScene scene = test_level();
+    const auto dash = [&scene] {
+        entt::registry registry;
+        const entt::entity hero = registry.create();
+        registry.emplace<moteur::Transform>(hero).position = {2, 0, -5};
+        registry.emplace<moteur::Collider>(hero);
+        registry.emplace<moteur::Mover>(hero).facing = {1.0f, 0.0f};
+        moteur::MovementStats stats;
+        for (int tick = 0; tick < 24; ++tick) {
+            registry.get<moteur::Mover>(hero).root_motion = {0.25f, 0.0f};  // 6 m in 0.8 s: through the wall if nothing stopped it
+            moteur::move_movers(registry, scene, 1.0f / 30.0f, moteur::NavSources{}, stats);
+            moteur::finish_movers(registry, 1.0f / 30.0f);
+            CHECK(registry.get<moteur::Mover>(hero).root_motion == glm::vec2(0.0f));  // used up
+        }
+        return registry.get<moteur::Transform>(hero).position;
+    };
+    const glm::vec3 first = dash();
+    CHECK(first.x == doctest::Approx(5.0f - 0.35f).epsilon(0.01));
+    CHECK(first.z == doctest::Approx(-5.0f));
+    CHECK(dash() == first);
+}

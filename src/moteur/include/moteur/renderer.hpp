@@ -233,6 +233,9 @@ public:
     void end_frame();
     /// Preparations that failed since the renderer was created (see end_frame()).
     std::uint64_t frame_failures() const { return frame_failures_; }
+    /// How many frames begin_frame() started so far (the first one is 1; 0 before any). Lets a
+    /// cache tell which of its entries the frame being recorded uses (the glyph atlas).
+    std::uint64_t frame_index() const { return frame_index_; }
 
     /// Reads back the swapchain image of the next end_frame() (the current frame's, if one is being
     /// recorded) and writes it to `path` as a PNG, for
@@ -413,6 +416,13 @@ public:
     Texture create_texture(const Image& image, const char* debug_name = nullptr);
     Texture create_texture(const Image& image, const TextureSettings& settings, const char* debug_name = nullptr);
     ///@}
+    /// Rewrites the rectangle (x, y, width, height) of level 0 of an RGBA8 texture made by
+    /// create_texture() with `rgba` (width * height * 4 bytes, rows top to bottom), with the pending
+    /// uploads: the frame being recorded already sees it. The data is copied. For a texture that
+    /// changes a little at a time (the glyph atlas); a part the GPU is still reading for an earlier
+    /// frame is written only after that frame (no cycling: the rest of the texture is kept). Throws
+    /// std::invalid_argument if the rectangle does not fit in the texture.
+    void update_texture(const Texture& texture, int x, int y, int width, int height, const void* rgba);
     /// What the GPU can sample, unless block compression was turned off (then nothing: KTX2 textures
     /// become RGBA8, to compare the two).
     CompressedFormats compressed_formats() const {
@@ -561,6 +571,7 @@ private:
     void lose_device(const std::string& reason);
     bool simulate_frame_failure_ = false;
     std::uint64_t frame_failures_ = 0;
+    std::uint64_t frame_index_ = 0;
     /// Runs one renderer's preparation; on an exception, logs it, counts it and returns false (the
     /// renderer is then skipped for the frame).
     template <typename Prepare>

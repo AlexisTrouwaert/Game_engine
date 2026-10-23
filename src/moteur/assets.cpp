@@ -307,7 +307,8 @@ Assets::Assets(Renderer& renderer, std::string root)
       environments_("environment",
                     [&renderer] { return Environment::create(renderer, make_sky(64, 32), "placeholder environment"); },
                     [](const Environment& environment) { return environment.gpu_bytes; }),
-      fonts_("font", {}, [](const Font& font) { return font.gpu_bytes(); }),
+      // The glyph atlas is the library's, shared by every font: not counted per font.
+      fonts_("font", {}, [](const Font&) { return std::size_t{0}; }),
       atlases_("atlas", {}, [](const TextureAtlas& atlas) { return atlas.gpu_bytes(); }),
       sounds_("sound", [] { return placeholder_sound(); }, [](const Sound& sound) { return sound.bytes(); }),
       musics_("music", [] { return Music{}; }, [](const Music& music) { return music.memory(); }),
@@ -324,6 +325,8 @@ Assets::Assets(Renderer& renderer, std::string root)
       // A broken effect is only missing from the screen: an effect without emitters stands in.
       effects_("particle effect", [] { return ParticleEffect{}; }),
       prefabs_("prefab"),
+      materials_("material"),
+      sound_banks_("sound bank"),
       import_cache_(default_import_cache(root_)) {}
 
 
@@ -624,13 +627,26 @@ Asset<Environment> Assets::environment(std::string_view path) {
     });
 }
 
-Asset<Font> Assets::font(std::string_view path, float pixel_height) {
+const std::shared_ptr<FontLibrary>& Assets::font_library() {
+    if (!font_library_) {
+        font_library_ = Font::make_library(&renderer_);
+    }
+    return font_library_;
+}
+
+Asset<Font> Assets::font(std::string_view path) {
     MOTEUR_ASSERT_MAIN_THREAD("Assets");
     const std::string key = normalize_asset_path(path);
-    return fonts_.get(key + "#" + std::to_string(pixel_height), [this, key, pixel_height](std::vector<std::string>& files) {
+    return fonts_.get(key, [this, key](std::vector<std::string>& files) {
         files.push_back(key);
         check_asset_case(root_, key);
-        return Font::load(renderer_, root_ + key, pixel_height);
+        Font font = Font::load(&renderer_, root_ + key, font_library());
+        for (const std::string& file : font.files()) {  // the stack's faces: a change reloads it
+            if (file.rfind(root_, 0) == 0 && file.size() > root_.size() && file != root_ + key) {
+                files.push_back(normalize_asset_path(file.substr(root_.size())));
+            }
+        }
+        return font;
     });
 }
 
@@ -780,6 +796,36 @@ Asset<MapData> Assets::map(std::string_view path) {
         check_asset_case(root_, key);
         const FileData file = read_file(root_ + key);
         return MapData::parse({static_cast<const char*>(file.data()), file.size()}, key);
+    });
+}
+
+Asset<moteur::SoundBank> Assets::sound_bank(std::string_view path) {
+    MOTEUR_ASSERT_MAIN_THREAD("Assets");
+    const std::string key = normalize_asset_path(path);
+    return sound_banks_.get(key, [this, key](std::vector<std::string>& files) {
+        files.push_back(key);
+        check_asset_case(root_, key);
+        const FileData file = read_file(root_ + key);
+        return moteur::SoundBank::parse({static_cast<const char*>(file.data()), file.size()}, key);
+    });
+}
+
+Asset<Material> Assets::material(std::string_view path) {
+    MOTEUR_ASSERT_MAIN_THREAD("Assets");
+    const std::string key = normalize_asset_path(path);
+    return materials_.get(key, [this, key](std::vector<std::string>& files) {
+        files.push_back(key);
+        check_asset_case(root_, key);
+        const FileData file = read_file(root_ + key);
+        return parse_material({static_cast<const char*>(file.data()), file.size()}, key,
+                              [this](const nlohmann::json& reference, MaterialTexture role) {
+                                  TextureSettings settings;
+                                  settings.srgb = role == MaterialTexture::Color;
+                                  settings.mipmaps = true;
+                                  settings.premultiply = false;  // the shader uses the alpha itself (alpha test, blending)
+                                  settings.normal_map = role == MaterialTexture::Normal;
+                                  return texture(resolve_reference(reference), settings);
+                              });
     });
 }
 
@@ -969,6 +1015,8 @@ bool Assets::load_reflected(const TypeInfo& type, const nlohmann::json& value, v
             *static_cast<Asset<Prefab>*>(handle) = prefab(path);
         } else if (asset == typeid(Environment)) {
             *static_cast<Asset<Environment>*>(handle) = environment(path);
+        } else if (asset == typeid(Material)) {
+            *static_cast<Asset<Material>*>(handle) = material(path);
         } else {
             problem = "assets of this type are not loaded by the asset manager";
             return false;
@@ -1022,6 +1070,9 @@ nlohmann::json Assets::key_of_reflected(const TypeInfo& type, const void* handle
     if (asset == typeid(Prefab)) {
         return key(prefabs_);
     }
+    if (asset == typeid(Material)) {
+        return key(materials_);
+    }
     if (asset == typeid(Environment)) {
         return key(environments_);
     }
@@ -1062,6 +1113,8 @@ std::size_t Assets::collect_garbage() {
     freed += animation_sets_.collect_garbage();
     freed += maps_.collect_garbage();
     freed += effects_.collect_garbage();
+    freed += materials_.collect_garbage();
+    freed += sound_banks_.collect_garbage();
     // Prefabs hold models and other prefabs: freed first next time round, until nothing goes.
     for (std::size_t round = prefabs_.collect_garbage(); round > 0; round = prefabs_.collect_garbage()) {
         freed += round + models_.collect_garbage() + textures_.collect_garbage();
@@ -1189,6 +1242,12 @@ void Assets::reload_file(const std::string& key) {
     for (const std::string& asset : effects_.keys_using(key)) {
         effects_.reload(asset);
     }
+    for (const std::string& asset : materials_.keys_using(key)) {
+        materials_.reload(asset);
+    }
+    for (const std::string& asset : sound_banks_.keys_using(key)) {
+        sound_banks_.reload(asset);
+    }
     // The prefab of the file first, then those made from it (its variants, the prefabs nesting it).
     std::vector<std::string> prefabs = prefabs_.keys_using(key);
     std::stable_partition(prefabs.begin(), prefabs.end(), [&key](const std::string& asset) { return asset == key; });
@@ -1218,14 +1277,14 @@ std::vector<AssetTypeStats> Assets::stats() const {
     return {stats_of(textures_), stats_of(models_), stats_of(environments_),
             stats_of(fonts_),    stats_of(atlases_), stats_of(sounds_), stats_of(musics_),
             stats_of(skeletons_), stats_of(clips_), stats_of(animation_sets_), stats_of(maps_), stats_of(effects_),
-            stats_of(prefabs_)};
+            stats_of(prefabs_), stats_of(materials_), stats_of(sound_banks_)};
 }
 
 std::vector<std::vector<AssetInfo>> Assets::infos() const {
     return {textures_.infos(), models_.infos(), environments_.infos(),
             fonts_.infos(),    atlases_.infos(), sounds_.infos(), musics_.infos(),
             skeletons_.infos(), clips_.infos(), animation_sets_.infos(), maps_.infos(), effects_.infos(),
-            prefabs_.infos()};
+            prefabs_.infos(), materials_.infos(), sound_banks_.infos()};
 }
 
 bool Assets::reload(AssetType type, const std::string& key) {
@@ -1243,6 +1302,8 @@ bool Assets::reload(AssetType type, const std::string& key) {
         case AssetType::Map: return maps_.reload(key);
         case AssetType::Effect: return effects_.reload(key);
         case AssetType::Prefab: return prefabs_.reload(key);
+        case AssetType::Material: return materials_.reload(key);
+        case AssetType::SoundBank: return sound_banks_.reload(key);
         case AssetType::Count: break;
     }
     return false;

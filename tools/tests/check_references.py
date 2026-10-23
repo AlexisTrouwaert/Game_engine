@@ -6,6 +6,8 @@
   tests/data/references.json for this platform;
 - the exactness test of the saves: the slice saved after tick 120 (and 250), then loaded, goes on
   exactly as the slice never interrupted (the three captures A, B and C must be the same);
+- the tour of the slice's interface (milestone 9 bis, part 6) in French, English and pseudo-
+  localization: every menu opened and captured, no problem in its files;
 - the map editor's self-test (edits, undo, objects, saving, a file changed elsewhere, "Essayer");
 - the level editor's self-test (milestone 9, part 10: ground painted, a lamp placed and moved with
   the handles, undo and redo, its thumbnail, the navigation built, saved and opened again, baked,
@@ -19,7 +21,8 @@ everything matches.
 
 The captures need the test assets, which are not in Git: tools/models/fetch_test_models.py,
 fetch_test_characters.py, tools/audio/fetch_test_sounds.py, and the ARPG's first assets
-(tools/models/fetch_arpg_models.py: the slice's cobblestones and street lamps, since 2026-10-17).
+(tools/models/fetch_arpg_models.py: the slice's cobblestones and street lamps, since 2026-10-17), and the
+fallback fonts of tools/text/fetch_text_data.py (the text capture, since 2026-10-18).
 """
 
 import hashlib
@@ -98,12 +101,19 @@ def main():
         return 1
     try:
         captures = {
-            "2d": ["--demo", "--seed", "42", "--freeze-after", "30", "--no-input", "--run-seconds", "3"],
-            "demo3d": ["--demo3d", "--seed", "42", "--freeze-after", "60", "--no-input", "--run-seconds", "3"],
-            "demo3d_replay": ["--demo3d", "--seed", "42", "--freeze-after", "60", "--run-seconds", "3",
+            "2d": ["--language", "fr", "--demo", "--seed", "42", "--freeze-after", "30", "--no-input", "--run-seconds", "3"],
+            "demo3d": ["--language", "fr", "--demo3d", "--seed", "42", "--freeze-after", "60", "--no-input", "--run-seconds", "3"],
+            "demo3d_replay": ["--language", "fr", "--demo3d", "--seed", "42", "--freeze-after", "60", "--run-seconds", "3",
                               "--replay-input", replay_demo],
-            "slice": ["--states", "--replay-input", replay_slice, "--freeze-after", "340", "--run-seconds", "9",
+            "slice": ["--language", "fr", "--states", "--replay-input", replay_slice, "--freeze-after", "340", "--run-seconds", "9",
                       "--pixel-size", "1280", "720"],
+            # The text system (milestone 9 bis, part 4): sizes, outline and shadow, weights,
+            # bidirectional Arabic, the Chinese fallback, markup (needs the Noto fonts of
+            # tools/text/fetch_text_data.py).
+            "text": ["--language", "fr", "--text", "--freeze-after", "30", "--run-seconds", "4", "--pixel-size", "1280", "720"],
+            # The materials (milestone 9 bis, part 2): the ghost round its pillar (glTF BLEND), glass,
+            # dissolves and their shadows, a flash, a material file, a material replaced by name.
+            "materials": ["--language", "fr", "--materials", "--freeze-after", "302", "--run-seconds", "8", "--pixel-size", "1280", "720"],
         }
         for name, extra in captures.items():
             runs = 2 if name == "slice" else 1
@@ -121,8 +131,23 @@ def main():
             elif name not in expected:
                 print(f"  (no reference for {platform_key()}: --record to keep {found[name]})")
 
+        # The tour of the interface (milestone 9 bis, part 6): each menu of the slice opened and
+        # captured, in each language, and its files checked (documents, styles, texts). The
+        # captures show the player's saves and settings: they are kept to look at, not compared.
+        for language in ["fr", "en", "qps"]:
+            folder = os.path.join(out, f"ui_{language}")
+            os.makedirs(folder, exist_ok=True)
+            code, text = run(exe, ["--language", language, "--ui-tour", folder, "--pixel-size", "1280", "720",
+                                   "--run-seconds", "60"], app_dir)
+            summary = next((l for l in text.splitlines() if l.startswith("ui tour:") and "screens" in l), "no summary")
+            passed = code == 0 and summary.endswith(" 0 problems")
+            print(f"ui tour {language:<4} {'ok' if passed else 'FAILED'} ({summary})")
+            if not passed:
+                problems = [l for l in text.splitlines() if l.startswith("ui tour: ") and "screens" not in l]
+                failures.append(f"ui tour ({language}): " + ("; ".join(problems) or summary)[:400])
+
         # Exactness: uninterrupted (A), saved (B) and loaded (C) give the same capture.
-        common = ["--seed", "42", "--replay-input", replay_slice, "--freeze-after", "400", "--run-seconds", "12",
+        common = ["--language", "fr", "--seed", "42", "--replay-input", replay_slice, "--freeze-after", "400", "--run-seconds", "12",
                   "--pixel-size", "1280", "720", "+set", "effects.enabled", "0"]
         a = os.path.join(out, "exact_a.png")
         run(exe, ["--slice"] + common + ["--capture", a], app_dir)

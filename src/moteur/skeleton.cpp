@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <stdexcept>
 #include <utility>
 
@@ -152,7 +154,28 @@ void Skeleton::replace_in_place(Skeleton&& fresh) {
 struct SkeletalClip::Impl {
     std::string name;
     ozz::unique_ptr<ozz::animation::Animation> animation;
+    /// Its first pose (local transforms): what an additive input subtracts, where a root kept in
+    /// place stays. Made with the clip, read-only afterwards (sampled from any thread).
+    ozz::vector<ozz::math::SoaTransform> reference;
 };
+
+namespace {
+
+void make_reference(const ozz::animation::Animation& animation, const std::string& name,
+                    ozz::vector<ozz::math::SoaTransform>& reference) {
+    ozz::animation::SamplingJob::Context context(animation.num_tracks());
+    reference.resize(static_cast<std::size_t>((animation.num_tracks() + 3) / 4));
+    ozz::animation::SamplingJob sampling;
+    sampling.animation = &animation;
+    sampling.context = &context;
+    sampling.ratio = 0.0f;
+    sampling.output = ozz::make_span(reference);
+    if (!sampling.Run()) {
+        throw std::logic_error("Clip '" + name + "': sampling its first pose failed");
+    }
+}
+
+}  // namespace
 
 SkeletalClip::SkeletalClip() = default;
 SkeletalClip::~SkeletalClip() = default;
@@ -226,6 +249,7 @@ ClipLibrary ClipLibrary::create(const SkeletonData& skeleton, const std::vector<
         if (!clip.impl_->animation) {
             throw fail("ozz refused it");
         }
+        make_reference(*clip.impl_->animation, clip.impl_->name, clip.impl_->reference);
         if (!library.clips_.emplace(data.name, std::move(clip)).second) {
             throw fail("two clips have this name");
         }
@@ -337,6 +361,7 @@ ClipLibrary ClipLibrary::load(const SkeletonData& skeleton, const std::vector<st
         clip.impl_ = std::make_unique<SkeletalClip::Impl>();
         clip.impl_->name = animation->name();
         clip.impl_->animation = std::move(animation);
+        make_reference(*clip.impl_->animation, clip.impl_->name, clip.impl_->reference);
         const std::string name = clip.impl_->name;
         if (!library.clips_.emplace(name, std::move(clip)).second) {
             throw fail("two clips are named '" + name + "'");
@@ -384,6 +409,41 @@ void ClipLibrary::replace_in_place(ClipLibrary&& fresh) {
         clip = std::move(fresh.clips_.at(name));  // same object, new content
     }
     skeleton_ = std::move(fresh.skeleton_);  // rest poses may have changed
+    root_tracks_.reset();  // the curves of the old keys
+}
+
+struct ClipLibrary::RootTracks {
+    std::mutex mutex;
+    std::map<std::pair<const SkeletalClip*, int>, std::vector<glm::ivec3>> tracks;
+};
+
+const std::vector<glm::ivec3>& ClipLibrary::root_track(const Skeleton& skeleton, const SkeletalClip& clip, int joint) const {
+    if (joint < 0 || joint >= skeleton.joint_count()) {
+        throw std::invalid_argument("root_track: no joint " + std::to_string(joint) + " in skeleton '" + skeleton.name() + "'");
+    }
+    auto& cache = const_cast<std::shared_ptr<RootTracks>&>(root_tracks_);
+    if (!cache) {
+        cache = std::make_shared<RootTracks>();
+    }
+    const std::lock_guard lock(cache->mutex);
+    auto& track = cache->tracks[{&clip, joint}];
+    if (track.empty()) {
+        // The joint's place at each tick of the clip, from its place at the start.
+        PoseSampler sampler;
+        const int ticks = clip.duration_ticks();
+        track.reserve(static_cast<std::size_t>(ticks) + 1);
+        glm::vec3 start(0.0f);
+        for (int t = 0; t <= ticks; ++t) {
+            sampler.sample(skeleton, clip, static_cast<float>(t) / static_cast<float>(ticks));
+            const glm::vec3 p = glm::vec3(sampler.model()[static_cast<std::size_t>(joint)][3]);
+            if (t == 0) {
+                start = p;
+            }
+            track.emplace_back(static_cast<int>(std::lround((p.x - start.x) * 1000.0f)), 0,
+                               static_cast<int>(std::lround((p.z - start.z) * 1000.0f)));
+        }
+    }
+    return track;
 }
 
 struct PoseSampler::Impl {
@@ -396,6 +456,7 @@ struct PoseSampler::Impl {
     std::vector<ozz::vector<ozz::math::SoaTransform>> layer_locals;
     std::vector<ozz::vector<ozz::math::SimdFloat4>> layer_weights;
     std::vector<ozz::animation::BlendingJob::Layer> layers;
+    std::vector<ozz::animation::BlendingJob::Layer> additive_layers;
 };
 
 PoseSampler::PoseSampler() : impl_(std::make_unique<Impl>()) {}
@@ -465,7 +526,8 @@ void PoseSampler::blend(const Skeleton& skeleton, std::span<const PoseInput> inp
         rest(skeleton);
         return;
     }
-    if (inputs.size() == 1 && inputs[0].joint_weights.empty() && inputs[0].clip != nullptr) {
+    if (inputs.size() == 1 && inputs[0].joint_weights.empty() && inputs[0].clip != nullptr && !inputs[0].additive &&
+        inputs[0].root_joint < 0) {
         sample(skeleton, *inputs[0].clip, inputs[0].ratio);
         return;
     }
@@ -476,13 +538,33 @@ void PoseSampler::blend(const Skeleton& skeleton, std::span<const PoseInput> inp
     impl_->layer_locals.resize(std::max(impl_->layer_locals.size(), inputs.size()));
     impl_->layer_weights.resize(std::max(impl_->layer_weights.size(), inputs.size()));
     impl_->layers.clear();
+    impl_->additive_layers.clear();
     for (std::size_t i = 0; i < inputs.size(); ++i) {
         const PoseInput& input = inputs[i];
         if (input.clip == nullptr) {
             throw std::invalid_argument("PoseSampler::blend: an input has no clip");
         }
-        sample_locals(skeleton, rig, *input.clip, *input.clip->impl_->animation, input.ratio, *impl_->contexts[i],
-                      impl_->layer_locals[i]);
+        ozz::vector<ozz::math::SoaTransform>& locals = impl_->layer_locals[i];
+        sample_locals(skeleton, rig, *input.clip, *input.clip->impl_->animation, input.ratio, *impl_->contexts[i], locals);
+        const ozz::vector<ozz::math::SoaTransform>& reference = input.clip->impl_->reference;
+        if (input.root_joint >= 0 && static_cast<std::size_t>(input.root_joint) < joints) {
+            // Root motion: the joint stays where the clip starts, on the ground's plane.
+            const auto soa = static_cast<std::size_t>(input.root_joint) / 4;
+            const int lane = input.root_joint % 4;
+            ozz::math::SoaFloat3& t = locals[soa].translation;
+            t.x = ozz::math::SetI(t.x, reference[soa].translation.x, lane);
+            t.z = ozz::math::SetI(t.z, reference[soa].translation.z, lane);
+        }
+        if (input.additive) {
+            // The difference from the clip's first pose (as ozz's AdditiveAnimationBuilder makes it).
+            for (std::size_t s = 0; s < soa_joints; ++s) {
+                ozz::math::SoaTransform& d = locals[s];
+                const ozz::math::SoaTransform& r = reference[s];
+                d.translation = d.translation - r.translation;
+                d.rotation = ozz::math::Conjugate(r.rotation) * d.rotation;
+                d.scale = d.scale / r.scale;
+            }
+        }
         ozz::animation::BlendingJob::Layer layer;
         layer.weight = input.weight;
         layer.transform = ozz::make_span(impl_->layer_locals[i]);
@@ -503,12 +585,18 @@ void PoseSampler::blend(const Skeleton& skeleton, std::span<const PoseInput> inp
             }
             layer.joint_weights = ozz::make_span(packed);
         }
-        impl_->layers.push_back(layer);
+        if (input.additive) {
+            layer.weight = std::clamp(input.weight, 0.0f, 1.0f);
+            impl_->additive_layers.push_back(layer);
+        } else {
+            impl_->layers.push_back(layer);
+        }
     }
     impl_->locals.resize(soa_joints);
     ozz::animation::BlendingJob blending;
     blending.threshold = 0.01f;
-    blending.layers = ozz::make_span(impl_->layers);
+    blending.layers = ozz::make_span(impl_->layers);  // none: the rest pose, then the additive ones
+    blending.additive_layers = ozz::make_span(impl_->additive_layers);
     blending.rest_pose = rig.joint_rest_poses();
     blending.output = ozz::make_span(impl_->locals);
     if (!blending.Run()) {
